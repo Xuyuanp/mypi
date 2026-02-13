@@ -1,0 +1,31 @@
+{
+  "name": "@pangxuyuan/mypi",
+  "version": "0.1.0",
+  "description": "Personal pi package containing custom extensions, themes, and prompts",
+  "keywords": [
+    "pi-package"
+  ],
+  "author": "pangxuyuan",
+  "license": "MIT",
+  "pi": {
+    "extensions": [
+      "./extensions/"
+    ],
+    "skills": [
+      "./skills/"
+    ],
+    "prompts": [
+      "./prompts/"
+    ],
+    "themes": [
+      "./themes/"
+    ]
+  },
+  "peerDependencies": {
+    "@mariozechner/pi-ai": "*",
+    "@mariozechner/pi-agent-core": "*",
+    "@mariozechner/pi-coding-agent": "*",
+    "@mariozechner/pi-tui": "*",
+    "@sinclair/typebox": "*"
+  }
+}
