@@ -23,7 +23,6 @@ export default function(pi: ExtensionAPI) {
     async function getTmuxOption(): Promise<string | undefined> {
         const { stdout, code } = await pi.exec("tmux", [
             "show-options",
-            "-g",
             "-v",
             "@pi-session",
         ]);
@@ -32,11 +31,11 @@ export default function(pi: ExtensionAPI) {
     }
 
     async function setTmuxOption(): Promise<void> {
-        await pi.exec("tmux", ["set-option", "-g", "@pi-session", "1"]);
+        await pi.exec("tmux", ["set-option", "@pi-session", "1"]);
     }
 
     async function unsetTmuxOption(): Promise<void> {
-        await pi.exec("tmux", ["set-option", "-g", "-u", "@pi-session"]);
+        await pi.exec("tmux", ["set-option", "-u", "@pi-session"]);
     }
 
     pi.on("session_start", async () => {
