@@ -1,0 +1,367 @@
+/**
+ * Hooks Extension
+ *
+ * Attach hook commands to tool lifecycle events. Hooks run shell commands
+ * before (pre) or after (post) a tool executes.
+ *
+ * The event is sent to the hook command via stdin as a JSON object.
+ *
+ * Pre hooks receive:
+ * {
+ *   "event": "PreToolUse",
+ *   "toolName": "edit",
+ *   "toolCallId": "...",
+ *   "input": { "path": "...", "oldText": "...", "newText": "..." }
+ * }
+ *
+ * Post hooks receive:
+ * {
+ *   "event": "PostToolUse",
+ *   "toolName": "edit",
+ *   "toolCallId": "...",
+ *   "input": { ... },
+ *   "content": [ ... ],
+ *   "isError": false
+ * }
+ *
+ * Exit codes:
+ *   0   — success (tool proceeds / result unchanged)
+ *   ≠0  — PreToolUse: tool is blocked; PostToolUse: stderr appended to result
+ *         Reason is read from stderr.
+ *
+ * Matchers are regex patterns tested against the tool name (case-insensitive).
+ * Omit `matcher` or use "*" to match all tools.
+ *
+ * Configuration is loaded from `.pi/hooks.json` (project-local) and/or
+ * `~/.pi/agent/hooks.json` (global). Both are merged, with project-local
+ * hooks appended after global hooks.
+ *
+ * Example `.pi/hooks.json`:
+ * {
+ *   "PreToolUse": [
+ *     {
+ *       "matcher": "bash",
+ *       "hooks": [
+ *         { "name": "safety-gate", "command": ["node", "check_command.js"], "timeout": 10000 }
+ *       ]
+ *     }
+ *   ],
+ *   "PostToolUse": [
+ *     {
+ *       "matcher": "edit|write",
+ *       "hooks": [
+ *         { "name": "lint", "command": ["./lint-changed.sh"] }
+ *       ]
+ *     }
+ *   ]
+ * }
+ *
+ * Each hook has an optional `name` for display purposes. The `scope` field
+ * ("global" or "project") is added automatically based on which config file
+ * the hook was loaded from.
+ */
+
+import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import * as fs from "node:fs";
+import * as path from "node:path";
+import * as os from "node:os";
+import { spawn } from "node:child_process";
+
+// ── Types ──────────────────────────────────────────────────────────────
+
+type HookScope = "global" | "project";
+
+interface HookHandler {
+    name?: string;
+    command: string[];
+    timeout?: number;
+    scope: HookScope;
+}
+
+interface MatcherGroup {
+    matcher?: string;
+    hooks: HookHandler[];
+    /** Compiled regex — populated at load time */
+    _re?: RegExp;
+}
+
+interface HooksConfig {
+    PreToolUse: MatcherGroup[];
+    PostToolUse: MatcherGroup[];
+}
+
+interface RawHookHandler {
+    name?: string;
+    command: string[];
+    timeout?: number;
+}
+
+interface RawMatcherGroup {
+    matcher?: string;
+    hooks: RawHookHandler[];
+}
+
+// ── Config loading ─────────────────────────────────────────────────────
+
+function compileMatcher(group: MatcherGroup): void {
+    if (!group.matcher || group.matcher === "*") {
+        group._re = undefined; // matches everything
+    } else {
+        try {
+            group._re = new RegExp(`^(?:${group.matcher})$`, "i");
+        } catch {
+            group._re = undefined; // fallback: match everything on bad regex
+        }
+    }
+}
+
+function matchesTool(group: MatcherGroup, toolName: string): boolean {
+    if (!group._re) return true; // no matcher or "*" — match all
+    return group._re.test(toolName);
+}
+
+function loadConfigFile(
+    filePath: string,
+    scope: HookScope,
+): HooksConfig | null {
+    try {
+        if (!fs.existsSync(filePath)) return null;
+        const raw = fs.readFileSync(filePath, "utf-8");
+        const parsed = JSON.parse(raw);
+        if (!parsed || typeof parsed !== "object") return null;
+
+        const config: HooksConfig = { PreToolUse: [], PostToolUse: [] };
+
+        for (const phase of ["PreToolUse", "PostToolUse"] as const) {
+            const rawGroups = parsed[phase] as RawMatcherGroup[] | undefined;
+            if (!Array.isArray(rawGroups)) continue;
+            for (const rg of rawGroups) {
+                const group: MatcherGroup = {
+                    matcher: rg.matcher,
+                    hooks: (rg.hooks ?? []).map((h) => ({ ...h, scope })),
+                };
+                compileMatcher(group);
+                config[phase].push(group);
+            }
+        }
+
+        if (config.PreToolUse.length === 0 && config.PostToolUse.length === 0)
+            return null;
+        return config;
+    } catch {
+        return null;
+    }
+}
+
+function mergeConfigs(...configs: (HooksConfig | null)[]): HooksConfig {
+    const merged: HooksConfig = { PreToolUse: [], PostToolUse: [] };
+    for (const config of configs) {
+        if (!config) continue;
+        merged.PreToolUse.push(...config.PreToolUse);
+        merged.PostToolUse.push(...config.PostToolUse);
+    }
+    return merged;
+}
+
+// ── Hook execution ─────────────────────────────────────────────────────
+
+function resolveHookCwd(hook: HookHandler, projectCwd: string): string {
+    return hook.scope === "project"
+        ? projectCwd
+        : path.join(os.homedir(), ".pi", "agent");
+}
+
+function runHook(
+    hook: HookHandler,
+    eventPayload: string,
+    cwd: string,
+    timeout: number,
+): Promise<{ code: number; stderr: string }> {
+    return new Promise((resolve) => {
+        const [cmd, ...args] = hook.command;
+        const child = spawn(cmd, args, {
+            cwd,
+            stdio: ["pipe", "ignore", "pipe"],
+            timeout: timeout,
+        });
+
+        let stderr = "";
+        child.stderr.on("data", (chunk: Buffer) => {
+            stderr += chunk.toString();
+        });
+
+        child.on("error", (err) => {
+            resolve({ code: 1, stderr: `Hook failed to execute: ${err.message}` });
+        });
+
+        child.on("close", (code) => {
+            resolve({ code: code ?? 1, stderr: stderr.trim() });
+        });
+
+        child.stdin.on("error", () => {
+            // Ignore EPIPE — child exited without reading stdin
+        });
+        child.stdin.write(eventPayload);
+        child.stdin.end();
+    });
+}
+
+/** Collect all hooks matching a tool name from a list of matcher groups. */
+function collectHooks(groups: MatcherGroup[], toolName: string): HookHandler[] {
+    const result: HookHandler[] = [];
+    for (const group of groups) {
+        if (matchesTool(group, toolName)) {
+            result.push(...group.hooks);
+        }
+    }
+    return result;
+}
+
+// ── Display helpers ────────────────────────────────────────────────────
+
+function hookDisplayName(hook: HookHandler): string {
+    if (hook.name) return `${hook.name} (${hook.scope})`;
+    return `${hook.command.join(" ")} (${hook.scope})`;
+}
+
+function formatSummary(config: HooksConfig): string {
+    const lines: string[] = [];
+    for (const phase of ["PreToolUse", "PostToolUse"] as const) {
+        for (const group of config[phase]) {
+            const matcher = group.matcher || "*";
+            for (const hook of group.hooks) {
+                lines.push(`  ${phase} [${matcher}] → ${hookDisplayName(hook)}`);
+            }
+        }
+    }
+    return lines.join("\n");
+}
+
+function countHooks(config: HooksConfig): number {
+    let count = 0;
+    for (const phase of ["PreToolUse", "PostToolUse"] as const) {
+        for (const group of config[phase]) {
+            count += group.hooks.length;
+        }
+    }
+    return count;
+}
+
+// ── Extension ──────────────────────────────────────────────────────────
+
+export default function(pi: ExtensionAPI) {
+    let config: HooksConfig = { PreToolUse: [], PostToolUse: [] };
+
+    function reloadConfig(cwd: string) {
+        const globalPath = path.join(os.homedir(), ".pi", "agent", "hooks.json");
+        const projectPath = path.join(cwd, ".pi", "hooks.json");
+        config = mergeConfigs(
+            loadConfigFile(globalPath, "global"),
+            loadConfigFile(projectPath, "project"),
+        );
+    }
+
+    pi.on("session_start", async (_event, ctx) => {
+        reloadConfig(ctx.cwd);
+        const total = countHooks(config);
+        if (total > 0) {
+            ctx.ui.notify(
+                `Hooks loaded (${total}):\n${formatSummary(config)}`,
+                "info",
+            );
+        }
+    });
+
+    pi.registerCommand("hooks-reload", {
+        description: "Reload hooks configuration",
+        handler: async (_args, ctx) => {
+            reloadConfig(ctx.cwd);
+            const total = countHooks(config);
+            if (total > 0) {
+                ctx.ui.notify(
+                    `Hooks reloaded (${total}):\n${formatSummary(config)}`,
+                    "info",
+                );
+            } else {
+                ctx.ui.notify("Hooks reloaded: no hooks configured", "info");
+            }
+        },
+    });
+
+    // ── Pre-tool hooks (can block) ─────────────────────────────────────
+
+    pi.on("tool_call", async (event, ctx) => {
+        const hooks = collectHooks(config.PreToolUse, event.toolName);
+        if (hooks.length === 0) return undefined;
+
+        const payload = JSON.stringify({
+            event: "PreToolUse",
+            toolName: event.toolName,
+            toolCallId: event.toolCallId,
+            input: event.input,
+        });
+
+        for (const hook of hooks) {
+            const timeout = hook.timeout ?? 30000;
+            const cwd = resolveHookCwd(hook, ctx.cwd);
+            const result = await runHook(hook, payload, cwd, timeout);
+
+            if (result.code !== 0) {
+                const label = hookDisplayName(hook);
+                const reason = result.stderr
+                    ? `Hook [${label}] blocked: ${result.stderr}`
+                    : `Hook [${label}] exited with code ${result.code}`;
+                return { block: true, reason };
+            }
+        }
+
+        return undefined;
+    });
+
+    // ── Post-tool hooks (can modify result) ────────────────────────────
+
+    pi.on("tool_result", async (event, ctx) => {
+        const hooks = collectHooks(config.PostToolUse, event.toolName);
+        if (hooks.length === 0) return undefined;
+
+        const payload = JSON.stringify({
+            event: "PostToolUse",
+            toolName: event.toolName,
+            toolCallId: event.toolCallId,
+            input: event.input,
+            content: event.content,
+            isError: event.isError,
+        });
+
+        const errors: string[] = [];
+
+        for (const hook of hooks) {
+            const timeout = hook.timeout ?? 30000;
+            const cwd = resolveHookCwd(hook, ctx.cwd);
+            const result = await runHook(hook, payload, cwd, timeout);
+
+            if (result.code !== 0) {
+                const label = hookDisplayName(hook);
+                const msg = result.stderr
+                    ? `Hook [${label}]: ${result.stderr}`
+                    : `Hook [${label}] exited with code ${result.code}`;
+                errors.push(msg);
+            }
+        }
+
+        if (errors.length > 0) {
+            const feedback = errors.join("\n");
+            return {
+                content: [
+                    ...event.content,
+                    {
+                        type: "text" as const,
+                        text: `\n\n[Post-hook feedback]\n${feedback}`,
+                    },
+                ],
+            };
+        }
+
+        return undefined;
+    });
+}
