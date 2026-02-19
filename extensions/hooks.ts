@@ -175,6 +175,7 @@ function runHook(
     hook: HookHandler,
     eventPayload: string,
     cwd: string,
+    env: NodeJS.ProcessEnv,
     timeout: number,
 ): Promise<{ code: number; stderr: string }> {
     return new Promise((resolve) => {
@@ -183,6 +184,7 @@ function runHook(
             cwd,
             stdio: ["pipe", "ignore", "pipe"],
             timeout: timeout,
+            env,
         });
 
         let stderr = "";
@@ -294,6 +296,7 @@ export default function(pi: ExtensionAPI) {
         const hooks = collectHooks(config.PreToolUse, event.toolName);
         if (hooks.length === 0) return undefined;
 
+        const env = { ...process.env, PI_PROJECT_DIR: ctx.cwd };
         const payload = JSON.stringify({
             event: "PreToolUse",
             toolName: event.toolName,
@@ -304,7 +307,7 @@ export default function(pi: ExtensionAPI) {
         for (const hook of hooks) {
             const timeout = hook.timeout ?? 30000;
             const cwd = resolveHookCwd(hook, ctx.cwd);
-            const result = await runHook(hook, payload, cwd, timeout);
+            const result = await runHook(hook, payload, cwd, env, timeout);
 
             if (result.code !== 0) {
                 const label = hookDisplayName(hook);
@@ -324,6 +327,7 @@ export default function(pi: ExtensionAPI) {
         const hooks = collectHooks(config.PostToolUse, event.toolName);
         if (hooks.length === 0) return undefined;
 
+        const env = { ...process.env, PI_PROJECT_DIR: ctx.cwd };
         const payload = JSON.stringify({
             event: "PostToolUse",
             toolName: event.toolName,
@@ -338,7 +342,7 @@ export default function(pi: ExtensionAPI) {
         for (const hook of hooks) {
             const timeout = hook.timeout ?? 30000;
             const cwd = resolveHookCwd(hook, ctx.cwd);
-            const result = await runHook(hook, payload, cwd, timeout);
+            const result = await runHook(hook, payload, cwd, env, timeout);
 
             if (result.code !== 0) {
                 const label = hookDisplayName(hook);
