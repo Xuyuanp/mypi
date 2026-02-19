@@ -11,8 +11,8 @@ import type {
 } from "@mariozechner/pi-coding-agent";
 
 const TITLE_MODEL = {
-    provider: "github-copilot",
-    model: "gemini-3-flash-preview",
+    provider: "anthropic",
+    model: "claude-haiku-4-5",
 } as const;
 
 const MAX_TITLE_LENGTH = 50;
@@ -217,7 +217,7 @@ export async function generateAndSetTitle(
             lastError = error instanceof Error ? error : new Error(String(error));
             if (attempt < MAX_RETRIES) {
                 ctx.ui.notify(
-                    `Title generation failed (attempt ${attempt}/${MAX_RETRIES}), retrying...`,
+                    `Title generation failed ${lastError} (attempt ${attempt}/${MAX_RETRIES}), retrying...`,
                     "warning",
                 );
             }
