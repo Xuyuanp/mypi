@@ -24,10 +24,15 @@
  *   "isError": false
  * }
  *
- * Exit codes:
- *   0   — success (tool proceeds / result unchanged)
- *   ≠0  — PreToolUse: tool is blocked; PostToolUse: stderr appended to result
- *         Reason is read from stderr.
+ * Exit codes (PreToolUse):
+ *   0   — allow (tool proceeds)
+ *   1   — warn and allow (stderr shown as warning)
+ *   2   — block (stderr shown as error)
+ *   other — prompt the user to allow or block
+ *
+ * Exit codes (PostToolUse):
+ *   0   — success (result unchanged)
+ *   ≠0  — stderr appended to result
  *
  * Matchers are regex patterns tested against the tool name (case-insensitive).
  * Omit `matcher` or use "*" to match all tools.
@@ -309,13 +314,36 @@ export default function(pi: ExtensionAPI) {
             const cwd = resolveHookCwd(hook, ctx.cwd);
             const result = await runHook(hook, payload, cwd, env, timeout);
 
-            if (result.code !== 0) {
-                const label = hookDisplayName(hook);
-                const reason = result.stderr
-                    ? `Hook [${label}] blocked: ${result.stderr}`
+            if (result.code === 0) continue;
+
+            const label = hookDisplayName(hook);
+
+            if (result.code === 1) {
+                const msg = result.stderr
+                    ? `Hook [${label}] warning: ${result.stderr}`
                     : `Hook [${label}] exited with code ${result.code}`;
+                ctx.ui.notify(msg, "warning");
+                continue;
+            }
+
+            const reason = result.stderr
+                ? `Hook [${label}] blocked: ${result.stderr}`
+                : `Hook [${label}] exited with code ${result.code}`;
+
+            if (result.code === 2) {
+                ctx.ui.notify(reason, "error");
                 return { block: true, reason };
             }
+
+            // Other exit codes: ask user
+            if (ctx.hasUI) {
+                const choice = await ctx.ui.select(
+                    `⚠️ ${reason}\n\nAllow this tool call?`,
+                    ["Yes, continue", "No, block"],
+                );
+                if (choice === "Yes, continue") continue;
+            }
+            return { block: true, reason };
         }
 
         return undefined;
