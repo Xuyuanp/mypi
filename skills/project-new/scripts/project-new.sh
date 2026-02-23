@@ -1,36 +1,37 @@
 #!/usr/bin/env bash
 #
-# project-new.sh — Clone a repo into a bare-repo + worktree setup
+# project-new.sh — Clone a repo into a bare-repo + worktree + tmux session setup
 #
 # Usage: project-new.sh <repo-url>
 #
-# Env vars (set by the extension from config):
-#   PROJECT_ROOT_DIR       — Parent directory for all projects (e.g. ~/projects)
-#   PROJECT_DEFAULT_BRANCH — Default branch name (e.g. master)
-#   PROJECT_WORKTREE_DIR   — Worktree subdirectory name (e.g. worktrees)
+# Optional env overrides:
+#   PROJECT_ROOT_DIR       — Parent directory (default: ~/myprojects for GitHub, ~/projects otherwise)
+#   PROJECT_DEFAULT_BRANCH — Default branch (default: auto-detected from remote HEAD, fallback master)
 #
 # Creates:
-#   $PROJECT_ROOT_DIR/$REPO_NAME/
-#   ├── .bare/                          # Bare git clone
-#   ├── .git                            # File pointing to .bare
-#   ├── $REPO_NAME/                     # Master worktree
-#   └── $PROJECT_WORKTREE_DIR/          # Future task worktrees
+#   $ROOT_DIR/$REPO_NAME/
+#   ├── .bare/              # Bare git clone
+#   ├── .git                # File pointing to .bare
+#   └── $REPO_NAME/         # Master worktree (tmux session starts here)
 #
 set -euo pipefail
 
 REPO_URL="${1:?Usage: project-new.sh <repo-url>}"
 
-ROOT_DIR="${PROJECT_ROOT_DIR:?PROJECT_ROOT_DIR not set}"
-DEFAULT_BRANCH="${PROJECT_DEFAULT_BRANCH:?PROJECT_DEFAULT_BRANCH not set}"
-WORKTREE_DIR="${PROJECT_WORKTREE_DIR:?PROJECT_WORKTREE_DIR not set}"
-
 # ── Resolve repo name from URL ───────────────────────────────────
-# Handles: https://.../<name>.git, git@...:org/<name>.git, <name>.git, <name>
 REPO_NAME="$(basename "$REPO_URL" .git)"
-
 if [[ -z "$REPO_NAME" ]]; then
     echo "Error: could not resolve repo name from '$REPO_URL'" >&2
     exit 1
+fi
+
+# ── Resolve root dir ─────────────────────────────────────────────
+if [[ -n "${PROJECT_ROOT_DIR:-}" ]]; then
+    ROOT_DIR="$PROJECT_ROOT_DIR"
+elif [[ "$REPO_URL" == *github.com* ]]; then
+    ROOT_DIR="$HOME/myprojects"
+else
+    ROOT_DIR="$HOME/projects"
 fi
 
 PROJECT_HOME="$ROOT_DIR/$REPO_NAME"
@@ -49,9 +50,17 @@ git clone --bare "$REPO_URL" "$PROJECT_HOME/.bare" 2>&1
 # ── Create .git file pointing to .bare ───────────────────────────
 echo "gitdir: ./.bare" > "$PROJECT_HOME/.git"
 
-# ── Configure fetch to track remote branches properly ────────────
-# Bare clones don't set this by default
+# ── Configure fetch to track remote branches ─────────────────────
 git -C "$PROJECT_HOME" config remote.origin.fetch "+refs/heads/*:refs/remotes/origin/*"
+
+# ── Detect default branch ────────────────────────────────────────
+if [[ -n "${PROJECT_DEFAULT_BRANCH:-}" ]]; then
+    DEFAULT_BRANCH="$PROJECT_DEFAULT_BRANCH"
+else
+    DEFAULT_BRANCH="$(git -C "$PROJECT_HOME" ls-remote --symref origin HEAD 2>/dev/null \
+        | awk '/^ref:/ { sub(/refs\/heads\//, "", $2); print $2 }')" || true
+    DEFAULT_BRANCH="${DEFAULT_BRANCH:-master}"
+fi
 
 # ── Create master worktree ───────────────────────────────────────
 cd "$PROJECT_HOME"
@@ -60,8 +69,6 @@ git worktree add "$REPO_NAME" "$DEFAULT_BRANCH" 2>&1
 
 # ── Spawn tmux session ──────────────────────────────────────────
 SESSION_NAME="${REPO_NAME}@${DEFAULT_BRANCH}"
-
-# Avoid colons and periods in tmux session names
 SESSION_NAME="${SESSION_NAME//:/-}"
 SESSION_NAME="${SESSION_NAME//./-}"
 
@@ -71,15 +78,19 @@ else
     echo "Spawning tmux session '$SESSION_NAME'..."
     tmux new-session -d -s "$SESSION_NAME" \
         -e "PROJECT_HOME=$PROJECT_HOME" \
+        -e "DEFAULT_BRANCH=$DEFAULT_BRANCH" \
         -c "$PROJECT_HOME/$REPO_NAME"
 fi
 
 # ── Done ─────────────────────────────────────────────────────────
-echo ""
-echo "✓ Project ready"
-echo "  Repo:       $REPO_NAME"
-echo "  Home:       $PROJECT_HOME"
-echo "  Worktree:   $PROJECT_HOME/$REPO_NAME"
-echo "  Session:    $SESSION_NAME"
-echo ""
-echo "Attach with: tmux switch-client -t '$SESSION_NAME'"
+cat <<EOF
+
+Done! Project ready
+  Repo:       $REPO_NAME
+  Home:       $PROJECT_HOME
+  Worktree:   $PROJECT_HOME/$REPO_NAME
+  Branch:     $DEFAULT_BRANCH
+  Session:    $SESSION_NAME
+
+Attach with: tmux switch-client -t '$SESSION_NAME'
+EOF
