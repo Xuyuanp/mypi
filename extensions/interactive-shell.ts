@@ -139,6 +139,42 @@ function isInteractiveCommand(command: string): boolean {
 }
 
 export default function(pi: ExtensionAPI) {
+    pi.registerCommand("edit", {
+        description: "Open editor",
+        handler: async (path, ctx) => {
+            await ctx.ui.custom<number | null>((tui, _theme, _kb, done) => {
+                // Stop TUI to release terminal
+                tui.stop();
+
+                // Clear screen
+                process.stdout.write("\x1b[2J\x1b[H");
+
+                let command = process.env.EDITOR || "nvim";
+                path = path.trim();
+                if (path.length > 0) {
+                    command += " " + path;
+                }
+
+                // Run command with full terminal access
+                const shell = process.env.SHELL || "/bin/sh";
+                const result = spawnSync(shell, ["-c", command], {
+                    stdio: "inherit",
+                    env: process.env,
+                });
+
+                // Restart TUI
+                tui.start();
+                tui.requestRender(true);
+
+                // Signal completion
+                done(result.status);
+
+                // Return empty component (immediately disposed since done() was called)
+                return { render: () => [], invalidate: () => { } };
+            });
+        },
+    });
+
     pi.on("user_bash", async (event, ctx) => {
         let command = event.command;
         let forceInteractive = false;
