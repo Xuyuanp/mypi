@@ -4,6 +4,13 @@
 
 - This is my personal pi package
 
+## Structure
+
+- `extensions/` - Custom pi extensions
+- `themes/` - Custom themes for pi TUI
+- `prompts/` - Prompt templates
+- `skills/` - Specialized skills (future use)
+
 ## Code Style
 
 ### Design Principles
@@ -40,7 +47,7 @@
 
 ### Extension Structure
 
-```
+```ts
 /**
  * Block comment describing the extension's purpose and usage.
  */
