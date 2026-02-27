@@ -35,6 +35,7 @@ interface TodoDetails {
 const TodoParams = Type.Object({
     action: StringEnum(["list", "add", "toggle", "clear"] as const),
     text: Type.Optional(Type.String({ description: "Todo text (for add)" })),
+    texts: Type.Optional(Type.Array(Type.String(), { description: "Multiple todo texts (for batch add)" })),
     id: Type.Optional(Type.Number({ description: "Todo ID (for toggle)" })),
 });
 
@@ -159,7 +160,7 @@ export default function(pi: ExtensionAPI) {
         name: "todo",
         label: "Todo",
         description:
-            "Manage a todo list. Actions: list, add (text), toggle (id), clear",
+            "Manage a todo list. Actions: list, add (text or texts for batch), toggle (id), clear",
         parameters: TodoParams,
 
         async execute(_toolCallId, params, _signal, _onUpdate, _ctx) {
@@ -184,28 +185,41 @@ export default function(pi: ExtensionAPI) {
                     };
 
                 case "add": {
-                    if (!params.text) {
+                    const items = params.texts?.length
+                        ? params.texts
+                        : params.text
+                            ? [params.text]
+                            : [];
+
+                    if (items.length === 0) {
                         return {
-                            content: [{ type: "text", text: "Error: text required for add" }],
+                            content: [{ type: "text", text: "Error: text or texts required for add" }],
                             details: {
                                 action: "add",
                                 todos: [...todos],
                                 nextId,
-                                error: "text required",
+                                error: "text or texts required",
                             } as TodoDetails,
                         };
                     }
-                    const newTodo: Todo = {
-                        id: nextId++,
-                        text: params.text,
-                        done: false,
-                    };
-                    todos.push(newTodo);
+
+                    const added: Todo[] = [];
+                    for (const item of items) {
+                        const newTodo: Todo = { id: nextId++, text: item, done: false };
+                        todos.push(newTodo);
+                        added.push(newTodo);
+                    }
+
+                    const summary = added
+                        .map((t) => `#${t.id}: ${t.text}`)
+                        .join("\n");
                     return {
                         content: [
                             {
                                 type: "text",
-                                text: `Added todo #${newTodo.id}: ${newTodo.text}`,
+                                text: added.length === 1
+                                    ? `Added todo ${summary}`
+                                    : `Added ${added.length} todos:\n${summary}`,
                             },
                         ],
                         details: {
@@ -287,7 +301,14 @@ export default function(pi: ExtensionAPI) {
             let text =
                 theme.fg("toolTitle", theme.bold("todo ")) +
                 theme.fg("muted", args.action);
-            if (args.text) text += ` ${theme.fg("dim", `"${args.text}"`)}`;
+            if (args.texts?.length) {
+                text += ` ${theme.fg("dim", `${args.texts.length} items`)}`;
+                for (const t of args.texts) {
+                    text += `\n  ${theme.fg("dim", `"${t}"`)}`;
+                }
+            } else if (args.text) {
+                text += ` ${theme.fg("dim", `"${args.text}"`)}`;
+            }
             if (args.id !== undefined)
                 text += ` ${theme.fg("accent", `#${args.id}`)}`;
             return new Text(text, 0, 0);
@@ -329,6 +350,22 @@ export default function(pi: ExtensionAPI) {
                 }
 
                 case "add": {
+                    const resultText = result.content[0];
+                    const msg = resultText?.type === "text" ? resultText.text : "";
+                    const addedCount = (msg.match(/^Added (\d+) todos:/m) ?? [])[1];
+                    if (addedCount) {
+                        let addText = theme.fg("success", `✓ Added ${addedCount} todos`);
+                        if (expanded) {
+                            const lines = msg.split("\n").slice(1);
+                            for (const line of lines) {
+                                const match = line.match(/^#(\d+): (.+)$/);
+                                if (match) {
+                                    addText += `\n  ${theme.fg("accent", `#${match[1]}`)} ${theme.fg("muted", match[2])}`;
+                                }
+                            }
+                        }
+                        return new Text(addText, 0, 0);
+                    }
                     const added = todoList[todoList.length - 1];
                     return new Text(
                         theme.fg("success", "✓ Added ") +
