@@ -1,64 +1,27 @@
 /**
  * Pi Notify Extension
  *
- * Sends a native terminal notification when Pi agent is done and waiting for input.
- * Supports multiple terminal protocols:
- * - OSC 777: Ghostty, WezTerm, rxvt-unicode
- * - OSC 9: iTerm2
- * - OSC 99: Kitty
- * - tmux passthrough wrapper for OSC notifications
- * - Windows toast: Windows Terminal (WSL)
- * - Optional sound hook via PI_NOTIFY_SOUND_CMD
+ * Sends a macOS notification via `alerter` when Pi agent is done and waiting for input.
+ * The notification shows the pi session name and tmux session context.
+ * Clicking the notification switches to the tmux session/pane where pi is running.
+ * Closing the notification does nothing.
+ *
+ * Optional: set PI_NOTIFY_SOUND_CMD to play a custom sound alongside the notification.
  */
 
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import { execFile, spawn } from "node:child_process";
 
-function windowsToastScript(title: string, body: string): string {
-    const type = "Windows.UI.Notifications";
-    const mgr = `[${type}.ToastNotificationManager, ${type}, ContentType = WindowsRuntime]`;
-    const template = `[${type}.ToastTemplateType]::ToastText01`;
-    const toast = `[${type}.ToastNotification]::new($xml)`;
-    return [
-        `${mgr} > $null`,
-        `$xml = [${type}.ToastNotificationManager]::GetTemplateContent(${template})`,
-        `$xml.GetElementsByTagName('text')[0].AppendChild($xml.CreateTextNode('${body}')) > $null`,
-        `[${type}.ToastNotificationManager]::CreateToastNotifier('${title}').Show(${toast})`,
-    ].join("; ");
+const ALERTER_TIMEOUT = 10;
+
+function getTmuxTarget(): string | undefined {
+    const paneId = process.env.TMUX_PANE;
+    if (!paneId || !process.env.TMUX) return undefined;
+    return paneId;
 }
 
-function wrapForTmux(sequence: string): string {
-    if (!process.env.TMUX) return sequence;
-
-    // tmux passthrough: wrap in DCS and escape inner ESC bytes.
-    const escaped = sequence.split("\x1b").join("\x1b\x1b");
-    return `\x1bPtmux;${escaped}\x1b\\`;
-}
-
-function notifyOSC777(title: string, body: string): void {
-    const sequence = `\x1b]777;notify;${title};${body}\x07`;
-    process.stdout.write(wrapForTmux(sequence));
-}
-
-function notifyOSC9(message: string): void {
-    const sequence = `\x1b]9;${message}\x07`;
-    process.stdout.write(wrapForTmux(sequence));
-}
-
-function notifyOSC99(title: string, body: string): void {
-    // Kitty OSC 99: i=notification id, d=0 means not done yet, p=body for second part
-    const titleSequence = `\x1b]99;i=1:d=0;${title}\x1b\\`;
-    const bodySequence = `\x1b]99;i=1:p=body;${body}\x1b\\`;
-    process.stdout.write(wrapForTmux(titleSequence));
-    process.stdout.write(wrapForTmux(bodySequence));
-}
-
-function notifyWindows(title: string, body: string): void {
-    const { execFile } = require("node:child_process");
-    execFile("powershell.exe", [
-        "-NoProfile",
-        "-Command",
-        windowsToastScript(title, body),
-    ]);
+function buildSwitchCommand(paneId: string): string {
+    return `tmux switch-client -t "${paneId}" && tmux select-pane -t "${paneId}"`;
 }
 
 function runSoundHook(): void {
@@ -66,39 +29,68 @@ function runSoundHook(): void {
     if (!command) return;
 
     try {
-        const { spawn } = require("node:child_process");
         const child = spawn(command, {
             shell: true,
             detached: true,
             stdio: "ignore",
         });
         child.unref();
-    } catch {
-        // Ignore hook errors to avoid breaking notifications
-    }
+    } catch { }
 }
 
-function notify(title: string, body: string): void {
-    const isIterm2 =
-        process.env.TERM_PROGRAM === "iTerm.app" ||
-        Boolean(process.env.ITERM_SESSION_ID);
+function notify(sessionName: string): void {
+    const tmuxTarget = getTmuxTarget();
 
-    if (process.env.WT_SESSION) {
-        notifyWindows(title, body);
-    } else if (process.env.KITTY_WINDOW_ID) {
-        notifyOSC99(title, body);
-    } else if (isIterm2) {
-        notifyOSC9(`${title}: ${body}`);
-    } else {
-        notifyOSC777(title, body);
+    const title = `Pi - ${sessionName}`;
+    const body = tmuxTarget
+        ? `Ready for input (tmux pane ${tmuxTarget})`
+        : "Ready for input";
+
+    const args = [
+        "--title",
+        title,
+        "--message",
+        body,
+        "--timeout",
+        String(ALERTER_TIMEOUT),
+        "--json",
+    ];
+
+    if (process.env.PI_NOTIFY_SOUND) {
+        args.push("--sound", process.env.PI_NOTIFY_SOUND);
     }
+
+    if (tmuxTarget) {
+        args.push("--group", `pi-${tmuxTarget}`);
+    }
+
+    const child = execFile("alerter", args, (error, stdout) => {
+        if (error || !tmuxTarget) return;
+
+        try {
+            const result = JSON.parse(stdout);
+            if (result.activationType === "contentsClicked") {
+                const switchCmd = buildSwitchCommand(tmuxTarget);
+                const sh = spawn("bash", ["-c", switchCmd], {
+                    detached: true,
+                    stdio: "ignore",
+                });
+                sh.unref();
+            }
+        } catch { }
+    });
+    child.unref();
 
     runSoundHook();
 }
 
 export default function(pi: ExtensionAPI) {
     pi.on("agent_end", async (_event, ctx) => {
-        const sessionName = ctx.sessionManager.getSessionName();
-        notify(`Pi(${sessionName} ?? "noname")`, `Ready for input`);
+        if (!ctx.hasUI) {
+            return;
+        }
+
+        const sessionName = ctx.sessionManager.getSessionName() ?? "noname";
+        notify(sessionName);
     });
 }
