@@ -1,61 +1,29 @@
 /**
- * Tool Override Example - Demonstrates overriding built-in tools
+ * Read tool override - directory awareness
  *
- * Extensions can register tools with the same name as built-in tools to replace them.
- * This is useful for:
- * - Adding logging or auditing to tool calls
- * - Implementing access control or sandboxing
- * - Routing tool calls to remote systems (e.g., pi-ssh-remote)
- * - Modifying tool behavior for specific workflows
+ * Overrides the built-in `read` tool to handle directory paths gracefully.
+ * When the agent tries to read a directory, this delegates to the native `ls`
+ * tool instead of failing with an error.
  *
- * This example overrides the `read` tool to:
- * 1. Log all file access to a log file
- * 2. Block access to sensitive paths (e.g., .env files)
- * 3. Delegate to the original read implementation for allowed files
- *
- * Since no custom renderCall/renderResult are provided, the built-in renderer
- * is used automatically (syntax highlighting, line numbers, truncation warnings).
+ * For regular files, behavior is identical to the built-in read tool.
  *
  * Usage:
  *   pi -e ./tool-override.ts
  */
 
-import type { TextContent } from "@mariozechner/pi-ai";
+import { createLsTool, createReadTool } from "@mariozechner/pi-coding-agent";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
-import { appendFileSync, constants, readFileSync } from "fs";
-import { access, readFile } from "fs/promises";
-import { homedir } from "os";
-import { join, resolve } from "path";
+import { stat } from "node:fs/promises";
+import { isAbsolute, resolve } from "node:path";
+import { homedir } from "node:os";
 
-const LOG_FILE = join(homedir(), ".pi", "agent", "read-access.log");
-
-// Paths that are blocked from reading
-const BLOCKED_PATTERNS = [
-    /\.env$/,
-    /\.envrc$/,
-    /secrets?\.(json|yaml|yml|toml)$/i,
-    /credentials?\.(json|yaml|yml|toml)$/i,
-    /\/\.ssh\//,
-    /\/\.aws\//,
-    /\/\.gnupg\//,
-];
-
-function isBlockedPath(path: string): boolean {
-    return BLOCKED_PATTERNS.some((pattern) => pattern.test(path));
-}
-
-function logAccess(path: string, allowed: boolean, reason?: string) {
-    const timestamp = new Date().toISOString();
-    const status = allowed ? "ALLOWED" : "BLOCKED";
-    const msg = reason ? ` (${reason})` : "";
-    const line = `[${timestamp}] ${status}: ${path}${msg}\n`;
-
-    try {
-        appendFileSync(LOG_FILE, line);
-    } catch {
-        // Ignore logging errors
+function resolvePath(filePath: string, cwd: string): string {
+    let p = filePath.startsWith("@") ? filePath.slice(1) : filePath;
+    if (p === "~" || p.startsWith("~/")) {
+        p = homedir() + p.slice(1);
     }
+    return isAbsolute(p) ? p : resolve(cwd, p);
 }
 
 const readSchema = Type.Object({
@@ -74,80 +42,41 @@ const readSchema = Type.Object({
 
 export default function(pi: ExtensionAPI) {
     pi.registerTool({
-        name: "read", // Same name as built-in - this will override it
-        label: "read (audited)",
+        name: "read",
+        label: "read",
         description:
             "Read the contents of a file with access logging. Some sensitive paths (.env, secrets, credentials) are blocked.",
         parameters: readSchema,
 
-        async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+        async execute(toolCallId, params, signal, onUpdate, ctx) {
             const { path, offset, limit } = params;
-            const absolutePath = resolve(ctx.cwd, path);
+            const absolutePath = resolvePath(path, ctx.cwd);
 
-            // Check if path is blocked
-            if (isBlockedPath(absolutePath)) {
-                logAccess(absolutePath, false, "matches blocked pattern");
-                return {
-                    content: [
-                        {
-                            type: "text",
-                            text: `Access denied: "${path}" matches a blocked pattern (sensitive file). This tool blocks access to .env files, secrets, credentials, and SSH/AWS/GPG directories.`,
-                        },
-                    ],
-                    details: { blocked: true },
-                };
-            }
-
-            // Log allowed access
-            logAccess(absolutePath, true);
-
-            // Perform the actual read (simplified implementation)
+            let isDir = false;
             try {
-                await access(absolutePath, constants.R_OK);
-                const content = await readFile(absolutePath, "utf-8");
-                const lines = content.split("\n");
-
-                // Apply offset and limit
-                const startLine = offset ? Math.max(0, offset - 1) : 0;
-                const endLine = limit ? startLine + limit : lines.length;
-                const selectedLines = lines.slice(startLine, endLine);
-
-                // Basic truncation (50KB limit)
-                let text = selectedLines.join("\n");
-                const maxBytes = 50 * 1024;
-                if (Buffer.byteLength(text, "utf-8") > maxBytes) {
-                    text = `${text.slice(0, maxBytes)}\n\n[Output truncated at 50KB]`;
-                }
-
-                return {
-                    content: [{ type: "text", text }] as TextContent[],
-                    details: { lines: lines.length },
-                };
-            } catch (error: any) {
-                return {
-                    content: [
-                        { type: "text", text: `Error reading file: ${error.message}` },
-                    ] as TextContent[],
-                    details: { error: true },
-                };
-            }
-        },
-
-        // No renderCall/renderResult - uses built-in renderer automatically
-        // (syntax highlighting, line numbers, truncation warnings, etc.)
-    });
-
-    // Also register a command to view the access log
-    pi.registerCommand("read-log", {
-        description: "View the file access log",
-        handler: async (_args, ctx) => {
-            try {
-                const log = readFileSync(LOG_FILE, "utf-8");
-                const lines = log.trim().split("\n").slice(-20); // Last 20 entries
-                ctx.ui.notify(`Recent file access:\n${lines.join("\n")}`, "info");
+                const s = await stat(absolutePath);
+                isDir = s.isDirectory();
             } catch {
-                ctx.ui.notify("No access log found", "info");
+                // Path doesn't exist or can't be stat'd; let the read tool handle the error
             }
+
+            if (isDir) {
+                const lsTool = createLsTool(ctx.cwd);
+                const result = await lsTool.execute(toolCallId, { path }, signal, onUpdate);
+                const note = `[Note: "${path}" is a directory, listing contents via ls]\n\n`;
+                if (result.content?.[0]?.type === "text") {
+                    result.content[0].text = note + result.content[0].text;
+                }
+                return result;
+            }
+
+            const readTool = createReadTool(ctx.cwd);
+            return readTool.execute(
+                toolCallId,
+                { path, offset, limit },
+                signal,
+                onUpdate,
+            );
         },
     });
 }
