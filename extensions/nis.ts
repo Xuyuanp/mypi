@@ -1,5 +1,5 @@
 /**
- * NES (Next Expected Send) Extension
+ * NIS (Next Input Suggestion) Extension
  *
  * Predicts the next message the user will send based on recent conversation
  * context, using a cheap and fast model (claude-haiku-4-5 by default).
@@ -10,10 +10,10 @@
  * while the editor is empty, the prediction is accepted.
  *
  * Behaviour:
- * - Prediction runs after every turn_end.
+ * - Prediction runs after every agent_end.
  * - Only the latest prediction is kept; a new turn discards the old one.
  * - Ghost text disappears as soon as the user starts typing (handled by ghost-editor).
- * - /nes command toggles the feature on/off.
+ * - /nis command toggles the feature on/off.
  * - Ctrl+Shift+N also toggles.
  *
  * Requires: ghost-editor extension (for inline display).
@@ -173,7 +173,7 @@ function postProcessPrediction(raw: string): string {
     return text;
 }
 
-export default function nesExtension(pi: ExtensionAPI) {
+export default function nisExtension(pi: ExtensionAPI) {
     let enabled = true;
     let predictionAbortController: AbortController | null = null;
 
@@ -234,17 +234,17 @@ export default function nesExtension(pi: ExtensionAPI) {
     function updateStatus(ctx: ExtensionContext) {
         if (ctx.hasUI) {
             ctx.ui.setStatus(
-                "nes",
+                "nis",
                 enabled
-                    ? ctx.ui.theme.fg("dim", "nes:on")
-                    : ctx.ui.theme.fg("warning", "nes:off"),
+                    ? ctx.ui.theme.fg("dim", "nis:on")
+                    : ctx.ui.theme.fg("warning", "nis:off"),
             );
         }
     }
 
     // Toggle command
-    pi.registerCommand("nes", {
-        description: "Toggle next-message prediction (NES)",
+    pi.registerCommand("nis", {
+        description: "Toggle next input suggestion (NIS)",
         handler: async (_args, ctx) => {
             enabled = !enabled;
             if (!enabled) {
@@ -252,7 +252,7 @@ export default function nesExtension(pi: ExtensionAPI) {
                 clearGhostText();
             }
             ctx.ui.notify(
-                `NES prediction ${enabled ? "enabled" : "disabled"}`,
+                `NIS ${enabled ? "enabled" : "disabled"}`,
                 "info",
             );
             updateStatus(ctx);
@@ -261,7 +261,7 @@ export default function nesExtension(pi: ExtensionAPI) {
 
     // Toggle shortcut
     pi.registerShortcut(Key.ctrlShift("n"), {
-        description: "Toggle NES prediction",
+        description: "Toggle NIS prediction",
         handler: async (ctx) => {
             enabled = !enabled;
             if (!enabled) {
@@ -269,7 +269,7 @@ export default function nesExtension(pi: ExtensionAPI) {
                 clearGhostText();
             }
             ctx.ui.notify(
-                `NES prediction ${enabled ? "enabled" : "disabled"}`,
+                `NIS ${enabled ? "enabled" : "disabled"}`,
                 "info",
             );
             updateStatus(ctx);
@@ -294,7 +294,7 @@ export default function nesExtension(pi: ExtensionAPI) {
     });
 
     // Generate prediction after assistant finishes
-    pi.on("turn_end", async (_event, ctx) => {
+    pi.on("agent_end", async (_event, ctx) => {
         if (!enabled) return;
 
         try {
@@ -303,7 +303,7 @@ export default function nesExtension(pi: ExtensionAPI) {
                 setGhostText(prediction);
             }
         } catch (err) {
-            ctx.ui.notify(`nes failed ${err}`, "error");
+            ctx.ui.notify(`nis failed ${err}`, "error");
         }
     });
 
