@@ -1,12 +1,14 @@
 /**
- * Interactive Shell Commands Extension
+ * Interactive Shell Extension
  *
- * Enables running interactive commands (vim, git rebase -i, htop, etc.)
- * with full terminal access. The TUI suspends while they run.
+ * Provides full terminal access for interactive commands. The TUI suspends
+ * while they run and resumes when they exit.
  *
- * Usage:
- *   pi -e examples/extensions/interactive-shell.ts
+ * Commands:
+ *   /edit [path]         # Open $EDITOR (defaults to nvim)
+ *   /shell [command]     # Open $SHELL, optionally running a command
  *
+ * Bang commands (auto-detected or forced):
  *   !vim file.txt        # Auto-detected as interactive
  *   !i any-command       # Force interactive mode with !i prefix
  *   !git rebase -i HEAD~3
@@ -17,11 +19,13 @@
  *   INTERACTIVE_EXCLUDE  - Commands to exclude (comma-separated)
  *
  * Note: This only intercepts user `!` commands, not agent bash tool calls.
- * If the agent runs an interactive command, it will fail (which is fine).
  */
 
 import { spawnSync } from "node:child_process";
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import type {
+    ExtensionAPI,
+    ExtensionUIContext,
+} from "@mariozechner/pi-coding-agent";
 
 // Default interactive commands - editors, pagers, git ops, TUIs
 const DEFAULT_INTERACTIVE_COMMANDS = [
@@ -138,40 +142,68 @@ function isInteractiveCommand(command: string): boolean {
     return false;
 }
 
+async function runInteractiveCommand(
+    ui: ExtensionUIContext,
+    command: string,
+    args: readonly string[],
+) {
+    return await ui.custom<number | null>((tui, _theme, _kb, done) => {
+        // Stop TUI to release terminal
+        tui.stop();
+
+        // Clear screen
+        process.stdout.write("\x1b[2J\x1b[H");
+
+        const result = spawnSync(command, args, {
+            stdio: "inherit",
+            env: process.env,
+        });
+
+        // Restart TUI
+        tui.start();
+        tui.requestRender(true);
+
+        // Signal completion
+        done(result.status);
+
+        // Return empty component (immediately disposed since done() was called)
+        return { render: () => [], invalidate: () => { } };
+    });
+}
+
 export default function(pi: ExtensionAPI) {
     pi.registerCommand("edit", {
         description: "Open editor",
         handler: async (path, ctx) => {
-            await ctx.ui.custom<number | null>((tui, _theme, _kb, done) => {
-                // Stop TUI to release terminal
-                tui.stop();
+            if (!ctx.hasUI) {
+                return;
+            }
 
-                // Clear screen
-                process.stdout.write("\x1b[2J\x1b[H");
+            let editor = process.env.EDITOR || "nvim";
+            path = path.trim();
+            if (path.length > 0) {
+                editor += " " + path;
+            }
 
-                let command = process.env.EDITOR || "nvim";
-                path = path.trim();
-                if (path.length > 0) {
-                    command += " " + path;
-                }
+            // Run command with full terminal access
+            const shell = process.env.SHELL || "/bin/sh";
+            await runInteractiveCommand(ctx.ui, shell, ["-c", editor]);
+        },
+    });
 
-                // Run command with full terminal access
-                const shell = process.env.SHELL || "/bin/sh";
-                const result = spawnSync(shell, ["-c", command], {
-                    stdio: "inherit",
-                    env: process.env,
-                });
+    pi.registerCommand("shell", {
+        description: "Open interactive shell",
+        handler: async (args, ctx) => {
+            if (!ctx.hasUI) {
+                return;
+            }
 
-                // Restart TUI
-                tui.start();
-                tui.requestRender(true);
-
-                // Signal completion
-                done(result.status);
-
-                // Return empty component (immediately disposed since done() was called)
-                return { render: () => [], invalidate: () => { } };
-            });
+            const shell = process.env.SHELL || "/bin/sh";
+            let shArgs: string[] = [];
+            if (args.trim().length > 0) {
+                shArgs = ["-c", args];
+            }
+            await runInteractiveCommand(ctx.ui, shell, shArgs);
         },
     });
 
@@ -204,33 +236,11 @@ export default function(pi: ExtensionAPI) {
             };
         }
 
-        // Use ctx.ui.custom() to get TUI access, then run the command
-        const exitCode = await ctx.ui.custom<number | null>(
-            (tui, _theme, _kb, done) => {
-                // Stop TUI to release terminal
-                tui.stop();
-
-                // Clear screen
-                process.stdout.write("\x1b[2J\x1b[H");
-
-                // Run command with full terminal access
-                const shell = process.env.SHELL || "/bin/sh";
-                const result = spawnSync(shell, ["-c", command], {
-                    stdio: "inherit",
-                    env: process.env,
-                });
-
-                // Restart TUI
-                tui.start();
-                tui.requestRender(true);
-
-                // Signal completion
-                done(result.status);
-
-                // Return empty component (immediately disposed since done() was called)
-                return { render: () => [], invalidate: () => { } };
-            },
-        );
+        const shell = process.env.SHELL || "/bin/sh";
+        const exitCode = await runInteractiveCommand(ctx.ui, shell, [
+            "-c",
+            command,
+        ]);
 
         // Return result to prevent default bash handling
         const output =
