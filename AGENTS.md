@@ -39,6 +39,10 @@
 - Module-level constants in `UPPER_SNAKE_CASE`
 - Top-level helpers as `function` declarations; callbacks as arrow functions
 
+### Naming Conventions
+
+- `ctx` for pi `ExtensionContext` or `ExtensionCommandContext`.
+
 ### Error Handling
 
 - `try/catch` with empty catch body (`catch { }`) when errors are intentionally ignored
