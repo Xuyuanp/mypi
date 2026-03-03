@@ -199,12 +199,12 @@ function buildNotification(
 async function sendNotification(
     piSessionName: string,
     message: string,
-    tmuxContext: TmuxContext | undefined,
+    tmux: TmuxContext | undefined,
     exec: Exec,
 ): Promise<void> {
-    const notification = buildNotification(piSessionName, message, tmuxContext);
+    const notification = buildNotification(piSessionName, message, tmux);
 
-    if (!tmuxContext) {
+    if (!tmux) {
         notifySystem(
             notification,
             {
@@ -218,14 +218,14 @@ async function sendNotification(
         return;
     }
 
-    const state = await getFocusState(tmuxContext.paneId, exec);
+    const state = await getFocusState(tmux.paneId, exec);
 
     if (state === "exact") return;
 
     if (state === "terminal") {
         await notifyTmux(notification, exec);
     } else {
-        notifySystem(notification, tmuxContext, exec);
+        notifySystem(notification, tmux, exec);
     }
 }
 
