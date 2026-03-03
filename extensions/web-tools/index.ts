@@ -4,7 +4,7 @@
  * Provides web-fetch and web-search tools.
  *
  * Environment variables:
- * - EXA_API_KEY: Optional, for authenticated Exa API access
+ * - SEARXNG_API_BASE: Optional, SearXNG instance URL (default: http://localhost:8888)
  */
 
 import { StringEnum } from "@mariozechner/pi-ai";
@@ -144,7 +144,7 @@ export default function webToolsExtension(pi: ExtensionAPI) {
         name: "web-search",
         label: "Web Search",
         description:
-            "Search the web using Exa AI. Returns relevant search results with titles, URLs, and content snippets.",
+            "Search the web using SearXNG. Returns relevant search results with titles, URLs, and content snippets.",
         parameters: Type.Object({
             query: Type.String({ description: "Search query" }),
             numResults: Type.Optional(
@@ -183,6 +183,9 @@ export default function webToolsExtension(pi: ExtensionAPI) {
                 const lines = details.results.map((r, i) => {
                     let entry = `${theme.fg("accent", `${i + 1}.`)} ${theme.fg("muted", r.title)}\n`;
                     entry += `   ${theme.fg("dim", r.url)}`;
+                    if (r.engines?.length) {
+                        entry += `\n   ${theme.fg("dim", `[${r.engines.join(", ")}]`)}`;
+                    }
                     if (r.publishedDate) {
                         entry += `\n   ${theme.fg("dim", r.publishedDate)}`;
                     }
@@ -209,8 +212,7 @@ export default function webToolsExtension(pi: ExtensionAPI) {
                 numResults?: number;
             };
 
-            const apiKey = process.env.EXA_API_KEY;
-            const response = await search(query, numResults, apiKey);
+            const response = await search(query, numResults);
 
             if (response.isError) {
                 return {
