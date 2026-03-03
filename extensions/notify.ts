@@ -16,24 +16,16 @@
  */
 
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
-import { execFile, spawn } from "node:child_process";
-import { promisify } from "node:util";
 
-const execFileAsync = promisify(execFile);
+type Exec = ExtensionAPI["exec"];
 
 const NOTIFY_TIMEOUT_SECONDS = 20;
 
-type NotifyReason = "ready" | "question";
-
-const NOTIFY_BODY: Record<NotifyReason, string> = {
-    ready: "Ready for input",
-    question: "Question waiting for answer",
-};
-
-const NOTIFY_TMUX_TAG: Record<NotifyReason, string> = {
-    ready: "ready",
-    question: "question",
-};
+interface Notification {
+    title: string;
+    subtitle: string;
+    message: string;
+}
 
 interface TmuxContext {
     sessionName: string;
@@ -44,18 +36,19 @@ interface TmuxContext {
 
 type FocusState = "exact" | "terminal" | "away";
 
-async function getTmuxContext(): Promise<TmuxContext | undefined> {
+async function getTmuxContext(exec: Exec): Promise<TmuxContext | undefined> {
     const paneId = process.env.TMUX_PANE;
     if (!paneId || !process.env.TMUX) return undefined;
 
     try {
-        const { stdout } = await execFileAsync("tmux", [
+        const { stdout, code } = await exec("tmux", [
             "display-message",
             "-t",
             paneId,
             "-p",
             "#{session_name} #{window_index} #{pane_index} #{pane_id}",
         ]);
+        if (code !== 0) return undefined;
         const [sessionName, windowIndex, paneIndex, resolvedPaneId] = stdout
             .trim()
             .split(" ");
@@ -67,30 +60,33 @@ async function getTmuxContext(): Promise<TmuxContext | undefined> {
     }
 }
 
-async function isGhosttyFocused(): Promise<boolean> {
+async function isGhosttyFocused(exec: Exec): Promise<boolean> {
     try {
-        const { stdout: asn } = await execFileAsync("lsappinfo", ["front"]);
-        const { stdout: info } = await execFileAsync("lsappinfo", [
+        const { stdout: asn, code: c1 } = await exec("lsappinfo", ["front"]);
+        if (c1 !== 0) return false;
+        const { stdout: info, code: c2 } = await exec("lsappinfo", [
             "info",
             "-only",
             "name",
             asn.trim(),
         ]);
+        if (c2 !== 0) return false;
         return info.toLowerCase().includes("ghostty");
     } catch {
         return false;
     }
 }
 
-async function isPaneActive(paneId: string): Promise<boolean> {
+async function isPaneActive(paneId: string, exec: Exec): Promise<boolean> {
     try {
-        const { stdout } = await execFileAsync("tmux", [
+        const { stdout, code } = await exec("tmux", [
             "display-message",
             "-t",
             paneId,
             "-p",
             "#{pane_active} #{window_active} #{session_attached}",
         ]);
+        if (code !== 0) return false;
         const [paneActive, windowActive, sessionAttached] = stdout
             .trim()
             .split(" ");
@@ -102,25 +98,22 @@ async function isPaneActive(paneId: string): Promise<boolean> {
     }
 }
 
-async function getFocusState(paneId: string): Promise<FocusState> {
-    const ghosttyFocused = await isGhosttyFocused();
+async function getFocusState(paneId: string, exec: Exec): Promise<FocusState> {
+    const ghosttyFocused = await isGhosttyFocused(exec);
     if (!ghosttyFocused) return "away";
 
-    const paneActive = await isPaneActive(paneId);
+    const paneActive = await isPaneActive(paneId, exec);
     return paneActive ? "exact" : "terminal";
 }
 
-function formatTmuxTarget(tmux: TmuxContext): string {
-    return `${tmux.sessionName}:${tmux.windowIndex}.${tmux.paneIndex}`;
-}
-
-async function getTmuxClients(): Promise<string[]> {
+async function getTmuxClients(exec: Exec): Promise<string[]> {
     try {
-        const { stdout } = await execFileAsync("tmux", [
+        const { stdout, code } = await exec("tmux", [
             "list-clients",
             "-F",
             "#{client_name}",
         ]);
+        if (code !== 0) return [];
         return stdout.trim().split("\n").filter(Boolean);
     } catch {
         return [];
@@ -128,59 +121,45 @@ async function getTmuxClients(): Promise<string[]> {
 }
 
 async function notifyTmux(
-    piSessionName: string,
-    tmux: TmuxContext,
-    reason: NotifyReason,
+    notification: Notification,
+    exec: Exec,
 ): Promise<void> {
-    const target = formatTmuxTarget(tmux);
-    const message = `[Pi] ${piSessionName} ${NOTIFY_TMUX_TAG[reason]} | from ${target}`;
+    const message = `${notification.title} (${notification.subtitle}) | ${notification.message}`;
 
-    const clients = await getTmuxClients();
-    for (const client of clients) {
-        try {
-            const child = spawn(
-                "tmux",
-                [
-                    "display-message",
-                    "-d",
-                    String(NOTIFY_TIMEOUT_SECONDS * 1000),
-                    "-c",
-                    client,
-                    message,
-                ],
-                {
-                    detached: true,
-                    stdio: "ignore",
-                },
-            );
-            child.unref();
-        } catch { }
-    }
+    const clients = await getTmuxClients(exec);
+    await Promise.allSettled(
+        clients.map((client) =>
+            exec("tmux", [
+                "display-message",
+                "-d",
+                String(NOTIFY_TIMEOUT_SECONDS * 1000),
+                "-c",
+                client,
+                message,
+            ]),
+        ),
+    );
 }
 
-function buildFocusCommand(tmux: TmuxContext): string {
+async function focusPane(tmux: TmuxContext, exec: Exec): Promise<void> {
     const target = `${tmux.sessionName}:${tmux.windowIndex}`;
-    return [
-        `osascript -e 'tell application "ghostty" to activate'`,
-        `tmux switch-client -t "${target}"`,
-        `tmux select-pane -t "${tmux.paneId}"`,
-    ].join(" && ");
+    await exec("osascript", ["-e", 'tell application "ghostty" to activate']);
+    await exec("tmux", ["switch-client", "-t", target]);
+    await exec("tmux", ["select-pane", "-t", tmux.paneId]);
 }
 
 function notifySystem(
-    piSessionName: string,
+    notification: Notification,
     tmux: TmuxContext,
-    reason: NotifyReason,
+    exec: Exec,
 ): void {
-    const target = formatTmuxTarget(tmux);
-    const title = `Pi - ${piSessionName}`;
-    const body = `${NOTIFY_BODY[reason]} (tmux ${target})`;
-
     const args = [
         "--title",
-        title,
+        notification.title,
+        "--subtitle",
+        notification.subtitle,
         "--message",
-        body,
+        notification.message,
         "--timeout",
         String(NOTIFY_TIMEOUT_SECONDS),
         "--json",
@@ -190,74 +169,92 @@ function notifySystem(
         process.env.PI_NOTIFY_SOUND || "default",
     ];
 
-    const child = execFile("alerter", args, (error, stdout) => {
-        if (error) return;
+    exec("alerter", args)
+        .then(({ stdout }) => {
+            try {
+                const result = JSON.parse(stdout);
+                if (result.activationType === "contentsClicked") {
+                    focusPane(tmux, exec).catch(() => { });
+                }
+            } catch { }
+        })
+        .catch(() => { });
+}
 
-        try {
-            const result = JSON.parse(stdout);
-            if (result.activationType === "contentsClicked") {
-                const cmd = buildFocusCommand(tmux);
-                const sh = spawn("bash", ["-c", cmd], {
-                    detached: true,
-                    stdio: "ignore",
-                });
-                sh.unref();
-            }
-        } catch { }
-    });
-    child.unref();
+function buildNotification(
+    piSessionName: string,
+    message: string,
+    tmux: TmuxContext | undefined,
+): Notification {
+    const subtitle = tmux
+        ? `${tmux.sessionName}:${tmux.windowIndex}.${tmux.paneIndex}`
+        : "unknown:0.0";
+    return {
+        title: `[Pi] - ${piSessionName}`,
+        subtitle,
+        message,
+    };
+}
+
+async function sendNotification(
+    piSessionName: string,
+    message: string,
+    tmuxContext: TmuxContext | undefined,
+    exec: Exec,
+): Promise<void> {
+    const notification = buildNotification(piSessionName, message, tmuxContext);
+
+    if (!tmuxContext) {
+        notifySystem(
+            notification,
+            {
+                sessionName: "unknown",
+                windowIndex: "0",
+                paneIndex: "0",
+                paneId: process.env.TMUX_PANE ?? "",
+            },
+            exec,
+        );
+        return;
+    }
+
+    const state = await getFocusState(tmuxContext.paneId, exec);
+
+    if (state === "exact") return;
+
+    if (state === "terminal") {
+        await notifyTmux(notification, exec);
+    } else {
+        notifySystem(notification, tmuxContext, exec);
+    }
 }
 
 export default function(pi: ExtensionAPI) {
     let tmuxContext: TmuxContext | undefined;
 
-    getTmuxContext().then((resolved) => {
+    getTmuxContext(pi.exec).then((resolved) => {
         tmuxContext = resolved;
     });
 
-    async function sendNotification(
+    async function notify(
         ctx: {
             hasUI: boolean;
             sessionManager: { getSessionName(): string | undefined };
         },
-        reason: NotifyReason,
+        message: string,
     ): Promise<void> {
         if (!ctx.hasUI) return;
-
         const piSessionName = ctx.sessionManager.getSessionName() ?? "noname";
-
-        if (!tmuxContext) {
-            notifySystem(
-                piSessionName,
-                {
-                    sessionName: "unknown",
-                    windowIndex: "0",
-                    paneIndex: "0",
-                    paneId: process.env.TMUX_PANE ?? "",
-                },
-                reason,
-            );
-            return;
-        }
-
-        const state = await getFocusState(tmuxContext.paneId);
-
-        if (state === "exact") return;
-
-        if (state === "terminal") {
-            await notifyTmux(piSessionName, tmuxContext, reason);
-        } else {
-            notifySystem(piSessionName, tmuxContext, reason);
-        }
+        await sendNotification(piSessionName, message, tmuxContext, pi.exec);
     }
 
     pi.on("agent_end", async (_event, ctx) => {
-        await sendNotification(ctx, "ready");
+        await notify(ctx, "Ready for input");
     });
 
     pi.on("tool_call", async (event, ctx) => {
         if (event.toolName === "questionnaire") {
-            await sendNotification(ctx, "question");
+            await notify(ctx, "Question waiting for answer");
         }
     });
 }
