@@ -5,6 +5,14 @@
  *
  * Environment variables:
  * - SEARXNG_API_BASE: Optional, SearXNG instance URL (default: http://localhost:8888)
+ *
+ * Run SearXNG locally with Docker:
+ *  docker run --name searxng -d \
+ *    --restart always \
+ *    -p 8888:8080 \
+ *    -v "$HOME/.config/searxng:/etc/searxng" \
+ *    -v "$HOME/.cache/searxng:/var/cache/searxng/" \
+ *    docker.io/searxng/searxng:latest
  */
 
 import { StringEnum } from "@mariozechner/pi-ai";
@@ -66,7 +74,8 @@ export default function webToolsExtension(pi: ExtensionAPI) {
                 return new Text(theme.fg("error", `Error: ${details.error}`), 0, 0);
             }
 
-            const content = result.content[0]?.type === "text" ? result.content[0].text : "";
+            const content =
+                result.content[0]?.type === "text" ? result.content[0].text : "";
 
             if (expanded) {
                 const header =
@@ -78,7 +87,9 @@ export default function webToolsExtension(pi: ExtensionAPI) {
             const PREVIEW_LINES = 5;
             const lines = content.split("\n").filter((l) => l.trim());
             const preview = lines.slice(0, PREVIEW_LINES);
-            let text = preview.map((l) => theme.fg("dim", truncateToWidth(l, 120))).join("\n");
+            let text = preview
+                .map((l) => theme.fg("dim", truncateToWidth(l, 120)))
+                .join("\n");
             if (lines.length > PREVIEW_LINES) {
                 text += `\n${theme.fg("dim", `... ${lines.length - PREVIEW_LINES} more lines `)}${theme.fg("dim", `${keyHint("expandTools", "to expand")}`)}`;
             }
@@ -101,7 +112,12 @@ export default function webToolsExtension(pi: ExtensionAPI) {
             } catch {
                 return {
                     content: [{ type: "text", text: `Invalid URL: ${url}` }],
-                    details: { url, format, contentLength: 0, error: `Invalid URL: ${url}` },
+                    details: {
+                        url,
+                        format,
+                        contentLength: 0,
+                        error: `Invalid URL: ${url}`,
+                    },
                     isError: true,
                 };
             }
