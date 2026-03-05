@@ -1,5 +1,4 @@
 import { JSDOM } from "jsdom";
-import TurndownService from "turndown";
 
 export type FetchFormat = "markdown" | "text" | "html" | "json";
 
@@ -14,7 +13,7 @@ export type FetchResult = {
 };
 
 const DEFAULT_USER_AGENT =
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36";
 
 async function fetchUrl(params: FetchParams): Promise<Response> {
     const { url, headers } = params;
@@ -86,33 +85,13 @@ export async function fetchText(params: FetchParams): Promise<FetchResult> {
     }
 }
 
-const MARKDOWN_NOISE_SELECTORS = [
-    "script",
-    "style",
-    "nav",
-    "footer",
-    "header",
-    "aside",
-];
+const JINA_READER_PREFIX = "https://r.jina.ai/";
 
 export async function fetchMarkdown(params: FetchParams): Promise<FetchResult> {
     try {
-        const response = await fetchUrl(params);
-        const html = await response.text();
-
-        const dom = new JSDOM(html);
-        const document = dom.window.document;
-        stripNoise(document, MARKDOWN_NOISE_SELECTORS);
-
-        const turndownService = new TurndownService({
-            headingStyle: "atx",
-            codeBlockStyle: "fenced",
-        });
-
-        const main = document.querySelector("main, article, .content, #content");
-        const contentElement = main || document.body;
-        const markdown = turndownService.turndown(contentElement?.innerHTML || "");
-
+        const jinaUrl = `${JINA_READER_PREFIX}${params.url}`;
+        const response = await fetchUrl({ ...params, url: jinaUrl });
+        const markdown = await response.text();
         return { content: markdown, isError: false };
     } catch (error) {
         return errorResult(error);
