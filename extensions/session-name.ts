@@ -1,14 +1,11 @@
 import {
-    AssistantMessage,
+    type AssistantMessage,
     completeSimple,
-    Message,
-    TextContent,
-    UserMessage,
+    type Message,
+    type TextContent,
+    type UserMessage,
 } from "@mariozechner/pi-ai";
-import type {
-    ExtensionAPI,
-    ExtensionContext,
-} from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 
 const TITLE_MODEL = {
     provider: "anthropic",
@@ -116,17 +113,17 @@ export async function generateTitle(
         },
         ...(assistantText
             ? [
-                {
-                    role: "user" as const,
-                    content: [
-                        {
-                            type: "text" as const,
-                            text: `Assistant response:\n${assistantText}`,
-                        },
-                    ],
-                    timestamp: Date.now(),
-                },
-            ]
+                  {
+                      role: "user" as const,
+                      content: [
+                          {
+                              type: "text" as const,
+                              text: `Assistant response:\n${assistantText}`,
+                          },
+                      ],
+                      timestamp: Date.now(),
+                  },
+              ]
             : []),
         {
             role: "user",
@@ -174,8 +171,7 @@ export function getFirstAssistantText(ctx: ExtensionContext): string | null {
     const firstAssistantEntry = entries.find(
         (e) => e.type === "message" && e.message.role === "assistant",
     );
-    if (!firstAssistantEntry || firstAssistantEntry.type !== "message")
-        return null;
+    if (!firstAssistantEntry || firstAssistantEntry.type !== "message") return null;
 
     const msg = firstAssistantEntry.message as AssistantMessage;
     // Filter for text content only -- this naturally excludes thinking blocks
@@ -234,10 +230,7 @@ export async function generateAndSetTitle(
         rawUserText: userText,
         rawAssistantText: assistantText,
     });
-    ctx.ui.notify(
-        `Title generation failed, using fallback: ${fallback}`,
-        "error",
-    );
+    ctx.ui.notify(`Title generation failed, using fallback: ${fallback}`, "error");
 }
 
 interface SessionNameState {

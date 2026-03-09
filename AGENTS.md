@@ -31,10 +31,15 @@
 - Tool parameter schemas use `@sinclair/typebox` (`Type.Object`, `Type.String`, etc.) and `StringEnum` from `@mariozechner/pi-ai`
 - Default export is `export default function(pi: ExtensionAPI) { ... }` (anonymous) or a named function for larger extensions
 
-### Formatting
+### Formatting & Linting
 
+- Enforced by [Biome](https://biomejs.dev/) via `biome.json`
+- Run `make format` to format, `make lint` to check, `make fix` to format + auto-fix safe lint issues
 - 4-space indentation, semicolons, double quotes for strings
 - Trailing commas in multi-line constructs
+- Line width: 85
+- Prefer template literals over string concatenation
+- Use `Number.isNaN()` over global `isNaN()`
 - `const` by default; `let` only when reassignment is needed
 - Module-level constants in `UPPER_SNAKE_CASE`
 - Top-level helpers as `function` declarations; callbacks as arrow functions

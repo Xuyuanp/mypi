@@ -5,10 +5,7 @@
  * Useful to ensure work is committed before switching context.
  */
 
-import type {
-    ExtensionAPI,
-    ExtensionContext,
-} from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 
 async function checkDirtyRepo(
     pi: ExtensionAPI,
@@ -47,7 +44,7 @@ async function checkDirtyRepo(
     }
 }
 
-export default function(pi: ExtensionAPI) {
+export default function (pi: ExtensionAPI) {
     pi.on("session_before_switch", async (event, ctx) => {
         const action = event.reason === "new" ? "new session" : "switch session";
         return checkDirtyRepo(pi, ctx, action);

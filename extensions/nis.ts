@@ -26,10 +26,7 @@ import type {
     UserMessage,
 } from "@mariozechner/pi-ai";
 import { completeSimple } from "@mariozechner/pi-ai";
-import type {
-    ExtensionAPI,
-    ExtensionContext,
-} from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { Key } from "@mariozechner/pi-tui";
 
 const PREDICTION_MODEL = {
@@ -251,10 +248,7 @@ export default function nisExtension(pi: ExtensionAPI) {
                 abortPendingPrediction();
                 clearGhostText();
             }
-            ctx.ui.notify(
-                `NIS ${enabled ? "enabled" : "disabled"}`,
-                "info",
-            );
+            ctx.ui.notify(`NIS ${enabled ? "enabled" : "disabled"}`, "info");
             updateStatus(ctx);
         },
     });
@@ -268,10 +262,7 @@ export default function nisExtension(pi: ExtensionAPI) {
                 abortPendingPrediction();
                 clearGhostText();
             }
-            ctx.ui.notify(
-                `NIS ${enabled ? "enabled" : "disabled"}`,
-                "info",
-            );
+            ctx.ui.notify(`NIS ${enabled ? "enabled" : "disabled"}`, "info");
             updateStatus(ctx);
         },
     });

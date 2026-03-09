@@ -6,33 +6,25 @@
  * extension closure and receive their dependencies as parameters.
  */
 
-import type {
-    ExtensionAPI,
-    ExtensionContext,
-} from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { DynamicBorder } from "@mariozechner/pi-coding-agent";
+import { Container, type SelectItem, SelectList, Text } from "@mariozechner/pi-tui";
 import {
-    Container,
-    type SelectItem,
-    SelectList,
-    Text,
-} from "@mariozechner/pi-tui";
-import type { ReviewTarget, ReviewPresetValue } from "./types.js";
-import { REVIEW_PRESETS, TOGGLE_LOOP_FIXING_VALUE } from "./types.js";
-import {
-    getLocalBranches,
-    getRecentCommits,
-    hasUncommittedChanges,
-    hasPendingChanges,
+    checkoutMr,
+    checkoutPr,
     getCurrentBranch,
     getDefaultBranch,
-    parsePrReference,
-    getPrInfo,
-    checkoutPr,
-    parseMrReference,
+    getLocalBranches,
     getMrInfo,
-    checkoutMr,
+    getPrInfo,
+    getRecentCommits,
+    hasPendingChanges,
+    hasUncommittedChanges,
+    parseMrReference,
+    parsePrReference,
 } from "./git.js";
+import type { ReviewPresetValue, ReviewTarget } from "./types.js";
+import { REVIEW_PRESETS, TOGGLE_LOOP_FIXING_VALUE } from "./types.js";
 
 type SelectorDeps = {
     pi: ExtensionAPI;
@@ -90,31 +82,44 @@ export async function showReviewSelector(
         const result = await ctx.ui.custom<ReviewPresetValue | null>(
             (tui, theme, _kb, done) => {
                 const container = new Container();
-                container.addChild(new DynamicBorder((str) => theme.fg("accent", str)));
                 container.addChild(
-                    new Text(theme.fg("accent", theme.bold("Select a review preset"))),
+                    new DynamicBorder((str) => theme.fg("accent", str)),
+                );
+                container.addChild(
+                    new Text(
+                        theme.fg("accent", theme.bold("Select a review preset")),
+                    ),
                 );
 
-                const selectList = new SelectList(items, Math.min(items.length, 10), {
-                    selectedPrefix: (text) => theme.fg("accent", text),
-                    selectedText: (text) => theme.fg("accent", text),
-                    description: (text) => theme.fg("muted", text),
-                    scrollInfo: (text) => theme.fg("dim", text),
-                    noMatch: (text) => theme.fg("warning", text),
-                });
+                const selectList = new SelectList(
+                    items,
+                    Math.min(items.length, 10),
+                    {
+                        selectedPrefix: (text) => theme.fg("accent", text),
+                        selectedText: (text) => theme.fg("accent", text),
+                        description: (text) => theme.fg("muted", text),
+                        scrollInfo: (text) => theme.fg("dim", text),
+                        noMatch: (text) => theme.fg("warning", text),
+                    },
+                );
 
                 if (smartDefaultIndex >= 0) {
                     selectList.setSelectedIndex(smartDefaultIndex);
                 }
 
-                selectList.onSelect = (item) => done(item.value as ReviewPresetValue);
+                selectList.onSelect = (item) =>
+                    done(item.value as ReviewPresetValue);
                 selectList.onCancel = () => done(null);
 
                 container.addChild(selectList);
                 container.addChild(
-                    new Text(theme.fg("dim", "Press enter to confirm or esc to go back")),
+                    new Text(
+                        theme.fg("dim", "Press enter to confirm or esc to go back"),
+                    ),
                 );
-                container.addChild(new DynamicBorder((str) => theme.fg("accent", str)));
+                container.addChild(
+                    new DynamicBorder((str) => theme.fg("accent", str)),
+                );
 
                 return {
                     render(width: number) {
@@ -155,7 +160,10 @@ export async function showReviewSelector(
 
             case "commit": {
                 if (deps.getLoopFixingEnabled()) {
-                    ctx.ui.notify("Loop mode does not work with commit review.", "error");
+                    ctx.ui.notify(
+                        "Loop mode does not work with commit review.",
+                        "error",
+                    );
                     break;
                 }
                 const target = await showCommitSelector(ctx, deps.pi);
@@ -317,7 +325,10 @@ export async function showCommitSelector(
             container.addChild(selectList);
             container.addChild(
                 new Text(
-                    theme.fg("dim", "Type to filter • enter to select • esc to cancel"),
+                    theme.fg(
+                        "dim",
+                        "Type to filter • enter to select • esc to cancel",
+                    ),
                 ),
             );
             container.addChild(new DynamicBorder((str) => theme.fg("accent", str)));

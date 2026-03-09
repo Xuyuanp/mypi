@@ -27,9 +27,14 @@ const OPTION_NAME = "@pi-session-name";
 const OPTION_STATUS = "@pi-session-status";
 const OPTION_STATUS_UPDATED_AT = "@pi-session-status-updated-at";
 
-const ALL_OPTIONS = [OPTION_RUNNING, OPTION_NAME, OPTION_STATUS, OPTION_STATUS_UPDATED_AT] as const;
+const ALL_OPTIONS = [
+    OPTION_RUNNING,
+    OPTION_NAME,
+    OPTION_STATUS,
+    OPTION_STATUS_UPDATED_AT,
+] as const;
 
-export default function(pi: ExtensionAPI) {
+export default function (pi: ExtensionAPI) {
     let isOwner = false;
     let paneId: string | undefined;
     let cachedName: string | undefined;
@@ -61,14 +66,14 @@ export default function(pi: ExtensionAPI) {
     function setOption(key: string, value: string): void {
         if (!paneId) return;
         pi.exec("tmux", ["set-option", "-p", "-t", paneId, key, value]).catch(
-            () => { },
+            () => {},
         );
     }
 
     function unsetOption(key: string): void {
         if (!paneId) return;
         pi.exec("tmux", ["set-option", "-p", "-t", paneId, "-u", key]).catch(
-            () => { },
+            () => {},
         );
     }
 

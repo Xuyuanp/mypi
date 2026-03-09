@@ -167,11 +167,11 @@ async function runInteractiveCommand(
         done(result.status);
 
         // Return empty component (immediately disposed since done() was called)
-        return { render: () => [], invalidate: () => { } };
+        return { render: () => [], invalidate: () => {} };
     });
 }
 
-export default function(pi: ExtensionAPI) {
+export default function (pi: ExtensionAPI) {
     pi.registerCommand("edit", {
         description: "Open editor",
         handler: async (path, ctx) => {
@@ -182,7 +182,7 @@ export default function(pi: ExtensionAPI) {
             let editor = process.env.EDITOR || "nvim";
             path = path.trim();
             if (path.length > 0) {
-                editor += " " + path;
+                editor += ` ${path}`;
             }
 
             // Run command with full terminal access
@@ -237,10 +237,7 @@ export default function(pi: ExtensionAPI) {
         }
 
         const shell = process.env.SHELL || "/bin/sh";
-        const exitCode = await runInteractiveCommand(ctx.ui, shell, [
-            "-c",
-            command,
-        ]);
+        const exitCode = await runInteractiveCommand(ctx.ui, shell, ["-c", command]);
 
         // Return result to prevent default bash handling
         const output =

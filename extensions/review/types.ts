@@ -28,11 +28,11 @@ export type ReviewTarget =
     | { type: "custom"; instructions: string }
     | { type: "pullRequest"; prNumber: number; baseBranch: string; title: string }
     | {
-        type: "mergeRequest";
-        mrNumber: number;
-        baseBranch: string;
-        title: string;
-    }
+          type: "mergeRequest";
+          mrNumber: number;
+          baseBranch: string;
+          title: string;
+      }
     | { type: "folder"; paths: string[] };
 
 export type AssistantSnapshot = {
@@ -41,10 +41,7 @@ export type AssistantSnapshot = {
     stopReason?: string;
 };
 
-export type EndReviewAction =
-    | "returnOnly"
-    | "returnAndFix"
-    | "returnAndSummarize";
+export type EndReviewAction = "returnOnly" | "returnAndFix" | "returnAndSummarize";
 export type EndReviewActionResult = "ok" | "cancelled" | "error";
 export type EndReviewActionOptions = {
     showSummaryLoader?: boolean;

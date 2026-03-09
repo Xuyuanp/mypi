@@ -8,35 +8,35 @@
 
 import type {
     ExtensionAPI,
-    ExtensionContext,
     ExtensionCommandContext,
+    ExtensionContext,
 } from "@mariozechner/pi-coding-agent";
 import { BorderedLoader } from "@mariozechner/pi-coding-agent";
-import type {
-    ReviewTarget,
-    EndReviewAction,
-    EndReviewActionResult,
-    EndReviewActionOptions,
-} from "./types.js";
-import {
-    REVIEW_STATE_TYPE,
-    REVIEW_ANCHOR_TYPE,
-    REVIEW_LOOP_MAX_ITERATIONS,
-} from "./types.js";
 import { hasBlockingReviewFindings } from "./parsing.js";
 import {
-    REVIEW_RUBRIC,
-    REVIEW_SUMMARY_PROMPT,
-    REVIEW_FIX_FINDINGS_PROMPT,
     buildReviewPrompt,
     getUserFacingHint,
     loadProjectReviewGuidelines,
+    REVIEW_FIX_FINDINGS_PROMPT,
+    REVIEW_RUBRIC,
+    REVIEW_SUMMARY_PROMPT,
 } from "./prompts.js";
 import {
-    getReviewState,
     getLastAssistantSnapshot,
+    getReviewState,
     waitForLoopTurnToStart,
 } from "./state.js";
+import type {
+    EndReviewAction,
+    EndReviewActionOptions,
+    EndReviewActionResult,
+    ReviewTarget,
+} from "./types.js";
+import {
+    REVIEW_ANCHOR_TYPE,
+    REVIEW_LOOP_MAX_ITERATIONS,
+    REVIEW_STATE_TYPE,
+} from "./types.js";
 
 export type ReviewRuntime = {
     pi: ExtensionAPI;
@@ -175,12 +175,11 @@ async function navigateWithSummary(
                 );
                 loader.onAbort = () => done(null);
 
-                ctx
-                    .navigateTree(originId, {
-                        summarize: true,
-                        customInstructions: REVIEW_SUMMARY_PROMPT,
-                        replaceInstructions: true,
-                    })
+                ctx.navigateTree(originId, {
+                    summarize: true,
+                    customInstructions: REVIEW_SUMMARY_PROMPT,
+                    replaceInstructions: true,
+                })
                     .then(done)
                     .catch((err) =>
                         done({
@@ -271,10 +270,7 @@ export async function executeEndReviewAction(
     }
 
     if (summaryResult.cancelled) {
-        ctx.ui.notify(
-            "Navigation cancelled. Use /end-review to try again.",
-            "info",
-        );
+        ctx.ui.notify("Navigation cancelled. Use /end-review to try again.", "info");
         return "cancelled";
     }
 
@@ -438,7 +434,10 @@ export async function runLoopFixingReview(
                 return;
             }
             if (fixSnapshot.stopReason === "aborted") {
-                ctx.ui.notify("Loop fixing stopped: fix pass was aborted.", "warning");
+                ctx.ui.notify(
+                    "Loop fixing stopped: fix pass was aborted.",
+                    "warning",
+                );
                 return;
             }
             if (fixSnapshot.stopReason === "error") {

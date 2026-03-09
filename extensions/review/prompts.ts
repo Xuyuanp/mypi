@@ -5,11 +5,11 @@
  * the final review prompt from a ReviewTarget.
  */
 
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
-import path from "node:path";
 import { promises as fs } from "node:fs";
-import type { ReviewTarget } from "./types.js";
+import path from "node:path";
+import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { getMergeBase } from "./git.js";
+import type { ReviewTarget } from "./types.js";
 
 const UNCOMMITTED_PROMPT =
     "Review the current code changes (staged, unstaged, and untracked files) and provide prioritized findings.";
@@ -198,10 +198,13 @@ export async function buildReviewPrompt(
             const mergeBase = await getMergeBase(pi, target.branch);
             const basePrompt = mergeBase
                 ? BASE_BRANCH_PROMPT_WITH_MERGE_BASE.replace(
-                    /{baseBranch}/g,
-                    () => target.branch,
-                ).replace(/{mergeBaseSha}/g, () => mergeBase)
-                : BASE_BRANCH_PROMPT_FALLBACK.replace(/{branch}/g, () => target.branch);
+                      /{baseBranch}/g,
+                      () => target.branch,
+                  ).replace(/{mergeBaseSha}/g, () => mergeBase)
+                : BASE_BRANCH_PROMPT_FALLBACK.replace(
+                      /{branch}/g,
+                      () => target.branch,
+                  );
             return includeLocalChanges
                 ? `${basePrompt} ${LOCAL_CHANGES_REVIEW_INSTRUCTIONS}`
                 : basePrompt;
@@ -223,16 +226,16 @@ export async function buildReviewPrompt(
             const mergeBase = await getMergeBase(pi, target.baseBranch);
             const basePrompt = mergeBase
                 ? PULL_REQUEST_PROMPT.replace(/{prNumber}/g, () =>
-                    String(target.prNumber),
-                )
-                    .replace(/{title}/g, () => target.title)
-                    .replace(/{baseBranch}/g, () => target.baseBranch)
-                    .replace(/{mergeBaseSha}/g, () => mergeBase)
+                      String(target.prNumber),
+                  )
+                      .replace(/{title}/g, () => target.title)
+                      .replace(/{baseBranch}/g, () => target.baseBranch)
+                      .replace(/{mergeBaseSha}/g, () => mergeBase)
                 : PULL_REQUEST_PROMPT_FALLBACK.replace(/{prNumber}/g, () =>
-                    String(target.prNumber),
-                )
-                    .replace(/{title}/g, () => target.title)
-                    .replace(/{baseBranch}/g, () => target.baseBranch);
+                      String(target.prNumber),
+                  )
+                      .replace(/{title}/g, () => target.title)
+                      .replace(/{baseBranch}/g, () => target.baseBranch);
             return includeLocalChanges
                 ? `${basePrompt} ${LOCAL_CHANGES_REVIEW_INSTRUCTIONS}`
                 : basePrompt;
@@ -242,16 +245,16 @@ export async function buildReviewPrompt(
             const mergeBase = await getMergeBase(pi, target.baseBranch);
             const basePrompt = mergeBase
                 ? MERGE_REQUEST_PROMPT.replace(/{mrNumber}/g, () =>
-                    String(target.mrNumber),
-                )
-                    .replace(/{title}/g, () => target.title)
-                    .replace(/{baseBranch}/g, () => target.baseBranch)
-                    .replace(/{mergeBaseSha}/g, () => mergeBase)
+                      String(target.mrNumber),
+                  )
+                      .replace(/{title}/g, () => target.title)
+                      .replace(/{baseBranch}/g, () => target.baseBranch)
+                      .replace(/{mergeBaseSha}/g, () => mergeBase)
                 : MERGE_REQUEST_PROMPT_FALLBACK.replace(/{mrNumber}/g, () =>
-                    String(target.mrNumber),
-                )
-                    .replace(/{title}/g, () => target.title)
-                    .replace(/{baseBranch}/g, () => target.baseBranch);
+                      String(target.mrNumber),
+                  )
+                      .replace(/{title}/g, () => target.title)
+                      .replace(/{baseBranch}/g, () => target.baseBranch);
             return includeLocalChanges
                 ? `${basePrompt} ${LOCAL_CHANGES_REVIEW_INSTRUCTIONS}`
                 : basePrompt;
@@ -278,13 +281,13 @@ export function getUserFacingHint(target: ReviewTarget): string {
         }
         case "custom":
             return target.instructions.length > 40
-                ? target.instructions.slice(0, 37) + "..."
+                ? `${target.instructions.slice(0, 37)}...`
                 : target.instructions;
 
         case "pullRequest": {
             const shortTitle =
                 target.title.length > 30
-                    ? target.title.slice(0, 27) + "..."
+                    ? `${target.title.slice(0, 27)}...`
                     : target.title;
             return `PR #${target.prNumber}: ${shortTitle}`;
         }
@@ -292,7 +295,7 @@ export function getUserFacingHint(target: ReviewTarget): string {
         case "mergeRequest": {
             const shortTitle =
                 target.title.length > 30
-                    ? target.title.slice(0, 27) + "..."
+                    ? `${target.title.slice(0, 27)}...`
                     : target.title;
             return `MR !${target.mrNumber}: ${shortTitle}`;
         }

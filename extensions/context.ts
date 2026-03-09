@@ -8,6 +8,10 @@
  * - current context window usage + session totals (tokens/cost)
  */
 
+import { existsSync } from "node:fs";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import type {
     ExtensionAPI,
     ExtensionCommandContext,
@@ -16,17 +20,13 @@ import type {
 } from "@mariozechner/pi-coding-agent";
 import { DynamicBorder } from "@mariozechner/pi-coding-agent";
 import {
+    type Component,
     Container,
     Key,
-    Text,
     matchesKey,
-    type Component,
+    Text,
     type TUI,
 } from "@mariozechner/pi-tui";
-import os from "node:os";
-import path from "node:path";
-import fs from "node:fs/promises";
-import { existsSync } from "node:fs";
 
 function formatUsd(cost: number): string {
     if (!Number.isFinite(cost) || cost <= 0) return "$0.00";
@@ -71,8 +71,7 @@ function getAgentDir(): string {
 
     if (envDir) {
         if (envDir === "~") return os.homedir();
-        if (envDir.startsWith("~/"))
-            return path.join(os.homedir(), envDir.slice(2));
+        if (envDir.startsWith("~/")) return path.join(os.homedir(), envDir.slice(2));
         return envDir;
     }
     return path.join(os.homedir(), ".pi", "agent");
@@ -235,7 +234,7 @@ function shortenPath(p: string, cwd: string): string {
     const rp = path.resolve(p);
     const rc = path.resolve(cwd);
     if (rp === rc) return ".";
-    if (rp.startsWith(rc + path.sep)) return "./" + rp.slice(rc.length + 1);
+    if (rp.startsWith(rc + path.sep)) return `./${rp.slice(rc.length + 1)}`;
     return rp;
 }
 
@@ -249,9 +248,9 @@ function renderUsageBar(
     if (total <= 0) return "";
 
     const toCols = (n: number) => Math.round((n / total) * w);
-    let sys = toCols(parts.system);
-    let tools = toCols(parts.tools);
-    let con = toCols(parts.convo);
+    const sys = toCols(parts.system);
+    const tools = toCols(parts.tools);
+    const con = toCols(parts.convo);
     let rem = w - sys - tools - con;
     if (rem < 0) rem = 0;
     // adjust rounding drift
@@ -300,7 +299,6 @@ type ContextViewData = {
 };
 
 class ContextView implements Component {
-    private tui: TUI;
     private theme: any;
     private onDone: () => void;
     private data: ContextViewData;
@@ -319,7 +317,7 @@ class ContextView implements Component {
         this.container.addChild(
             new Text(
                 theme.fg("accent", theme.bold("Context")) +
-                theme.fg("dim", "  (Esc/q/Enter to close)"),
+                    theme.fg("dim", "  (Esc/q/Enter to close)"),
                 1,
                 0,
             ),
@@ -347,12 +345,12 @@ class ContextView implements Component {
             const u = this.data.usage;
             lines.push(
                 muted("Window: ") +
-                text(
-                    `~${u.effectiveTokens.toLocaleString()} / ${u.contextWindow.toLocaleString()}`,
-                ) +
-                muted(
-                    `  (${u.percent.toFixed(1)}% used, ~${u.remainingTokens.toLocaleString()} left)`,
-                ),
+                    text(
+                        `~${u.effectiveTokens.toLocaleString()} / ${u.contextWindow.toLocaleString()}`,
+                    ) +
+                    muted(
+                        `  (${u.percent.toFixed(1)}% used, ~${u.remainingTokens.toLocaleString()} left)`,
+                    ),
             );
 
             // bar width tries to fit within the viewport
@@ -395,52 +393,52 @@ class ContextView implements Component {
             const u = this.data.usage;
             lines.push(
                 muted("System: ") +
-                text(`~${u.systemPromptTokens.toLocaleString()} tok`) +
-                muted(` (AGENTS ~${u.agentTokens.toLocaleString()})`),
+                    text(`~${u.systemPromptTokens.toLocaleString()} tok`) +
+                    muted(` (AGENTS ~${u.agentTokens.toLocaleString()})`),
             );
             lines.push(
                 muted("Tools: ") +
-                text(`~${u.toolsTokens.toLocaleString()} tok`) +
-                muted(` (${u.activeTools} active)`),
+                    text(`~${u.toolsTokens.toLocaleString()} tok`) +
+                    muted(` (${u.activeTools} active)`),
             );
         }
 
         lines.push(
             muted(`AGENTS (${this.data.agentFiles.length}): `) +
-            text(
-                this.data.agentFiles.length
-                    ? joinComma(this.data.agentFiles)
-                    : "(none)",
-            ),
+                text(
+                    this.data.agentFiles.length
+                        ? joinComma(this.data.agentFiles)
+                        : "(none)",
+                ),
         );
         lines.push("");
         lines.push(
             muted(`Extensions (${this.data.extensions.length}): `) +
-            text(
-                this.data.extensions.length
-                    ? joinComma(this.data.extensions)
-                    : "(none)",
-            ),
+                text(
+                    this.data.extensions.length
+                        ? joinComma(this.data.extensions)
+                        : "(none)",
+                ),
         );
 
         const loaded = new Set(this.data.loadedSkills);
         const skillsRendered = this.data.skills.length
             ? joinCommaStyled(
-                this.data.skills,
-                (name) =>
-                    loaded.has(name)
-                        ? this.theme.fg("success", name)
-                        : this.theme.fg("muted", name),
-                this.theme.fg("muted", ", "),
-            )
+                  this.data.skills,
+                  (name) =>
+                      loaded.has(name)
+                          ? this.theme.fg("success", name)
+                          : this.theme.fg("muted", name),
+                  this.theme.fg("muted", ", "),
+              )
             : "(none)";
         lines.push(muted(`Skills (${this.data.skills.length}): `) + skillsRendered);
         lines.push("");
         lines.push(
             muted("Session: ") +
-            text(`${this.data.session.totalTokens.toLocaleString()} tokens`) +
-            muted(" · ") +
-            text(formatUsd(this.data.session.totalCost)),
+                text(`${this.data.session.totalTokens.toLocaleString()} tokens`) +
+                muted(" · ") +
+                text(formatUsd(this.data.session.totalCost)),
         );
 
         this.body.setText(lines.join("\n"));
@@ -618,7 +616,11 @@ export default function contextExtension(pi: ExtensionAPI) {
 
             if (!ctx.hasUI) {
                 pi.sendMessage(
-                    { customType: "context", content: makePlainText(), display: true },
+                    {
+                        customType: "context",
+                        content: makePlainText(),
+                        display: true,
+                    },
                     { triggerTurn: false },
                 );
                 return;
@@ -631,16 +633,16 @@ export default function contextExtension(pi: ExtensionAPI) {
             const viewData: ContextViewData = {
                 usage: usage
                     ? {
-                        messageTokens,
-                        contextWindow: ctxWindow,
-                        effectiveTokens,
-                        percent,
-                        remainingTokens,
-                        systemPromptTokens,
-                        agentTokens,
-                        toolsTokens,
-                        activeTools: activeToolNames.length,
-                    }
+                          messageTokens,
+                          contextWindow: ctxWindow,
+                          effectiveTokens,
+                          percent,
+                          remainingTokens,
+                          systemPromptTokens,
+                          agentTokens,
+                          toolsTokens,
+                          activeTools: activeToolNames.length,
+                      }
                     : null,
                 agentFiles: agentFilePaths,
                 extensions: extensionFiles,

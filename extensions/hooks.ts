@@ -66,11 +66,11 @@
  * the hook was loaded from.
  */
 
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
-import * as fs from "node:fs";
-import * as path from "node:path";
-import * as os from "node:os";
 import { spawn } from "node:child_process";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
+import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 
 // ── Types ──────────────────────────────────────────────────────────────
 
@@ -125,10 +125,7 @@ function matchesTool(group: MatcherGroup, toolName: string): boolean {
     return group._re.test(toolName);
 }
 
-function loadConfigFile(
-    filePath: string,
-    scope: HookScope,
-): HooksConfig | null {
+function loadConfigFile(filePath: string, scope: HookScope): HooksConfig | null {
     try {
         if (!fs.existsSync(filePath)) return null;
         const raw = fs.readFileSync(filePath, "utf-8");
@@ -256,7 +253,7 @@ function countHooks(config: HooksConfig): number {
 
 // ── Extension ──────────────────────────────────────────────────────────
 
-export default function(pi: ExtensionAPI) {
+export default function (pi: ExtensionAPI) {
     let config: HooksConfig = { PreToolUse: [], PostToolUse: [] };
 
     function reloadConfig(cwd: string) {

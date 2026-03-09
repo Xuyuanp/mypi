@@ -41,7 +41,8 @@ export default function webToolsExtension(pi: ExtensionAPI) {
             url: Type.String({ description: "URL to fetch" }),
             format: Type.Optional(
                 StringEnum(["markdown", "text", "html", "json"] as const, {
-                    description: "Output format: markdown (default), text, html, or json",
+                    description:
+                        "Output format: markdown (default), text, html, or json",
                     default: "markdown",
                 }),
             ),
@@ -62,7 +63,12 @@ export default function webToolsExtension(pi: ExtensionAPI) {
 
         renderResult(result, { expanded }, theme) {
             const details = result.details as
-                | { url: string; format: string; contentLength: number; error?: string }
+                | {
+                      url: string;
+                      format: string;
+                      contentLength: number;
+                      error?: string;
+                  }
                 | undefined;
 
             if (!details) {
@@ -143,7 +149,12 @@ export default function webToolsExtension(pi: ExtensionAPI) {
             if (result.isError) {
                 return {
                     content: [{ type: "text", text: result.content }],
-                    details: { url, format, contentLength: 0, error: result.content },
+                    details: {
+                        url,
+                        format,
+                        contentLength: 0,
+                        error: result.content,
+                    },
                     isError: true,
                 };
             }
@@ -232,7 +243,9 @@ export default function webToolsExtension(pi: ExtensionAPI) {
 
             if (response.isError) {
                 return {
-                    content: [{ type: "text", text: response.error || "Search failed" }],
+                    content: [
+                        { type: "text", text: response.error || "Search failed" },
+                    ],
                     details: { query, results: [], error: response.error },
                     isError: true,
                 };

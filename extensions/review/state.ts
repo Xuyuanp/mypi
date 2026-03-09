@@ -13,10 +13,10 @@ import type {
     ReviewSettingsState,
 } from "./types.js";
 import {
-    REVIEW_STATE_TYPE,
-    REVIEW_SETTINGS_TYPE,
-    REVIEW_LOOP_START_TIMEOUT_MS,
     REVIEW_LOOP_START_POLL_MS,
+    REVIEW_LOOP_START_TIMEOUT_MS,
+    REVIEW_SETTINGS_TYPE,
+    REVIEW_STATE_TYPE,
 } from "./types.js";
 
 export function getReviewState(
@@ -56,10 +56,10 @@ function extractAssistantTextContent(content: unknown): string {
         .filter((part): part is { type: "text"; text: string } =>
             Boolean(
                 part &&
-                typeof part === "object" &&
-                "type" in part &&
-                part.type === "text" &&
-                "text" in part,
+                    typeof part === "object" &&
+                    "type" in part &&
+                    part.type === "text" &&
+                    "text" in part,
             ),
         )
         .map((part) => part.text);

@@ -11,12 +11,12 @@
  *   pi -e ./tool-override.ts
  */
 
-import { createLsTool, createReadTool } from "@mariozechner/pi-coding-agent";
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
-import { Type } from "@sinclair/typebox";
 import { stat } from "node:fs/promises";
-import { isAbsolute, resolve } from "node:path";
 import { homedir } from "node:os";
+import { isAbsolute, resolve } from "node:path";
+import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import { createLsTool, createReadTool } from "@mariozechner/pi-coding-agent";
+import { Type } from "@sinclair/typebox";
 
 function resolvePath(filePath: string, cwd: string): string {
     let p = filePath.startsWith("@") ? filePath.slice(1) : filePath;
@@ -40,7 +40,7 @@ const readSchema = Type.Object({
     ),
 });
 
-export default function(pi: ExtensionAPI) {
+export default function (pi: ExtensionAPI) {
     pi.registerTool({
         name: "read",
         label: "read",
@@ -62,7 +62,12 @@ export default function(pi: ExtensionAPI) {
 
             if (isDir) {
                 const lsTool = createLsTool(ctx.cwd);
-                const result = await lsTool.execute(toolCallId, { path }, signal, onUpdate);
+                const result = await lsTool.execute(
+                    toolCallId,
+                    { path },
+                    signal,
+                    onUpdate,
+                );
                 const note = `[Note: "${path}" is a directory, listing contents via ls]\n\n`;
                 if (result.content?.[0]?.type === "text") {
                     result.content[0].text = note + result.content[0].text;
