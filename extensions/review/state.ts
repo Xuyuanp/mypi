@@ -19,7 +19,9 @@ import {
     REVIEW_LOOP_START_POLL_MS,
 } from "./types.js";
 
-export function getReviewState(ctx: ExtensionContext): ReviewSessionState | undefined {
+export function getReviewState(
+    ctx: ExtensionContext,
+): ReviewSessionState | undefined {
     let state: ReviewSessionState | undefined;
     for (const entry of ctx.sessionManager.getBranch()) {
         if (entry.type === "custom" && entry.customType === REVIEW_STATE_TYPE) {

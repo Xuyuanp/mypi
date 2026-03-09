@@ -209,10 +209,10 @@ export async function buildReviewPrompt(
 
         case "commit":
             if (target.title) {
-                return COMMIT_PROMPT_WITH_TITLE.replace("{sha}", () => target.sha).replace(
-                    "{title}",
-                    () => target.title!,
-                );
+                return COMMIT_PROMPT_WITH_TITLE.replace(
+                    "{sha}",
+                    () => target.sha,
+                ).replace("{title}", () => target.title!);
             }
             return COMMIT_PROMPT.replace("{sha}", () => target.sha);
 
@@ -222,13 +222,14 @@ export async function buildReviewPrompt(
         case "pullRequest": {
             const mergeBase = await getMergeBase(pi, target.baseBranch);
             const basePrompt = mergeBase
-                ? PULL_REQUEST_PROMPT.replace(/{prNumber}/g, () => String(target.prNumber))
+                ? PULL_REQUEST_PROMPT.replace(/{prNumber}/g, () =>
+                    String(target.prNumber),
+                )
                     .replace(/{title}/g, () => target.title)
                     .replace(/{baseBranch}/g, () => target.baseBranch)
                     .replace(/{mergeBaseSha}/g, () => mergeBase)
-                : PULL_REQUEST_PROMPT_FALLBACK.replace(
-                    /{prNumber}/g,
-                    () => String(target.prNumber),
+                : PULL_REQUEST_PROMPT_FALLBACK.replace(/{prNumber}/g, () =>
+                    String(target.prNumber),
                 )
                     .replace(/{title}/g, () => target.title)
                     .replace(/{baseBranch}/g, () => target.baseBranch);
@@ -240,13 +241,14 @@ export async function buildReviewPrompt(
         case "mergeRequest": {
             const mergeBase = await getMergeBase(pi, target.baseBranch);
             const basePrompt = mergeBase
-                ? MERGE_REQUEST_PROMPT.replace(/{mrNumber}/g, () => String(target.mrNumber))
+                ? MERGE_REQUEST_PROMPT.replace(/{mrNumber}/g, () =>
+                    String(target.mrNumber),
+                )
                     .replace(/{title}/g, () => target.title)
                     .replace(/{baseBranch}/g, () => target.baseBranch)
                     .replace(/{mergeBaseSha}/g, () => mergeBase)
-                : MERGE_REQUEST_PROMPT_FALLBACK.replace(
-                    /{mrNumber}/g,
-                    () => String(target.mrNumber),
+                : MERGE_REQUEST_PROMPT_FALLBACK.replace(/{mrNumber}/g, () =>
+                    String(target.mrNumber),
                 )
                     .replace(/{title}/g, () => target.title)
                     .replace(/{baseBranch}/g, () => target.baseBranch);
@@ -256,7 +258,9 @@ export async function buildReviewPrompt(
         }
 
         case "folder":
-            return FOLDER_REVIEW_PROMPT.replace("{paths}", () => target.paths.join(", "));
+            return FOLDER_REVIEW_PROMPT.replace("{paths}", () =>
+                target.paths.join(", "),
+            );
     }
 }
 
