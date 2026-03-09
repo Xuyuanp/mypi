@@ -35,12 +35,14 @@ import type {
 } from "@mariozechner/pi-coding-agent";
 import { Text } from "@mariozechner/pi-tui";
 import type { ReviewTarget } from "./types.js";
-import {
-    REVIEW_STATE_TYPE,
-    REVIEW_SETTINGS_TYPE,
-} from "./types.js";
+import { REVIEW_STATE_TYPE, REVIEW_SETTINGS_TYPE } from "./types.js";
 import { getReviewState, getReviewSettings } from "./state.js";
-import { showReviewSelector, handlePrCheckout, handleMrCheckout, parseReviewPaths } from "./selectors.js";
+import {
+    showReviewSelector,
+    handlePrCheckout,
+    handleMrCheckout,
+    parseReviewPaths,
+} from "./selectors.js";
 import type { EndReviewAction } from "./types.js";
 import {
     type ReviewRuntime,
@@ -51,7 +53,11 @@ import {
 
 function parseArgs(
     args: string | undefined,
-): ReviewTarget | { type: "pr"; ref: string } | { type: "mr"; ref: string } | null {
+):
+    | ReviewTarget
+    | { type: "pr"; ref: string }
+    | { type: "mr"; ref: string }
+    | null {
     if (!args?.trim()) return null;
 
     const parts = args.trim().split(/\s+/);
@@ -118,9 +124,13 @@ export default function reviewExtension(pi: ExtensionAPI) {
     const rt: ReviewRuntime = {
         pi,
         getOriginId: () => reviewOriginId,
-        setOriginId: (id) => { reviewOriginId = id; },
+        setOriginId: (id) => {
+            reviewOriginId = id;
+        },
         isLoopInProgress: () => reviewLoopInProgress,
-        setLoopInProgress: (v) => { reviewLoopInProgress = v; },
+        setLoopInProgress: (v) => {
+            reviewLoopInProgress = v;
+        },
         setReviewWidget,
         clearReviewState,
     };

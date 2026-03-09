@@ -1,5 +1,5 @@
 /**
- * Git and GitHub CLI operations for the review extension.
+ * Git and GitHub/GitLab CLI operations for the review extension.
  *
  * All functions take an ExtensionAPI instance so they can call
  * pi.exec() without depending on module-level state.
@@ -78,7 +78,9 @@ export async function getRecentCommits(
         });
 }
 
-export async function hasUncommittedChanges(pi: ExtensionAPI): Promise<boolean> {
+export async function hasUncommittedChanges(
+    pi: ExtensionAPI,
+): Promise<boolean> {
     const { stdout, code } = await pi.exec("git", ["status", "--porcelain"]);
     return code === 0 && stdout.trim().length > 0;
 }
@@ -219,7 +221,9 @@ export async function checkoutMr(
     return { success: true };
 }
 
-export async function getCurrentBranch(pi: ExtensionAPI): Promise<string | null> {
+export async function getCurrentBranch(
+    pi: ExtensionAPI,
+): Promise<string | null> {
     const { stdout, code } = await pi.exec("git", ["branch", "--show-current"]);
     if (code === 0 && stdout.trim()) {
         return stdout.trim();

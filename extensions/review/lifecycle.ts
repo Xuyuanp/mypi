@@ -32,7 +32,11 @@ import {
     getUserFacingHint,
     loadProjectReviewGuidelines,
 } from "./prompts.js";
-import { getReviewState, getLastAssistantSnapshot, waitForLoopTurnToStart } from "./state.js";
+import {
+    getReviewState,
+    getLastAssistantSnapshot,
+    waitForLoopTurnToStart,
+} from "./state.js";
 
 export type ReviewRuntime = {
     pi: ExtensionAPI;
@@ -243,10 +247,7 @@ export async function executeEndReviewAction(
 
         rt.clearReviewState(ctx);
         if (notifySuccess) {
-            ctx.ui.notify(
-                "Review complete! Returned to original position.",
-                "info",
-            );
+            ctx.ui.notify("Review complete! Returned to original position.", "info");
         }
         return "ok";
     }
@@ -345,10 +346,7 @@ export async function runLoopFixingReview(
             await ctx.waitForIdle();
 
             const reviewSnapshot = getLastAssistantSnapshot(ctx);
-            if (
-                !reviewSnapshot ||
-                reviewSnapshot.id === reviewBaselineAssistantId
-            ) {
+            if (!reviewSnapshot || reviewSnapshot.id === reviewBaselineAssistantId) {
                 ctx.ui.notify(
                     "Loop fixing stopped: could not read the review result.",
                     "warning",
@@ -440,10 +438,7 @@ export async function runLoopFixingReview(
                 return;
             }
             if (fixSnapshot.stopReason === "aborted") {
-                ctx.ui.notify(
-                    "Loop fixing stopped: fix pass was aborted.",
-                    "warning",
-                );
+                ctx.ui.notify("Loop fixing stopped: fix pass was aborted.", "warning");
                 return;
             }
             if (fixSnapshot.stopReason === "error") {
@@ -471,5 +466,3 @@ export async function runLoopFixingReview(
         rt.setReviewWidget(ctx, Boolean(rt.getOriginId()));
     }
 }
-
-
