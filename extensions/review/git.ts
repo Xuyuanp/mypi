@@ -78,9 +78,7 @@ export async function getRecentCommits(
         });
 }
 
-export async function hasUncommittedChanges(
-    pi: ExtensionAPI,
-): Promise<boolean> {
+export async function hasUncommittedChanges(pi: ExtensionAPI): Promise<boolean> {
     const { stdout, code } = await pi.exec("git", ["status", "--porcelain"]);
     return code === 0 && stdout.trim().length > 0;
 }
@@ -101,7 +99,7 @@ export function parsePrReference(ref: string): number | null {
     const trimmed = ref.trim();
 
     const num = parseInt(trimmed, 10);
-    if (!isNaN(num) && num > 0) {
+    if (!Number.isNaN(num) && num > 0) {
         return num;
     }
 
@@ -163,7 +161,7 @@ export function parseMrReference(ref: string): number | null {
     const trimmed = ref.trim();
 
     const num = parseInt(trimmed, 10);
-    if (!isNaN(num) && num > 0) {
+    if (!Number.isNaN(num) && num > 0) {
         return num;
     }
 
@@ -221,9 +219,7 @@ export async function checkoutMr(
     return { success: true };
 }
 
-export async function getCurrentBranch(
-    pi: ExtensionAPI,
-): Promise<string | null> {
+export async function getCurrentBranch(pi: ExtensionAPI): Promise<string | null> {
     const { stdout, code } = await pi.exec("git", ["branch", "--show-current"]);
     if (code === 0 && stdout.trim()) {
         return stdout.trim();

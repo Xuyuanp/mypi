@@ -35,7 +35,11 @@ interface TodoDetails {
 const TodoParams = Type.Object({
     action: StringEnum(["list", "add", "toggle", "clear"] as const),
     text: Type.Optional(Type.String({ description: "Todo text (for add)" })),
-    texts: Type.Optional(Type.Array(Type.String(), { description: "Multiple todo texts (for batch add)" })),
+    texts: Type.Optional(
+        Type.Array(Type.String(), {
+            description: "Multiple todo texts (for batch add)",
+        }),
+    ),
     id: Type.Optional(Type.Number({ description: "Todo ID (for toggle)" })),
 });
 
@@ -123,7 +127,7 @@ class TodoListComponent {
     }
 }
 
-export default function(pi: ExtensionAPI) {
+export default function (pi: ExtensionAPI) {
     // In-memory state (reconstructed from session on load)
     let todos: Todo[] = [];
     let nextId = 1;
@@ -172,8 +176,11 @@ export default function(pi: ExtensionAPI) {
                                 type: "text",
                                 text: todos.length
                                     ? todos
-                                        .map((t) => `[${t.done ? "x" : " "}] #${t.id}: ${t.text}`)
-                                        .join("\n")
+                                          .map(
+                                              (t) =>
+                                                  `[${t.done ? "x" : " "}] #${t.id}: ${t.text}`,
+                                          )
+                                          .join("\n")
                                     : "No todos",
                             },
                         ],
@@ -188,12 +195,17 @@ export default function(pi: ExtensionAPI) {
                     const items = params.texts?.length
                         ? params.texts
                         : params.text
-                            ? [params.text]
-                            : [];
+                          ? [params.text]
+                          : [];
 
                     if (items.length === 0) {
                         return {
-                            content: [{ type: "text", text: "Error: text or texts required for add" }],
+                            content: [
+                                {
+                                    type: "text",
+                                    text: "Error: text or texts required for add",
+                                },
+                            ],
                             details: {
                                 action: "add",
                                 todos: [...todos],
@@ -205,7 +217,11 @@ export default function(pi: ExtensionAPI) {
 
                     const added: Todo[] = [];
                     for (const item of items) {
-                        const newTodo: Todo = { id: nextId++, text: item, done: false };
+                        const newTodo: Todo = {
+                            id: nextId++,
+                            text: item,
+                            done: false,
+                        };
                         todos.push(newTodo);
                         added.push(newTodo);
                     }
@@ -217,9 +233,10 @@ export default function(pi: ExtensionAPI) {
                         content: [
                             {
                                 type: "text",
-                                text: added.length === 1
-                                    ? `Added todo ${summary}`
-                                    : `Added ${added.length} todos:\n${summary}`,
+                                text:
+                                    added.length === 1
+                                        ? `Added todo ${summary}`
+                                        : `Added ${added.length} todos:\n${summary}`,
                             },
                         ],
                         details: {
@@ -234,7 +251,10 @@ export default function(pi: ExtensionAPI) {
                     if (params.id === undefined) {
                         return {
                             content: [
-                                { type: "text", text: "Error: id required for toggle" },
+                                {
+                                    type: "text",
+                                    text: "Error: id required for toggle",
+                                },
                             ],
                             details: {
                                 action: "toggle",
@@ -247,7 +267,12 @@ export default function(pi: ExtensionAPI) {
                     const todo = todos.find((t) => t.id === params.id);
                     if (!todo) {
                         return {
-                            content: [{ type: "text", text: `Todo #${params.id} not found` }],
+                            content: [
+                                {
+                                    type: "text",
+                                    text: `Todo #${params.id} not found`,
+                                },
+                            ],
                             details: {
                                 action: "toggle",
                                 todos: [...todos],
@@ -278,14 +303,21 @@ export default function(pi: ExtensionAPI) {
                     nextId = 1;
                     return {
                         content: [{ type: "text", text: `Cleared ${count} todos` }],
-                        details: { action: "clear", todos: [], nextId: 1 } as TodoDetails,
+                        details: {
+                            action: "clear",
+                            todos: [],
+                            nextId: 1,
+                        } as TodoDetails,
                     };
                 }
 
                 default:
                     return {
                         content: [
-                            { type: "text", text: `Unknown action: ${params.action}` },
+                            {
+                                type: "text",
+                                text: `Unknown action: ${params.action}`,
+                            },
                         ],
                         details: {
                             action: "list",
@@ -354,7 +386,10 @@ export default function(pi: ExtensionAPI) {
                     const msg = resultText?.type === "text" ? resultText.text : "";
                     const addedCount = (msg.match(/^Added (\d+) todos:/m) ?? [])[1];
                     if (addedCount) {
-                        let addText = theme.fg("success", `✓ Added ${addedCount} todos`);
+                        let addText = theme.fg(
+                            "success",
+                            `✓ Added ${addedCount} todos`,
+                        );
                         if (expanded) {
                             const lines = msg.split("\n").slice(1);
                             for (const line of lines) {
@@ -369,9 +404,9 @@ export default function(pi: ExtensionAPI) {
                     const added = todoList[todoList.length - 1];
                     return new Text(
                         theme.fg("success", "✓ Added ") +
-                        theme.fg("accent", `#${added.id}`) +
-                        " " +
-                        theme.fg("muted", added.text),
+                            theme.fg("accent", `#${added.id}`) +
+                            " " +
+                            theme.fg("muted", added.text),
                         0,
                         0,
                     );
@@ -389,7 +424,8 @@ export default function(pi: ExtensionAPI) {
 
                 case "clear":
                     return new Text(
-                        theme.fg("success", "✓ ") + theme.fg("muted", "Cleared all todos"),
+                        theme.fg("success", "✓ ") +
+                            theme.fg("muted", "Cleared all todos"),
                         0,
                         0,
                     );

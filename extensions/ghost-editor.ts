@@ -24,8 +24,8 @@ import {
 } from "@mariozechner/pi-coding-agent";
 import {
     type EditorTheme,
-    type TUI,
     matchesKey,
+    type TUI,
     visibleWidth,
 } from "@mariozechner/pi-tui";
 
@@ -143,12 +143,11 @@ class GhostTextEditor extends CustomEditor {
 
         const ghostDisplay =
             this.ghostText.length > maxGhostWidth
-                ? this.ghostText.slice(0, maxGhostWidth - 1) + "\u2026"
+                ? `${this.ghostText.slice(0, maxGhostWidth - 1)}\u2026`
                 : this.ghostText;
 
         const ghostWidth = visibleWidth(ghostDisplay);
-        const hintDisplay =
-            ghostWidth + hintWidth <= availableWidth ? hintText : "";
+        const hintDisplay = ghostWidth + hintWidth <= availableWidth ? hintText : "";
         const totalInserted = ghostWidth + visibleWidth(hintDisplay);
         const remainingPadding = Math.max(0, availableWidth - totalInserted);
 

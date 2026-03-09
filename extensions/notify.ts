@@ -87,11 +87,11 @@ async function isPaneActive(paneId: string, exec: Exec): Promise<boolean> {
             "#{pane_active} #{window_active} #{session_attached}",
         ]);
         if (code !== 0) return false;
-        const [paneActive, windowActive, sessionAttached] = stdout
-            .trim()
-            .split(" ");
+        const [paneActive, windowActive, sessionAttached] = stdout.trim().split(" ");
         return (
-            paneActive === "1" && windowActive === "1" && Number(sessionAttached) >= 1
+            paneActive === "1" &&
+            windowActive === "1" &&
+            Number(sessionAttached) >= 1
         );
     } catch {
         return false;
@@ -120,10 +120,7 @@ async function getTmuxClients(exec: Exec): Promise<string[]> {
     }
 }
 
-async function notifyTmux(
-    notification: Notification,
-    exec: Exec,
-): Promise<void> {
+async function notifyTmux(notification: Notification, exec: Exec): Promise<void> {
     const message = `${notification.title} (${notification.subtitle}) | ${notification.message}`;
 
     const clients = await getTmuxClients(exec);
@@ -174,11 +171,11 @@ function notifySystem(
             try {
                 const result = JSON.parse(stdout);
                 if (result.activationType === "contentsClicked") {
-                    focusPane(tmux, exec).catch(() => { });
+                    focusPane(tmux, exec).catch(() => {});
                 }
-            } catch { }
+            } catch {}
         })
-        .catch(() => { });
+        .catch(() => {});
 }
 
 function buildNotification(
@@ -229,7 +226,7 @@ async function sendNotification(
     }
 }
 
-export default function(pi: ExtensionAPI) {
+export default function (pi: ExtensionAPI) {
     let tmuxContext: TmuxContext | undefined;
 
     getTmuxContext(pi.exec).then((resolved) => {

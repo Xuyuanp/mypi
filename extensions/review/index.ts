@@ -29,35 +29,27 @@
  * Note: PR review requires a clean working tree (no uncommitted changes to tracked files).
  */
 
-import type {
-    ExtensionAPI,
-    ExtensionContext,
-} from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { Text } from "@mariozechner/pi-tui";
-import type { ReviewTarget } from "./types.js";
-import { REVIEW_STATE_TYPE, REVIEW_SETTINGS_TYPE } from "./types.js";
-import { getReviewState, getReviewSettings } from "./state.js";
 import {
-    showReviewSelector,
-    handlePrCheckout,
-    handleMrCheckout,
-    parseReviewPaths,
-} from "./selectors.js";
-import type { EndReviewAction } from "./types.js";
-import {
-    type ReviewRuntime,
-    executeReview,
     executeEndReviewAction,
+    executeReview,
+    type ReviewRuntime,
     runLoopFixingReview,
 } from "./lifecycle.js";
+import {
+    handleMrCheckout,
+    handlePrCheckout,
+    parseReviewPaths,
+    showReviewSelector,
+} from "./selectors.js";
+import { getReviewSettings, getReviewState } from "./state.js";
+import type { EndReviewAction, ReviewTarget } from "./types.js";
+import { REVIEW_SETTINGS_TYPE, REVIEW_STATE_TYPE } from "./types.js";
 
 function parseArgs(
     args: string | undefined,
-):
-    | ReviewTarget
-    | { type: "pr"; ref: string }
-    | { type: "mr"; ref: string }
-    | null {
+): ReviewTarget | { type: "pr"; ref: string } | { type: "mr"; ref: string } | null {
     if (!args?.trim()) return null;
 
     const parts = args.trim().split(/\s+/);
@@ -114,7 +106,7 @@ function isLoopCompatibleTarget(target: ReviewTarget): boolean {
 }
 
 export default function reviewExtension(pi: ExtensionAPI) {
-    let reviewOriginId: string | undefined = undefined;
+    let reviewOriginId: string | undefined;
     let endReviewInProgress = false;
     let reviewLoopFixingEnabled = false;
     let reviewLoopInProgress = false;
@@ -148,8 +140,8 @@ export default function reviewExtension(pi: ExtensionAPI) {
             const message = reviewLoopInProgress
                 ? "Review session active (loop fixing running)"
                 : reviewLoopFixingEnabled
-                    ? "Review session active (loop fixing enabled), return with /end-review"
-                    : "Review session active, return with /end-review";
+                  ? "Review session active (loop fixing enabled), return with /end-review"
+                  : "Review session active, return with /end-review";
             const text = new Text(theme.fg("warning", message), 0, 0);
             return {
                 render(width: number) {
@@ -287,7 +279,10 @@ export default function reviewExtension(pi: ExtensionAPI) {
                 }
 
                 if (reviewLoopFixingEnabled && !isLoopCompatibleTarget(target)) {
-                    ctx.ui.notify("Loop mode does not work with commit review.", "error");
+                    ctx.ui.notify(
+                        "Loop mode does not work with commit review.",
+                        "error",
+                    );
                     if (fromSelector) {
                         target = null;
                         continue;
@@ -301,7 +296,9 @@ export default function reviewExtension(pi: ExtensionAPI) {
                 }
 
                 const entries = ctx.sessionManager.getEntries();
-                const messageCount = entries.filter((e) => e.type === "message").length;
+                const messageCount = entries.filter(
+                    (e) => e.type === "message",
+                ).length;
 
                 let useFreshSession = messageCount === 0;
 
@@ -359,7 +356,10 @@ export default function reviewExtension(pi: ExtensionAPI) {
                 ]);
 
                 if (choice === undefined) {
-                    ctx.ui.notify("Cancelled. Use /end-review to try again.", "info");
+                    ctx.ui.notify(
+                        "Cancelled. Use /end-review to try again.",
+                        "info",
+                    );
                     return;
                 }
 
@@ -367,8 +367,8 @@ export default function reviewExtension(pi: ExtensionAPI) {
                     choice === "Return and fix findings"
                         ? "returnAndFix"
                         : choice === "Return and summarize"
-                            ? "returnAndSummarize"
-                            : "returnOnly";
+                          ? "returnAndSummarize"
+                          : "returnOnly";
 
                 await executeEndReviewAction(rt, ctx, action, {
                     showSummaryLoader: true,

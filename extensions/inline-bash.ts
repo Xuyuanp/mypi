@@ -16,7 +16,7 @@
  */
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 
-export default function(pi: ExtensionAPI) {
+export default function (pi: ExtensionAPI) {
     const PATTERN = /!\{([^}]+)\}/g;
     const TIMEOUT_MS = 30000;
 
@@ -25,10 +25,7 @@ export default function(pi: ExtensionAPI) {
 
         // Don't process if it's a whole-line bash command (starts with !)
         // This preserves the existing !command behavior
-        if (
-            text.trimStart().startsWith("!") &&
-            !text.trimStart().startsWith("!{")
-        ) {
+        if (text.trimStart().startsWith("!") && !text.trimStart().startsWith("!{")) {
             return { action: "continue" };
         }
 
@@ -89,7 +86,9 @@ export default function(pi: ExtensionAPI) {
                 .map((e) => {
                     const status = e.error ? ` (${e.error})` : "";
                     const preview =
-                        e.output.length > 50 ? `${e.output.slice(0, 50)}...` : e.output;
+                        e.output.length > 50
+                            ? `${e.output.slice(0, 50)}...`
+                            : e.output;
                     return `!{${e.command}}${status} -> "${preview}"`;
                 })
                 .join("\n");

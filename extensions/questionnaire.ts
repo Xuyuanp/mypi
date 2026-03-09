@@ -239,7 +239,10 @@ export default function questionnaire(pi: ExtensionAPI) {
 
                         // Tab navigation (multi-question only)
                         if (isMulti) {
-                            if (matchesKey(data, Key.tab) || matchesKey(data, Key.right)) {
+                            if (
+                                matchesKey(data, Key.tab) ||
+                                matchesKey(data, Key.right)
+                            ) {
                                 currentTab = (currentTab + 1) % totalTabs;
                                 optionIndex = 0;
                                 refresh();
@@ -249,7 +252,8 @@ export default function questionnaire(pi: ExtensionAPI) {
                                 matchesKey(data, Key.shift("tab")) ||
                                 matchesKey(data, Key.left)
                             ) {
-                                currentTab = (currentTab - 1 + totalTabs) % totalTabs;
+                                currentTab =
+                                    (currentTab - 1 + totalTabs) % totalTabs;
                                 optionIndex = 0;
                                 refresh();
                                 return;
@@ -288,7 +292,13 @@ export default function questionnaire(pi: ExtensionAPI) {
                                 refresh();
                                 return;
                             }
-                            saveAnswer(q.id, opt.value, opt.label, false, optionIndex + 1);
+                            saveAnswer(
+                                q.id,
+                                opt.value,
+                                opt.label,
+                                false,
+                                optionIndex + 1,
+                            );
                             advanceAfterAnswer();
                             return;
                         }
@@ -307,7 +317,8 @@ export default function questionnaire(pi: ExtensionAPI) {
                         const opts = currentOptions();
 
                         // Helper to add truncated line
-                        const add = (s: string) => lines.push(truncateToWidth(s, width));
+                        const add = (s: string) =>
+                            lines.push(truncateToWidth(s, width));
 
                         add(theme.fg("accent", "─".repeat(width)));
 
@@ -330,8 +341,14 @@ export default function questionnaire(pi: ExtensionAPI) {
                             const isSubmitTab = currentTab === questions.length;
                             const submitText = " ✓ Submit ";
                             const submitStyled = isSubmitTab
-                                ? theme.bg("selectedBg", theme.fg("text", submitText))
-                                : theme.fg(canSubmit ? "success" : "dim", submitText);
+                                ? theme.bg(
+                                      "selectedBg",
+                                      theme.fg("text", submitText),
+                                  )
+                                : theme.fg(
+                                      canSubmit ? "success" : "dim",
+                                      submitText,
+                                  );
                             tabs.push(`${submitStyled} →`);
                             add(` ${tabs.join("")}`);
                             lines.push("");
@@ -343,16 +360,32 @@ export default function questionnaire(pi: ExtensionAPI) {
                                 const opt = opts[i];
                                 const selected = i === optionIndex;
                                 const isOther = opt.isOther === true;
-                                const prefix = selected ? theme.fg("accent", "> ") : "  ";
+                                const prefix = selected
+                                    ? theme.fg("accent", "> ")
+                                    : "  ";
                                 const color = selected ? "accent" : "text";
                                 // Mark "Type something" differently when in input mode
                                 if (isOther && inputMode) {
-                                    add(prefix + theme.fg("accent", `${i + 1}. ${opt.label} ✎`));
+                                    add(
+                                        prefix +
+                                            theme.fg(
+                                                "accent",
+                                                `${i + 1}. ${opt.label} ✎`,
+                                            ),
+                                    );
                                 } else {
-                                    add(prefix + theme.fg(color, `${i + 1}. ${opt.label}`));
+                                    add(
+                                        prefix +
+                                            theme.fg(
+                                                color,
+                                                `${i + 1}. ${opt.label}`,
+                                            ),
+                                    );
                                 }
                                 if (opt.description) {
-                                    add(`     ${theme.fg("muted", opt.description)}`);
+                                    add(
+                                        `     ${theme.fg("muted", opt.description)}`,
+                                    );
                                 }
                             }
                         }
@@ -376,7 +409,9 @@ export default function questionnaire(pi: ExtensionAPI) {
                             for (const question of questions) {
                                 const answer = answers.get(question.id);
                                 if (answer) {
-                                    const prefix = answer.wasCustom ? "(wrote) " : "";
+                                    const prefix = answer.wasCustom
+                                        ? "(wrote) "
+                                        : "";
                                     add(
                                         `${theme.fg("muted", ` ${question.label}: `)}${theme.fg("text", prefix + answer.label)}`,
                                     );
@@ -423,7 +458,9 @@ export default function questionnaire(pi: ExtensionAPI) {
 
             if (result.cancelled) {
                 return {
-                    content: [{ type: "text", text: "User cancelled the questionnaire" }],
+                    content: [
+                        { type: "text", text: "User cancelled the questionnaire" },
+                    ],
                     details: result,
                 };
             }
