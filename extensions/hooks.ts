@@ -30,6 +30,18 @@
  *   2   — block (stderr shown as error)
  *   other — prompt the user to allow or block
  *
+ * Input rewriting (PreToolUse only):
+ *   Pre hooks may write JSON to stdout to rewrite tool input before
+ *   execution. The JSON must contain an "updatedInput" object whose
+ *   fields are shallow-merged into the original tool input.
+ *
+ *   Example stdout: { "updatedInput": { "command": "rtk git status" } }
+ *
+ *   - Exit 0 + updatedInput → rewrite and allow
+ *   - Exit 1 + updatedInput → warn, rewrite, and allow
+ *   - Exit 2               → block (stdout ignored)
+ *   - Empty or non-JSON stdout → input unchanged (backward compatible)
+ *
  * Exit codes (PostToolUse):
  *   0   — success (result unchanged)
  *   ≠0  — stderr appended to result
@@ -179,27 +191,39 @@ function runHook(
     cwd: string,
     env: NodeJS.ProcessEnv,
     timeout: number,
-): Promise<{ code: number; stderr: string }> {
+): Promise<{ code: number; stdout: string; stderr: string }> {
     return new Promise((resolve) => {
         const [cmd, ...args] = hook.command;
         const child = spawn(cmd, args, {
             cwd,
-            stdio: ["pipe", "ignore", "pipe"],
+            stdio: ["pipe", "pipe", "pipe"],
             timeout: timeout,
             env,
         });
 
+        let stdout = "";
         let stderr = "";
+        child.stdout.on("data", (chunk: Buffer) => {
+            stdout += chunk.toString();
+        });
         child.stderr.on("data", (chunk: Buffer) => {
             stderr += chunk.toString();
         });
 
         child.on("error", (err) => {
-            resolve({ code: 1, stderr: `Hook failed to execute: ${err.message}` });
+            resolve({
+                code: 1,
+                stdout: "",
+                stderr: `Hook failed to execute: ${err.message}`,
+            });
         });
 
         child.on("close", (code) => {
-            resolve({ code: code ?? 1, stderr: stderr.trim() });
+            resolve({
+                code: code ?? 1,
+                stdout: stdout.trim(),
+                stderr: stderr.trim(),
+            });
         });
 
         child.stdin.on("error", () => {
@@ -208,6 +232,38 @@ function runHook(
         child.stdin.write(eventPayload);
         child.stdin.end();
     });
+}
+
+/** Parse hook stdout for an updatedInput object. Returns null if absent or invalid. */
+function parseUpdatedInput(stdout: string): Record<string, unknown> | null {
+    if (!stdout) return null;
+    try {
+        const parsed = JSON.parse(stdout);
+        if (
+            parsed &&
+            typeof parsed === "object" &&
+            parsed.updatedInput &&
+            typeof parsed.updatedInput === "object" &&
+            !Array.isArray(parsed.updatedInput)
+        ) {
+            return parsed.updatedInput as Record<string, unknown>;
+        }
+    } catch {
+        // Not JSON or malformed — no rewrite
+    }
+    return null;
+}
+
+/** Shallow-merge updatedInput from hook stdout into the tool event input. */
+function applyUpdatedInput(
+    event: { input: Record<string, unknown> },
+    stdout: string,
+): void {
+    const updated = parseUpdatedInput(stdout);
+    if (!updated) return;
+    for (const [key, value] of Object.entries(updated)) {
+        event.input[key] = value;
+    }
 }
 
 /** Collect all hooks matching a tool name from a list of matcher groups. */
@@ -311,7 +367,10 @@ export default function (pi: ExtensionAPI) {
             const cwd = resolveHookCwd(hook, ctx.cwd);
             const result = await runHook(hook, payload, cwd, env, timeout);
 
-            if (result.code === 0) continue;
+            if (result.code === 0) {
+                applyUpdatedInput(event, result.stdout);
+                continue;
+            }
 
             const label = hookDisplayName(hook);
 
@@ -320,6 +379,7 @@ export default function (pi: ExtensionAPI) {
                     ? `Hook [${label}] warning: ${result.stderr}`
                     : `Hook [${label}] exited with code ${result.code}`;
                 ctx.ui.notify(msg, "warning");
+                applyUpdatedInput(event, result.stdout);
                 continue;
             }
 
