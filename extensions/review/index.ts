@@ -26,6 +26,17 @@
  * - If a REVIEW_GUIDELINES.md file exists in the same directory as .pi,
  *   its contents are appended to the review prompt.
  *
+ * CLI flag (non-interactive, works with --print):
+ * - `pi -p --review uncommitted "go"` (one-shot review, prints and exits)
+ * - `pi -p --review "branch main" "go"`
+ * - `pi -p --review "commit abc123" "go"`
+ * - `pi -p --review "pr 123" "go"`
+ * - `pi -p --review "mr 42" "go"`
+ * - `pi --review uncommitted` (interactive: pre-fills editor, press Enter)
+ *
+ * In --print mode a trigger message is required (any text, e.g. "go").
+ * In interactive mode the editor is pre-filled with "Start review".
+ *
  * Note: PR review requires a clean working tree (no uncommitted changes to tracked files).
  */
 
@@ -37,6 +48,12 @@ import {
     type ReviewRuntime,
     runLoopFixingReview,
 } from "./lifecycle.js";
+import {
+    buildReviewPrompt,
+    getUserFacingHint,
+    loadProjectReviewGuidelines,
+    REVIEW_RUBRIC,
+} from "./prompts.js";
 import {
     handleMrCheckout,
     handlePrCheckout,
@@ -106,6 +123,12 @@ function isLoopCompatibleTarget(target: ReviewTarget): boolean {
 }
 
 export default function reviewExtension(pi: ExtensionAPI) {
+    pi.registerFlag("review", {
+        description:
+            "Run a code review non-interactively (e.g. --review uncommitted, --review 'branch main')",
+        type: "string",
+    });
+
     let reviewOriginId: string | undefined;
     let endReviewInProgress = false;
     let reviewLoopFixingEnabled = false;
@@ -188,10 +211,90 @@ export default function reviewExtension(pi: ExtensionAPI) {
         applyReviewState(ctx);
     }
 
+    // -- Flag-driven review (non-interactive) --
+
+    let pendingReviewPrompt: string | undefined;
+
+    async function prepareFlagReview(
+        ctx: ExtensionContext,
+        flagValue: string,
+    ): Promise<void> {
+        const { code } = await pi.exec("git", ["rev-parse", "--git-dir"]);
+        if (code !== 0) {
+            ctx.ui.notify("Not a git repository", "error");
+            return;
+        }
+
+        const parsed = parseArgs(flagValue);
+        if (!parsed) {
+            ctx.ui.notify(
+                `Invalid --review argument: "${flagValue}". Expected: uncommitted, branch <name>, commit <sha>, pr <ref>, mr <ref>, folder <paths>, custom "<instructions>"`,
+                "error",
+            );
+            return;
+        }
+
+        let target: ReviewTarget | null = null;
+
+        if (parsed.type === "pr") {
+            target = await handlePrCheckout(ctx, pi, parsed.ref);
+            if (!target) {
+                ctx.ui.notify("PR checkout failed", "error");
+                return;
+            }
+        } else if (parsed.type === "mr") {
+            target = await handleMrCheckout(ctx, pi, parsed.ref);
+            if (!target) {
+                ctx.ui.notify("MR checkout failed", "error");
+                return;
+            }
+        } else {
+            target = parsed;
+        }
+
+        const prompt = await buildReviewPrompt(pi, target);
+        const hint = getUserFacingHint(target);
+        const projectGuidelines = await loadProjectReviewGuidelines(ctx.cwd);
+
+        let fullPrompt = `${REVIEW_RUBRIC}\n\n---\n\nPlease perform a code review with the following focus:\n\n${prompt}`;
+
+        if (projectGuidelines) {
+            fullPrompt += `\n\nThis project has additional instructions for code reviews:\n\n${projectGuidelines}`;
+        }
+
+        pendingReviewPrompt = fullPrompt;
+        ctx.ui.notify(`Review prepared: ${hint}`, "info");
+
+        if (ctx.hasUI) {
+            ctx.ui.setEditorText("Start review");
+        }
+    }
+
     // -- Session event listeners --
 
-    pi.on("session_start", (_event, ctx) => {
+    pi.on("session_start", async (_event, ctx) => {
         applyAllReviewState(ctx);
+
+        const flagValue = pi.getFlag("review") as string | undefined;
+        if (flagValue) {
+            try {
+                await prepareFlagReview(ctx, flagValue);
+            } catch (err) {
+                ctx.ui.notify(
+                    `--review failed: ${err instanceof Error ? err.message : String(err)}`,
+                    "error",
+                );
+            }
+        }
+    });
+
+    pi.on("input", async (_event, _ctx) => {
+        if (pendingReviewPrompt) {
+            const prompt = pendingReviewPrompt;
+            pendingReviewPrompt = undefined;
+            return { action: "transform" as const, text: prompt };
+        }
+        return { action: "continue" as const };
     });
 
     pi.on("session_switch", (_event, ctx) => {
