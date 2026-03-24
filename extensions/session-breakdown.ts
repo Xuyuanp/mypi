@@ -40,11 +40,11 @@ type BreakdownView = "model" | "cwd" | "dow" | "tod";
 const DOW_NAMES: DowKey[] = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
 const TOD_BUCKETS: { key: TodKey; label: string; from: number; to: number }[] = [
-    { key: "after-midnight", label: "After midnight (0–5)", from: 0, to: 5 },
-    { key: "morning", label: "Morning (6–11)", from: 6, to: 11 },
-    { key: "afternoon", label: "Afternoon (12–16)", from: 12, to: 16 },
-    { key: "evening", label: "Evening (17–21)", from: 17, to: 21 },
-    { key: "night", label: "Night (22–23)", from: 22, to: 23 },
+    { key: "after-midnight", label: "After midnight (0–9)", from: 0, to: 9 },
+    { key: "morning", label: "Morning (10–13)", from: 10, to: 13 },
+    { key: "afternoon", label: "Afternoon (14–17)", from: 14, to: 17 },
+    { key: "evening", label: "Evening (18–20)", from: 18, to: 20 },
+    { key: "night", label: "Night (21–23)", from: 21, to: 23 },
 ];
 
 function todBucketForHour(hour: number): TodKey {
