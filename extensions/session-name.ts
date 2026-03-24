@@ -17,28 +17,13 @@ const MAX_RETRIES = 2;
 const FALLBACK_LENGTH = 50;
 const TITLE_ENTRY_TYPE = "ad:session-title";
 
-const TITLE_PROMPT = `Generate a short title for this coding session based on the conversation below.
+const TITLE_PROMPT = `Generate a short title (four words or less) that describes the topic of the user's messages.
+Reply with only the title, nothing else. Do not show your reasoning.
 
-Rules:
-- Maximum 50 characters, sentence case.
-- Capture the main intent or task.
-- Reuse the user's own words and technical terms. Do not paraphrase.
-- Match the user's language (e.g. if they write in French, the title must be in French).
-- Use common abbreviations and acronyms when the user does (e.g. API, DB, auth, CI).
-- Output ONLY the title text. Nothing else.
-
-Do NOT:
-- Add quotes, colons, or markdown formatting.
-- Start with "Title:", "Summary:", or similar meta-prefixes.
-- Use generic titles like "Coding session", "Help with code", "New conversation".
-- Add explanations, commentary, or multiple options.
-- Invent terms or context not present in the conversation.
-
-Examples of good titles:
-- Debug 500 errors in auth middleware
-- Add refresh token support
-- Refactor user service tests
-- Migrer la base de donnees vers Postgres`;
+Examples:
+- "how do I reverse a list in python?" → Python list reversal
+- "what's the weather in Tokyo?" → Tokyo weather
+- "explain how transformers work in ML" → ML transformers explained`;
 
 export function buildFallbackTitle(userText: string): string {
     const text = userText.trim();
