@@ -15,7 +15,7 @@ Start a loop (max 5 iterations):
    - P3+ issues do not require the procedure or a DECISIONS.md entry.
    - You may fix P3+ issues at your discretion and list them in the "Skipped P3+" summary table.
 5. Check the exit condition:
-   - Exit the loop immediately when all P0-P2 issues in REVIEW.md have either been fixed, or have an existing DECISIONS.md entry covering the same issue with unchanged reviewer reasoning.
+   - Exit the loop immediately when all P0-P2 issues in REVIEW.md have either been fixed, or have an existing **declined** DECISIONS.md entry covering the same issue with unchanged reviewer reasoning.
 6. If not exiting, go to step 1.
 
 After the loop exits:
@@ -28,8 +28,9 @@ After the loop exits:
 For each P0-P2 issue, follow these steps in order:
 
 1. **Check DECISIONS.md.**
-   - If the issue is semantically similar to an existing entry and the core reviewer reasoning is unchanged, skip it.
-   - If the reviewer provides a new reason, reconsider: either fix it (continue to step 2) or append a new DECISIONS.md entry responding to the new reason (then stop for this issue).
+   - If the issue is semantically similar to an existing **declined** entry (Disagree / Could not reproduce) and the core reviewer reasoning is unchanged, skip it.
+   - If a prior **Fixed** entry exists for the same issue but the reviewer flags it again, do NOT skip -- the fix may have been incomplete. Re-evaluate from step 2.
+   - If the reviewer provides a new reason for a declined entry, reconsider: either fix it (continue to step 2) or append a new DECISIONS.md entry responding to the new reason (then stop for this issue).
 2. **Decide: agree or disagree.**
    - If you **disagree**, append an entry to DECISIONS.md (see **DECISIONS.md Format** below). Stop for this issue.
    - If you **agree**, continue to step 3.
@@ -40,6 +41,7 @@ For each P0-P2 issue, follow these steps in order:
    - See **Test Placement Rules** below for edge cases.
 4. **Fix the code.**
 5. **Run the test again** and confirm it passes. If it fails, return to step 4.
+6. **Log the fix in DECISIONS.md.** Append an entry with `Decision: Fixed` (see **DECISIONS.md Format** below). If the issue already has a DECISIONS.md entry from an earlier step (e.g., Could not reproduce before a direct fix), explicitly supersede it in the new entry.
 
 ## DECISIONS.md Format
 
@@ -51,8 +53,10 @@ If appending a new decision for a previously logged issue, reference the prior e
 
 - **Severity**: P0 / P1 / P2
 - **Reviewer said**: <brief paraphrase of the reviewer's concern>
-- **Decision**: Disagree / Could not reproduce
-- **Reason**: <your rationale>
+- **Decision**: Fixed / Disagree / Could not reproduce
+- **Reason**: <your rationale, or for Fixed: what was changed and why>
+
+---
 ```
 
 ## Output Summary Format
