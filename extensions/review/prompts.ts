@@ -11,8 +11,11 @@ import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { getMergeBase } from "./git.js";
 import type { ReviewTarget } from "./types.js";
 
-const UNCOMMITTED_PROMPT =
-    "Review the current code changes (staged, unstaged, and untracked files) and provide prioritized findings.";
+const UNCOMMITTED_PROMPT = `Before reviewing, read these files if they exist (check the working directory and subdirectories):
+- \`PLAN.md\` — the specification these changes implement. Evaluate the diff against the plan, not against abstract ideals.
+- \`DECISIONS.md\` — an append-only log of issue outcomes (both fixed and declined) from prior review-fix cycles. Apply the DECISIONS.md deduplication rules from the review guidelines.
+
+Review the current code changes (staged, unstaged, and untracked files) and provide prioritized findings.`;
 
 const LOCAL_CHANGES_REVIEW_INSTRUCTIONS =
     "Also include local working-tree changes (staged, unstaged, and untracked files) from this branch. Use `git status --porcelain`, `git diff`, `git diff --staged`, and `git ls-files --others --exclude-standard` so local fixes are part of this review cycle.";
@@ -91,6 +94,16 @@ Flag issues that:
 5. Treat back pressure handling as critical to system stability.
 6. Apply system-level thinking; flag changes that increase operational risk or on-call wakeups.
 7. Ensure that errors are always checked against codes or stable identifiers, never error messages.
+
+## DECISIONS.md deduplication
+
+A project may contain a \`DECISIONS.md\` file — an append-only log where the fix worker records the outcome of each P0-P2 finding from prior review-fix cycles. Each entry has severity, the reviewer's original concern, a decision (Fixed / Disagree / Could not reproduce), and a rationale.
+
+When DECISIONS.md exists:
+1. Before flagging a finding, check whether a semantically similar issue already appears in DECISIONS.md.
+2. **Declined entries** (Disagree / Could not reproduce): if the decline reason is sound, **suppress the finding**. You may only re-flag if you have **new evidence** — a concrete scenario, reproduction path, or provable impact that the prior decline reason did not address. Restating the same concern in different words does not count.
+3. **Fixed entries**: do not flag code patterns that a fixed entry shows were intentionally introduced as part of a prior fix. If the fix itself introduced a new bug, that is valid to flag — but you must explain why the fix is defective.
+4. When re-flagging any prior entry, explicitly reference the DECISIONS.md entry and state what new evidence or defect you are providing.
 
 ## Priority levels
 
