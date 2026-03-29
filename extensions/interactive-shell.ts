@@ -1,8 +1,10 @@
 /**
  * Interactive Shell Extension
  *
- * Provides full terminal access for interactive commands. The TUI suspends
- * while they run and resumes when they exit.
+ * Provides full terminal access for interactive commands.
+ * When inside tmux, commands run in a borderless popup overlay matching
+ * the current pane's size and position (requires tmux 3.3+).
+ * Outside tmux, the TUI suspends while commands run and resumes on exit.
  *
  * Commands:
  *   /edit [path]         # Open $EDITOR (defaults to nvim)
@@ -26,6 +28,45 @@ import type {
     ExtensionAPI,
     ExtensionUIContext,
 } from "@mariozechner/pi-coding-agent";
+
+function isInsideTmux(): boolean {
+    return !!process.env.TMUX;
+}
+
+function runInTmuxPopup(command: string): number | null {
+    const geo = spawnSync(
+        "tmux",
+        [
+            "display-message",
+            "-p",
+            "#{pane_left} #{pane_top} #{pane_width} #{pane_height}",
+        ],
+        { encoding: "utf-8" },
+    );
+    const [paneLeft, paneTop, paneWidth, paneHeight] = geo.stdout.trim().split(" ");
+
+    const result = spawnSync(
+        "tmux",
+        [
+            "display-popup",
+            "-E",
+            "-T",
+            ` #[fg=green,bold]>#[default] ${command} `,
+            "-x",
+            paneLeft,
+            "-y",
+            paneTop,
+            "-w",
+            paneWidth,
+            "-h",
+            paneHeight,
+            "--",
+            command,
+        ],
+        { stdio: "inherit", env: process.env },
+    );
+    return result.status;
+}
 
 // Default interactive commands - editors, pagers, git ops, TUIs
 const DEFAULT_INTERACTIVE_COMMANDS = [
@@ -185,9 +226,12 @@ export default function (pi: ExtensionAPI) {
                 editor += ` ${path}`;
             }
 
-            // Run command with full terminal access
-            const shell = process.env.SHELL || "/bin/sh";
-            await runInteractiveCommand(ctx.ui, shell, ["-c", editor]);
+            if (isInsideTmux()) {
+                runInTmuxPopup(editor);
+            } else {
+                const shell = process.env.SHELL || "/bin/sh";
+                await runInteractiveCommand(ctx.ui, shell, ["-c", editor]);
+            }
         },
     });
 
@@ -198,12 +242,21 @@ export default function (pi: ExtensionAPI) {
                 return;
             }
 
-            const shell = process.env.SHELL || "/bin/sh";
-            let shArgs: string[] = [];
-            if (args.trim().length > 0) {
-                shArgs = ["-c", args];
+            if (isInsideTmux()) {
+                const trimmed = args.trim();
+                const command =
+                    trimmed.length > 0
+                        ? `${process.env.SHELL || "/bin/sh"} -c ${JSON.stringify(trimmed)}`
+                        : process.env.SHELL || "/bin/sh";
+                runInTmuxPopup(command);
+            } else {
+                const shell = process.env.SHELL || "/bin/sh";
+                let shArgs: string[] = [];
+                if (args.trim().length > 0) {
+                    shArgs = ["-c", args];
+                }
+                await runInteractiveCommand(ctx.ui, shell, shArgs);
             }
-            await runInteractiveCommand(ctx.ui, shell, shArgs);
         },
     });
 
@@ -236,8 +289,13 @@ export default function (pi: ExtensionAPI) {
             };
         }
 
-        const shell = process.env.SHELL || "/bin/sh";
-        const exitCode = await runInteractiveCommand(ctx.ui, shell, ["-c", command]);
+        let exitCode: number | null;
+        if (isInsideTmux()) {
+            exitCode = runInTmuxPopup(command);
+        } else {
+            const shell = process.env.SHELL || "/bin/sh";
+            exitCode = await runInteractiveCommand(ctx.ui, shell, ["-c", command]);
+        }
 
         // Return result to prevent default bash handling
         const output =
