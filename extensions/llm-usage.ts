@@ -1,5 +1,5 @@
 /**
- * LLM Bridge Usage Extension
+ * Quota Usage Extension
  *
  * Fetches token usage from the company AI gateway on each turn_end
  * and displays the usage percentage in the footer status bar.
@@ -10,7 +10,7 @@
 import type { ExtensionAPI, ThemeColor } from "@mariozechner/pi-coding-agent";
 
 const USAGE_URL = "https://llm-bridge.tigerbrokers.net/usage";
-const STATUS_KEY = "llm-usage";
+const STATUS_KEY = "quota-usage";
 
 interface UsageResponse {
     usage_percent: number;
@@ -44,7 +44,7 @@ function formatStatus(
           ? "warning"
           : "success";
 
-    const label = theme.fg("dim", "LLM:");
+    const label = theme.fg("dim", "Quota:");
     const value = theme.fg(color, `${percent}%`);
     const budget = !usage.has_budget ? theme.fg("error", " (no budget)") : "";
 
@@ -67,7 +67,7 @@ export default function (pi: ExtensionAPI) {
         } catch {
             ctx.ui.setStatus(
                 STATUS_KEY,
-                ctx.ui.theme.fg("error", "LLM: fetch failed"),
+                ctx.ui.theme.fg("error", "Quota: fetch failed"),
             );
         }
     }
