@@ -10,6 +10,9 @@
  *   /edit [path]         # Open $EDITOR (defaults to nvim)
  *   /shell [command]     # Open $SHELL, optionally running a command
  *
+ * Shortcuts:
+ *   ctrl+g               # Open editor content in external editor via tmux popup
+ *
  * Bang commands (auto-detected or forced):
  *   !vim file.txt        # Auto-detected as interactive
  *   !i any-command       # Force interactive mode with !i prefix
@@ -24,6 +27,9 @@
  */
 
 import { spawnSync } from "node:child_process";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type {
     ExtensionAPI,
     ExtensionUIContext,
@@ -312,4 +318,39 @@ export default function (pi: ExtensionAPI) {
             },
         };
     });
+
+    if (isInsideTmux()) {
+        pi.registerShortcut("ctrl+g", {
+            description: "Open editor content in external editor via tmux popup",
+            handler: async (ctx) => {
+                const editor = process.env.VISUAL || process.env.EDITOR || "nvim";
+                const text = ctx.ui.getEditorText();
+
+                const dir = mkdtempSync(join(tmpdir(), "pi-edit-"));
+                const tmpFile = join(dir, "EDITOR.md");
+
+                try {
+                    writeFileSync(tmpFile, text, "utf-8");
+                    const exitCode = runInTmuxPopup(`${editor} ${tmpFile}`);
+                    if (exitCode !== 0) {
+                        ctx.ui.notify(
+                            `Editor exited with code ${exitCode}`,
+                            "warning",
+                        );
+                        return;
+                    }
+                    const updated = readFileSync(tmpFile, "utf-8").replace(
+                        /\n$/,
+                        "",
+                    );
+                    ctx.ui.setEditorText(updated);
+                } catch (err) {
+                    const msg = err instanceof Error ? err.message : String(err);
+                    ctx.ui.notify(`External editor failed: ${msg}`, "error");
+                } finally {
+                    rmSync(dir, { recursive: true, force: true });
+                }
+            },
+        });
+    }
 }
