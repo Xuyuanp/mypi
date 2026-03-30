@@ -2,16 +2,15 @@
  * Interactive Shell Extension
  *
  * Provides full terminal access for interactive commands.
- * When inside tmux, commands run in a borderless popup overlay matching
- * the current pane's size and position (requires tmux 3.3+).
- * Outside tmux, the TUI suspends while commands run and resumes on exit.
+ * Commands run in an alternate screen buffer so the conversation
+ * is preserved underneath and restored without re-scrolling.
  *
  * Commands:
  *   /edit [path]         # Open $EDITOR (defaults to nvim)
  *   /shell [command]     # Open $SHELL, optionally running a command
  *
  * Shortcuts:
- *   ctrl+g               # Open editor content in external editor via tmux popup
+ *   ctrl+g               # Open editor content in external editor
  *
  * Bang commands (auto-detected or forced):
  *   !vim file.txt        # Auto-detected as interactive
@@ -34,45 +33,6 @@ import type {
     ExtensionAPI,
     ExtensionUIContext,
 } from "@mariozechner/pi-coding-agent";
-
-function isInsideTmux(): boolean {
-    return !!process.env.TMUX;
-}
-
-function runInTmuxPopup(command: string): number | null {
-    const geo = spawnSync(
-        "tmux",
-        [
-            "display-message",
-            "-p",
-            "#{pane_left} #{pane_top} #{pane_width} #{pane_height}",
-        ],
-        { encoding: "utf-8" },
-    );
-    const [paneLeft, paneTop, paneWidth, paneHeight] = geo.stdout.trim().split(" ");
-
-    const result = spawnSync(
-        "tmux",
-        [
-            "display-popup",
-            "-E",
-            "-T",
-            ` #[fg=green,bold]>#[default] ${command} `,
-            "-x",
-            paneLeft,
-            "-y",
-            paneTop,
-            "-w",
-            paneWidth,
-            "-h",
-            paneHeight,
-            "--",
-            command,
-        ],
-        { stdio: "inherit", env: process.env },
-    );
-    return result.status;
-}
 
 // Default interactive commands - editors, pagers, git ops, TUIs
 const DEFAULT_INTERACTIVE_COMMANDS = [
@@ -169,7 +129,6 @@ function isInteractiveCommand(command: string): boolean {
 
     for (const cmd of commands) {
         const cmdLower = cmd.toLowerCase();
-        // Match at start
         if (
             trimmed === cmdLower ||
             trimmed.startsWith(`${cmdLower} `) ||
@@ -177,7 +136,6 @@ function isInteractiveCommand(command: string): boolean {
         ) {
             return true;
         }
-        // Match after pipe: "cat file | less"
         const pipeIdx = trimmed.lastIndexOf("|");
         if (pipeIdx !== -1) {
             const afterPipe = trimmed.slice(pipeIdx + 1).trim();
@@ -189,33 +147,84 @@ function isInteractiveCommand(command: string): boolean {
     return false;
 }
 
-async function runInteractiveCommand(
-    ui: ExtensionUIContext,
-    command: string,
-    args: readonly string[],
-) {
-    return await ui.custom<number | null>((tui, _theme, _kb, done) => {
-        // Stop TUI to release terminal
-        tui.stop();
+function saveTtyState(): string | null {
+    const result = spawnSync("stty", ["-g"], {
+        stdio: ["inherit", "pipe", "pipe"],
+        encoding: "utf-8",
+    });
+    return result.status === 0 ? result.stdout.trim() : null;
+}
 
-        // Clear screen
-        process.stdout.write("\x1b[2J\x1b[H");
+function restoreTtyState(saved: string): void {
+    spawnSync("stty", [saved], { stdio: "inherit" });
+}
 
-        const result = spawnSync(command, args, {
-            stdio: "inherit",
-            env: process.env,
-        });
-
-        // Restart TUI
-        tui.start();
+async function forceRerender(ui: ExtensionUIContext): Promise<void> {
+    // Clear terminal to invalidate any stale screen content
+    writeToTty("\x1b[2J\x1b[H");
+    // Open and close a custom UI to force the TUI to do a full re-render
+    await ui.custom<void>((tui, _theme, _kb, done) => {
         tui.requestRender(true);
-
-        // Signal completion
-        done(result.status);
-
-        // Return empty component (immediately disposed since done() was called)
+        setTimeout(() => done(undefined), 100);
         return { render: () => [], invalidate: () => {} };
     });
+}
+
+// Detect /dev/tty once; it won't appear mid-process.
+const hasDevTty = (() => {
+    try {
+        writeFileSync("/dev/tty", "");
+        return true;
+    } catch {
+        return false;
+    }
+})();
+
+function writeToTty(data: string): void {
+    if (hasDevTty) {
+        writeFileSync("/dev/tty", data);
+    }
+}
+
+function runInteractiveCommand(
+    command: string,
+    args: readonly string[],
+): number | null {
+    // Save TUI's terminal state (raw mode, etc.)
+    const savedTty = saveTtyState();
+
+    // Restore canonical mode so the child gets proper echo/line editing
+    spawnSync("stty", ["sane"], { stdio: "inherit" });
+
+    // Write directly to /dev/tty since process.stdout is a pipe in pi
+    writeToTty("\x1b[?1049h\x1b[2J\x1b[H");
+
+    const result = spawnSync(command, args, {
+        stdio: "inherit",
+    });
+
+    // Restore TUI screen. If a child program (htop, vim, etc.) exited
+    // alternate screen, the terminal is already in NORMAL and this is
+    // a no-op. Otherwise it switches back from ALTERNATE to NORMAL.
+    writeToTty("\x1b[?1049l");
+
+    // Restore TUI's terminal state
+    if (savedTty) {
+        restoreTtyState(savedTty);
+    }
+
+    return result.status;
+}
+
+const defaultShell = process.env.SHELL || "/bin/sh";
+
+async function runShellInteractively(
+    ui: ExtensionUIContext,
+    args: readonly string[],
+): Promise<number | null> {
+    const exitCode = runInteractiveCommand(defaultShell, args);
+    await forceRerender(ui);
+    return exitCode;
 }
 
 export default function (pi: ExtensionAPI) {
@@ -232,12 +241,7 @@ export default function (pi: ExtensionAPI) {
                 editor += ` ${path}`;
             }
 
-            if (isInsideTmux()) {
-                runInTmuxPopup(editor);
-            } else {
-                const shell = process.env.SHELL || "/bin/sh";
-                await runInteractiveCommand(ctx.ui, shell, ["-c", editor]);
-            }
+            await runShellInteractively(ctx.ui, ["-c", editor]);
         },
     });
 
@@ -248,21 +252,8 @@ export default function (pi: ExtensionAPI) {
                 return;
             }
 
-            if (isInsideTmux()) {
-                const trimmed = args.trim();
-                const command =
-                    trimmed.length > 0
-                        ? `${process.env.SHELL || "/bin/sh"} -c ${JSON.stringify(trimmed)}`
-                        : process.env.SHELL || "/bin/sh";
-                runInTmuxPopup(command);
-            } else {
-                const shell = process.env.SHELL || "/bin/sh";
-                let shArgs: string[] = [];
-                if (args.trim().length > 0) {
-                    shArgs = ["-c", args];
-                }
-                await runInteractiveCommand(ctx.ui, shell, shArgs);
-            }
+            const shArgs: string[] = args.trim().length > 0 ? ["-c", args] : [];
+            await runShellInteractively(ctx.ui, shArgs);
         },
     });
 
@@ -270,8 +261,6 @@ export default function (pi: ExtensionAPI) {
         let command = event.command;
         let forceInteractive = false;
 
-        // Check for !i prefix (command comes without the leading !)
-        // The prefix parsing happens before this event, so we check if command starts with "i "
         if (command.startsWith("i ") || command.startsWith("i\t")) {
             forceInteractive = true;
             command = command.slice(2).trim();
@@ -280,10 +269,9 @@ export default function (pi: ExtensionAPI) {
         const shouldBeInteractive =
             forceInteractive || isInteractiveCommand(command);
         if (!shouldBeInteractive) {
-            return; // Let normal handling proceed
+            return;
         }
 
-        // No UI available (print mode, RPC, etc.)
         if (!ctx.hasUI) {
             return {
                 result: {
@@ -295,15 +283,8 @@ export default function (pi: ExtensionAPI) {
             };
         }
 
-        let exitCode: number | null;
-        if (isInsideTmux()) {
-            exitCode = runInTmuxPopup(command);
-        } else {
-            const shell = process.env.SHELL || "/bin/sh";
-            exitCode = await runInteractiveCommand(ctx.ui, shell, ["-c", command]);
-        }
+        const exitCode = await runShellInteractively(ctx.ui, ["-c", command]);
 
-        // Return result to prevent default bash handling
         const output =
             exitCode === 0
                 ? "(interactive command completed successfully)"
@@ -319,38 +300,35 @@ export default function (pi: ExtensionAPI) {
         };
     });
 
-    if (isInsideTmux()) {
-        pi.registerShortcut("ctrl+g", {
-            description: "Open editor content in external editor via tmux popup",
-            handler: async (ctx) => {
-                const editor = process.env.VISUAL || process.env.EDITOR || "nvim";
-                const text = ctx.ui.getEditorText();
+    pi.registerShortcut("ctrl+g", {
+        description: "Open editor content in external editor",
+        handler: async (ctx) => {
+            const editor = process.env.VISUAL || process.env.EDITOR || "nvim";
+            const text = ctx.ui.getEditorText();
 
-                const dir = mkdtempSync(join(tmpdir(), "pi-edit-"));
-                const tmpFile = join(dir, "EDITOR.md");
+            const dir = mkdtempSync(join(tmpdir(), "pi-edit-"));
+            const tmpFile = join(dir, "EDITOR.md");
 
-                try {
-                    writeFileSync(tmpFile, text, "utf-8");
-                    const exitCode = runInTmuxPopup(`${editor} ${tmpFile}`);
-                    if (exitCode !== 0) {
-                        ctx.ui.notify(
-                            `Editor exited with code ${exitCode}`,
-                            "warning",
-                        );
-                        return;
-                    }
-                    const updated = readFileSync(tmpFile, "utf-8").replace(
-                        /\n$/,
-                        "",
-                    );
-                    ctx.ui.setEditorText(updated);
-                } catch (err) {
-                    const msg = err instanceof Error ? err.message : String(err);
-                    ctx.ui.notify(`External editor failed: ${msg}`, "error");
-                } finally {
-                    rmSync(dir, { recursive: true, force: true });
+            try {
+                writeFileSync(tmpFile, text, "utf-8");
+
+                const exitCode = await runShellInteractively(ctx.ui, [
+                    "-c",
+                    `${editor} ${tmpFile}`,
+                ]);
+
+                if (exitCode !== 0) {
+                    ctx.ui.notify(`Editor exited with code ${exitCode}`, "warning");
+                    return;
                 }
-            },
-        });
-    }
+                const updated = readFileSync(tmpFile, "utf-8").replace(/\n$/, "");
+                ctx.ui.setEditorText(updated);
+            } catch (err) {
+                const msg = err instanceof Error ? err.message : String(err);
+                ctx.ui.notify(`External editor failed: ${msg}`, "error");
+            } finally {
+                rmSync(dir, { recursive: true, force: true });
+            }
+        },
+    });
 }
