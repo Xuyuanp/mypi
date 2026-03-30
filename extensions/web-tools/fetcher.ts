@@ -1,4 +1,5 @@
-import { JSDOM } from "jsdom";
+// jsdom is lazy-loaded in fetchText() to avoid ~350ms startup penalty
+let _JSDOM: typeof import("jsdom").JSDOM | undefined;
 
 export type FetchFormat = "markdown" | "text" | "html" | "json";
 
@@ -72,7 +73,10 @@ export async function fetchText(params: FetchParams): Promise<FetchResult> {
         const response = await fetchUrl(params);
         const html = await response.text();
 
-        const dom = new JSDOM(html);
+        if (!_JSDOM) {
+            _JSDOM = (await import("jsdom")).JSDOM;
+        }
+        const dom = new _JSDOM(html);
         const document = dom.window.document;
         stripNoise(document, ["script", "style"]);
 
