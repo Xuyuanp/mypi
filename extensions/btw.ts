@@ -16,14 +16,19 @@
 
 import { streamSimple, type Usage } from "@mariozechner/pi-ai";
 import type { ExtensionAPI, Theme } from "@mariozechner/pi-coding-agent";
-import { buildSessionContext, convertToLlm } from "@mariozechner/pi-coding-agent";
+import {
+    buildSessionContext,
+    convertToLlm,
+    getMarkdownTheme,
+} from "@mariozechner/pi-coding-agent";
 import {
     type Component,
     type Focusable,
+    Markdown,
     matchesKey,
     type TUI,
+    truncateToWidth,
     visibleWidth,
-    wrapTextWithAnsi,
 } from "@mariozechner/pi-tui";
 
 const SIDE_QUESTION_PROMPT = `This is a side question from the user. You MUST answer this question directly in a single response.
@@ -45,6 +50,24 @@ If you don't know the answer, say so - do not offer to look it up or investigate
 Simply answer the question with the information you have.`;
 
 const TITLE = "/btw";
+const MD_THEME = getMarkdownTheme();
+
+function renderMarkdownLines(text: string, width: number): string[] {
+    if (!text) return [];
+    try {
+        const md = new Markdown(text, 0, 0, MD_THEME);
+        return md.render(width);
+    } catch {
+        return text.split("\n").flatMap((line) => {
+            if (!line) return [""];
+            const wrapped: string[] = [];
+            for (let i = 0; i < line.length; i += width) {
+                wrapped.push(line.slice(i, i + width));
+            }
+            return wrapped.length > 0 ? wrapped : [""];
+        });
+    }
+}
 const MAX_VISIBLE_LINES = 30;
 
 function formatTokens(n: number): string {
@@ -67,6 +90,7 @@ class SideAnswerOverlay implements Component, Focusable {
     focused = false;
 
     private lines: string[] = [];
+    private lastInnerW = 0;
     private text = "";
     private loading = true;
     private usageText = "";
@@ -144,8 +168,9 @@ class SideAnswerOverlay implements Component, Focusable {
         const th = this.theme;
         const innerW = Math.max(20, width - 2);
 
-        if (this.lines.length === 0) {
+        if (this.lines.length === 0 || this.lastInnerW !== innerW) {
             this.lines = this.buildContent(innerW);
+            this.lastInnerW = innerW;
         }
 
         const contentLines = this.lines;
@@ -166,7 +191,10 @@ class SideAnswerOverlay implements Component, Focusable {
             return s + " ".repeat(Math.max(0, len - vis));
         };
 
-        const row = (content: string) => ` ${pad(content, innerW)} `;
+        const row = (content: string) => {
+            const truncated = truncateToWidth(content, innerW, "");
+            return ` ${pad(truncated, innerW)} `;
+        };
 
         const out: string[] = [];
 
@@ -254,17 +282,7 @@ class SideAnswerOverlay implements Component, Focusable {
             return [this.theme.fg("dim", "(no response)")];
         }
 
-        const rawLines = this.text.split("\n");
-        const wrapped: string[] = [];
-        for (const rawLine of rawLines) {
-            if (rawLine === "") {
-                wrapped.push("");
-            } else {
-                const w = wrapTextWithAnsi(rawLine, innerW);
-                wrapped.push(...w);
-            }
-        }
-        return wrapped;
+        return renderMarkdownLines(this.text, innerW);
     }
 }
 
