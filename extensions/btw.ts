@@ -61,8 +61,22 @@ function renderMarkdownLines(text: string, width: number): string[] {
         return text.split("\n").flatMap((line) => {
             if (!line) return [""];
             const wrapped: string[] = [];
-            for (let i = 0; i < line.length; i += width) {
-                wrapped.push(line.slice(i, i + width));
+            let start = 0;
+            while (start < line.length) {
+                let end = start;
+                let w = 0;
+                while (end < line.length) {
+                    const cp = line.codePointAt(end)!;
+                    const charW = visibleWidth(String.fromCodePoint(cp));
+                    if (w + charW > width) break;
+                    w += charW;
+                    end += cp > 0xffff ? 2 : 1;
+                }
+                if (end === start) {
+                    end += line.codePointAt(end)! > 0xffff ? 2 : 1;
+                }
+                wrapped.push(line.slice(start, end));
+                start = end;
             }
             return wrapped.length > 0 ? wrapped : [""];
         });

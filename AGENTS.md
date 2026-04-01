@@ -11,6 +11,10 @@
 - `prompts/` - Prompt templates
 - `skills/` - Specialized skills (future use)
 
+## References
+
+- [KV_CACHE.md](./KV_CACHE.md) - KV-cache-friendly coding guidelines for LLM API calls with prompt caching. Read before writing extensions that make direct LLM calls (e.g. `streamSimple`).
+
 ## Code Style
 
 ### Design Principles
