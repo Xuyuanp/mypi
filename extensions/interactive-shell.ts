@@ -312,17 +312,22 @@ export default function (pi: ExtensionAPI) {
             try {
                 writeFileSync(tmpFile, text, "utf-8");
 
-                const exitCode = await runShellInteractively(ctx.ui, [
+                // Run the editor without an immediate rerender so we
+                // can update the editor text first, then rerender once
+                // with the correct content.
+                const exitCode = runInteractiveCommand(defaultShell, [
                     "-c",
                     `${editor} ${tmpFile}`,
                 ]);
 
                 if (exitCode !== 0) {
+                    await forceRerender(ctx.ui);
                     ctx.ui.notify(`Editor exited with code ${exitCode}`, "warning");
                     return;
                 }
                 const updated = readFileSync(tmpFile, "utf-8").replace(/\n$/, "");
                 ctx.ui.setEditorText(updated);
+                await forceRerender(ctx.ui);
             } catch (err) {
                 const msg = err instanceof Error ? err.message : String(err);
                 ctx.ui.notify(`External editor failed: ${msg}`, "error");
