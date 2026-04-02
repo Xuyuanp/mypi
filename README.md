@@ -2,6 +2,11 @@
 
 Personal pi package containing custom extensions, themes, and prompts.
 
+> **Disclaimer**: Most of the content in this package is shamelessly stolen from
+> other people's work and stitched together to fit my own workflow. If something
+> looks familiar, it probably is. Use at your own risk -- it is tailored to my
+> personal preferences and almost certainly won't suit yours out of the box.
+
 ## Structure
 
 - `extensions/` - Custom pi extensions
@@ -14,23 +19,9 @@ Personal pi package containing custom extensions, themes, and prompts.
 ### Local Development
 
 ```bash
-# Install from local directory
-pi install /Users/pangxuyuan/workspace/mywork/ai/mypi
-
-# Or from current directory
+# from current directory
 pi install .
 ```
-
-### Git Installation
-
-```bash
-# Install from git repository (once pushed)
-pi install git:github.com/pangxuyuan/mypi
-```
-
-## Usage
-
-Once installed, all extensions, themes, and prompts will be automatically available in pi.
 
 ## Development
 
