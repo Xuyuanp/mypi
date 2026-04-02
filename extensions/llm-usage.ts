@@ -52,6 +52,8 @@ function formatStatus(
 }
 
 export default function (pi: ExtensionAPI) {
+    const enabled = process.env.PI_TIGER_LLM_QUOTA;
+    if (!enabled || enabled === "0" || enabled === "false") return;
     async function updateUsage(ctx: {
         ui: {
             setStatus: (key: string, value: string | undefined) => void;
