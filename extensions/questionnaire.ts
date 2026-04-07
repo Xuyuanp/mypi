@@ -6,13 +6,11 @@
  *   using a cheap LLM call, show questionnaire UI, send answers back.
  */
 
-import type { Api, Model } from "@mariozechner/pi-ai";
 import { completeSimple } from "@mariozechner/pi-ai";
 import type {
     ExtensionAPI,
     ExtensionCommandContext,
     ExtensionUIContext,
-    ModelRegistry,
     Theme,
 } from "@mariozechner/pi-coding-agent";
 import { buildSessionContext } from "@mariozechner/pi-coding-agent";
@@ -112,7 +110,15 @@ const QuestionnaireParams = Type.Object({
 });
 
 // /answer constants
-const DEFAULT_ANSWER_MODEL = "claude-haiku-4-5";
+const ANSWER_MODEL_PROVIDER = process.env.PI_ANSWER_MODEL_PROVIDER ?? "anthropic";
+const ANSWER_MODEL_NAME = process.env.PI_ANSWER_MODEL_NAME ?? "claude-haiku-4-5";
+
+const ANSWER_MODEL = {
+    provider: ANSWER_MODEL_PROVIDER,
+    model: ANSWER_MODEL_NAME,
+} as const;
+
+const MAX_RETRIES = 2;
 
 const EXTRACTION_PROMPT = `You extract structured questions from assistant messages.
 
@@ -708,13 +714,6 @@ function showQuestionnaireUI(
     return ui.custom<QuestionnaireResult>(createQuestionnaireUI(questions));
 }
 
-function resolveModel(registry: ModelRegistry): Model<Api> | undefined {
-    const envModel = process.env.PI_ANSWER_MODEL;
-    const modelId = envModel?.trim() || DEFAULT_ANSWER_MODEL;
-    const available = registry.getAvailable();
-    return available.find((m) => m.id === modelId) ?? available[0];
-}
-
 function extractAssistantText(ctx: ExtensionCommandContext): string | undefined {
     const branch = ctx.sessionManager.getBranch();
     const sctx = buildSessionContext(branch);
@@ -832,10 +831,7 @@ function extractQuestionsWithOverlay(
     });
 }
 
-function formatMultiSelectAnswer(
-    qLabel: string,
-    selections: Selection[],
-): string {
+function formatMultiSelectAnswer(qLabel: string, selections: Selection[]): string {
     const parts: string[] = [];
     const selected = selections.filter((s) => !s.wasCustom);
     const custom = selections.filter((s) => s.wasCustom);
@@ -845,9 +841,7 @@ function formatMultiSelectAnswer(
         );
     }
     if (custom.length > 0) {
-        parts.push(
-            `user wrote: ${custom.map((s) => s.label).join(", ")}`,
-        );
+        parts.push(`user wrote: ${custom.map((s) => s.label).join(", ")}`);
     }
     return `${qLabel}: ${parts.join("; ")}`;
 }
@@ -983,65 +977,88 @@ export default function questionnaire(pi: ExtensionAPI) {
                 return;
             }
 
-            const model = resolveModel(ctx.modelRegistry);
+            const model = ctx.modelRegistry.find(
+                ANSWER_MODEL.provider,
+                ANSWER_MODEL.model,
+            );
             if (!model) {
-                const envHint = process.env.PI_ANSWER_MODEL
-                    ? ` (PI_ANSWER_MODEL=${process.env.PI_ANSWER_MODEL})`
-                    : ` (${DEFAULT_ANSWER_MODEL})`;
                 ctx.ui.notify(
-                    `Model not available${envHint}. Check auth or set PI_ANSWER_MODEL.`,
+                    `Model not found: ${ANSWER_MODEL.provider}/${ANSWER_MODEL.model}`,
                     "error",
                 );
                 return;
             }
 
-            const questions = await extractQuestionsWithOverlay(
-                ctx.ui,
-                async (signal) => {
-                    const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
-                    if (!auth.ok) {
-                        throw new Error(
-                            `Auth failed for ${model.id}: ${auth.error}`,
-                        );
-                    }
+            const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
+            if (!auth.ok) {
+                ctx.ui.notify(
+                    `No API key for provider: ${ANSWER_MODEL.provider}`,
+                    "error",
+                );
+                return;
+            }
 
-                    const response = await completeSimple(
-                        model,
-                        {
-                            systemPrompt: EXTRACTION_PROMPT,
-                            messages: [
+            let questions: Question[] | null = null;
+            let lastError: Error | null = null;
+
+            for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+                try {
+                    questions = await extractQuestionsWithOverlay(
+                        ctx.ui,
+                        async (signal) => {
+                            const response = await completeSimple(
+                                model,
                                 {
-                                    role: "user",
-                                    content: [
+                                    systemPrompt: EXTRACTION_PROMPT,
+                                    messages: [
                                         {
-                                            type: "text",
-                                            text: assistantText,
+                                            role: "user",
+                                            content: [
+                                                {
+                                                    type: "text",
+                                                    text: assistantText,
+                                                },
+                                            ],
+                                            timestamp: Date.now(),
                                         },
                                     ],
-                                    timestamp: Date.now(),
                                 },
-                            ],
-                        },
-                        {
-                            apiKey: auth.apiKey,
-                            headers: auth.headers,
-                            signal,
+                                {
+                                    apiKey: auth.apiKey,
+                                    headers: auth.headers,
+                                    signal,
+                                },
+                            );
+
+                            const responseText = response.content
+                                .filter(
+                                    (c): c is { type: "text"; text: string } =>
+                                        c.type === "text",
+                                )
+                                .map((c) => c.text)
+                                .join("");
+
+                            return parseExtractedQuestions(responseText);
                         },
                     );
-
-                    const responseText = response.content
-                        .filter(
-                            (c): c is { type: "text"; text: string } =>
-                                c.type === "text",
-                        )
-                        .map((c) => c.text)
-                        .join("");
-
-                    return parseExtractedQuestions(responseText);
-                },
-            );
+                    break;
+                } catch (error) {
+                    lastError =
+                        error instanceof Error ? error : new Error(String(error));
+                    if (attempt < MAX_RETRIES) {
+                        ctx.ui.notify(
+                            `Extraction failed (attempt ${attempt}/${MAX_RETRIES}), retrying...`,
+                            "warning",
+                        );
+                    }
+                }
+            }
 
             if (!questions) {
+                ctx.ui.notify(
+                    `Extraction failed: ${lastError?.message ?? "Unknown error"}`,
+                    "error",
+                );
                 return;
             }
 
