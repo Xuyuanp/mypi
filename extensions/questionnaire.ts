@@ -181,13 +181,11 @@ function createQuestionnaireUI(
         // State
         let currentTab = 0;
         let optionIndex = -1; // set on first render
-        let inputMode = false;
-        let inputQuestionId: string | null = null;
         let cachedLines: string[] | undefined;
         const answers = new Map<string, Answer>();
 
         const editorTheme: EditorTheme = {
-            borderColor: (s) => theme.fg("accent", s),
+            borderColor: (s) => theme.fg("dim", s),
             selectList: {
                 selectedPrefix: (t) => theme.fg("accent", t),
                 selectedText: (t) => theme.fg("accent", t),
@@ -243,13 +241,11 @@ function createQuestionnaireUI(
                 submit(false);
                 return;
             }
-            if (currentTab < questions.length - 1) {
-                currentTab++;
-            } else {
-                currentTab = questions.length; // Submit tab
-            }
-            optionIndex = -1;
-            refresh();
+            const nextTab =
+                currentTab < questions.length - 1
+                    ? currentTab + 1
+                    : questions.length;
+            switchTab(nextTab);
         }
 
         function saveAnswer(
@@ -259,6 +255,10 @@ function createQuestionnaireUI(
             wasCustom: boolean,
             index?: number,
         ) {
+            const prev = answers.get(questionId);
+            if (!wasCustom && prev?.wasCustom) {
+                editor.setText("");
+            }
             answers.set(questionId, {
                 id: questionId,
                 value,
@@ -268,29 +268,84 @@ function createQuestionnaireUI(
             });
         }
 
+        function isOnOtherOption(opts: RenderOption[]): boolean {
+            return (
+                currentTab < questions.length &&
+                optionIndex >= 0 &&
+                optionIndex < opts.length &&
+                opts[optionIndex]?.isOther === true
+            );
+        }
+
         editor.onSubmit = (value) => {
-            if (!inputQuestionId) return;
-            const trimmed = value.trim() || "(no response)";
-            saveAnswer(inputQuestionId, trimmed, trimmed, true);
-            inputMode = false;
-            inputQuestionId = null;
+            const q = currentQuestion();
+            if (!q) return;
+            const trimmed = value.trim();
+            if (!trimmed) return;
+            saveAnswer(q.id, trimmed, trimmed, true);
             editor.setText("");
             advanceAfterAnswer();
         };
 
         function ensureOptionIndex(opts: RenderOption[]) {
             if (optionIndex < 0) {
-                optionIndex = recommendedIndex(opts);
+                const q = currentQuestion();
+                const answer = q ? answers.get(q.id) : undefined;
+                if (answer) {
+                    if (answer.wasCustom) {
+                        const otherIdx = opts.findIndex((o) => o.isOther);
+                        optionIndex = otherIdx >= 0 ? otherIdx : 0;
+                        editor.setText(answer.value);
+                    } else if (answer.index !== undefined) {
+                        optionIndex = answer.index - 1;
+                    } else {
+                        optionIndex = recommendedIndex(opts);
+                    }
+                } else {
+                    optionIndex = recommendedIndex(opts);
+                }
             }
         }
 
+        function switchTab(tab: number) {
+            editor.setText("");
+            currentTab = tab;
+            optionIndex = -1;
+            refresh();
+        }
+
         function handleInput(data: string) {
-            if (inputMode) {
-                if (matchesKey(data, Key.escape)) {
-                    inputMode = false;
-                    inputQuestionId = null;
-                    editor.setText("");
+            const q = currentQuestion();
+            const opts = currentOptions();
+            ensureOptionIndex(opts);
+
+            // Inline editor mode: cursor is on the "other" option
+            if (isOnOtherOption(opts)) {
+                if (isMulti) {
+                    if (matchesKey(data, Key.tab)) {
+                        switchTab((currentTab + 1) % totalTabs);
+                        return;
+                    }
+                    if (matchesKey(data, Key.shift("tab"))) {
+                        switchTab((currentTab - 1 + totalTabs) % totalTabs);
+                        return;
+                    }
+                }
+                if (matchesKey(data, Key.up)) {
+                    optionIndex = Math.max(0, optionIndex - 1);
                     refresh();
+                    return;
+                }
+                if (matchesKey(data, Key.down)) {
+                    return;
+                }
+                if (matchesKey(data, Key.escape)) {
+                    if (editor.getText().length > 0) {
+                        editor.setText("");
+                        refresh();
+                        return;
+                    }
+                    submit(true);
                     return;
                 }
                 editor.handleInput(data);
@@ -298,19 +353,14 @@ function createQuestionnaireUI(
                 return;
             }
 
-            const q = currentQuestion();
-            const opts = currentOptions();
-            ensureOptionIndex(opts);
-
+            // Multi-question tab navigation
             if (isMulti) {
                 if (
                     matchesKey(data, Key.tab) ||
                     matchesKey(data, Key.right) ||
                     matchesKey(data, "l")
                 ) {
-                    currentTab = (currentTab + 1) % totalTabs;
-                    optionIndex = -1;
-                    refresh();
+                    switchTab((currentTab + 1) % totalTabs);
                     return;
                 }
                 if (
@@ -318,13 +368,12 @@ function createQuestionnaireUI(
                     matchesKey(data, Key.left) ||
                     matchesKey(data, "h")
                 ) {
-                    currentTab = (currentTab - 1 + totalTabs) % totalTabs;
-                    optionIndex = -1;
-                    refresh();
+                    switchTab((currentTab - 1 + totalTabs) % totalTabs);
                     return;
                 }
             }
 
+            // Submit tab
             if (currentTab === questions.length) {
                 if (matchesKey(data, Key.enter) && allAnswered()) {
                     submit(false);
@@ -334,6 +383,7 @@ function createQuestionnaireUI(
                 return;
             }
 
+            // Option navigation
             if (matchesKey(data, Key.up) || matchesKey(data, "k")) {
                 optionIndex = Math.max(0, optionIndex - 1);
                 refresh();
@@ -345,15 +395,9 @@ function createQuestionnaireUI(
                 return;
             }
 
+            // Select option
             if (matchesKey(data, Key.enter) && q) {
                 const opt = opts[optionIndex];
-                if (opt.isOther) {
-                    inputMode = true;
-                    inputQuestionId = q.id;
-                    editor.setText("");
-                    refresh();
-                    return;
-                }
                 saveAnswer(q.id, opt.value, opt.label, false, optionIndex + 1);
                 advanceAfterAnswer();
                 return;
@@ -402,49 +446,68 @@ function createQuestionnaireUI(
             }
 
             function renderOptions() {
+                const savedAnswer = q ? answers.get(q.id) : undefined;
                 for (let i = 0; i < opts.length; i++) {
                     const opt = opts[i];
                     const selected = i === optionIndex;
                     const isOther = opt.isOther === true;
+                    const isAnswered =
+                        savedAnswer !== undefined &&
+                        !isOther &&
+                        savedAnswer.index === i + 1;
+                    const isAnsweredOther =
+                        savedAnswer !== undefined &&
+                        isOther &&
+                        savedAnswer.wasCustom;
                     const prefix = selected ? theme.fg("accent", "> ") : "  ";
                     const color = selected ? "accent" : "text";
+                    const answeredMark =
+                        isAnswered || isAnsweredOther
+                            ? theme.fg("accent", " [answered]")
+                            : "";
                     const recBadge = opt.recommended
                         ? theme.fg("success", " [recommended]")
                         : "";
-                    if (isOther && inputMode) {
-                        add(
-                            prefix +
-                                theme.fg("accent", `${i + 1}. ${opt.label} \u270E`),
-                        );
+                    if (isOther) {
+                        const numPrefix = `${i + 1}. `;
+                        if (selected) {
+                            const inlinePrefix =
+                                prefix + theme.fg("accent", numPrefix);
+                            const indent = " ".repeat(2 + numPrefix.length);
+                            const editorWidth = Math.max(10, width - indent.length);
+                            const editorLines = editor.render(editorWidth);
+                            if (editorLines.length > 0) {
+                                add(inlinePrefix + editorLines[0]);
+                                for (let j = 1; j < editorLines.length; j++) {
+                                    add(`${indent}${editorLines[j]}`);
+                                }
+                            }
+                        } else {
+                            add(
+                                prefix +
+                                    theme.fg("muted", `${numPrefix}Type something`) +
+                                    answeredMark,
+                            );
+                        }
                     } else {
                         add(
                             prefix +
                                 theme.fg(color, `${i + 1}. ${opt.label}`) +
-                                recBadge,
+                                recBadge +
+                                answeredMark,
                         );
-                    }
-                    if (opt.description) {
-                        const indent = "     ";
-                        const maxW = Math.max(10, width - indent.length);
-                        for (const line of wrapText(opt.description, maxW)) {
-                            add(`${indent}${theme.fg("muted", line)}`);
+                        if (opt.description) {
+                            const indent = "     ";
+                            const maxW = Math.max(10, width - indent.length);
+                            for (const line of wrapText(opt.description, maxW)) {
+                                add(`${indent}${theme.fg("muted", line)}`);
+                            }
                         }
                     }
                 }
             }
 
-            if (inputMode && q) {
-                add(theme.fg("text", ` ${q.prompt}`));
-                lines.push("");
-                renderOptions();
-                lines.push("");
-                add(theme.fg("muted", " Your answer:"));
-                for (const line of editor.render(width - 2)) {
-                    add(` ${line}`);
-                }
-                lines.push("");
-                add(theme.fg("dim", " Enter to submit \u2022 Esc to cancel"));
-            } else if (currentTab === questions.length) {
+            if (currentTab === questions.length) {
                 add(theme.fg("accent", theme.bold(" Ready to submit")));
                 lines.push("");
                 for (const question of questions) {
@@ -473,7 +536,12 @@ function createQuestionnaireUI(
             }
 
             lines.push("");
-            if (!inputMode) {
+            if (isOnOtherOption(opts)) {
+                const help = isMulti
+                    ? " Type your answer \u2022 Enter submit \u2022 \u2191 back \u2022 Tab switch \u2022 Esc cancel"
+                    : " Type your answer \u2022 Enter submit \u2022 \u2191 back \u2022 Esc cancel";
+                add(theme.fg("dim", help));
+            } else {
                 const help = isMulti
                     ? " Tab/\u2190\u2192/hl navigate \u2022 \u2191\u2193/jk select \u2022 Enter confirm \u2022 Esc cancel"
                     : " \u2191\u2193/jk select \u2022 Enter confirm \u2022 Esc cancel";
