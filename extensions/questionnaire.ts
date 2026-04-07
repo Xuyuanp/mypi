@@ -127,6 +127,7 @@ Return ONLY valid JSON matching this schema (no markdown fences, no commentary):
       "label": "Short label",
       "prompt": "Full question text",
       "allowOther": true,
+      "multiSelect": false,
       "options": [
         { "value": "a", "label": "Option A", "description": "optional", "recommended": true }
       ]
@@ -141,6 +142,9 @@ Rules:
 - options: extract numbered/bulleted/lettered choices if present.
   For yes/no questions use [{"value":"yes","label":"Yes"},{"value":"no","label":"No"}].
   For open-ended questions with no choices, use an empty array and set allowOther to true.
+- multiSelect: true when the question explicitly allows or asks for multiple selections
+  (e.g. "pick all that apply", "which of these (select any)", "choose one or more").
+  Default false for single-choice, yes/no, or open-ended questions.
 - allowOther: true unless the question strictly requires picking from listed options.
 - If no questions found, return {"questions":[]}.
 - description is optional, use it for sub-text explaining an option.
@@ -761,7 +765,7 @@ function parseExtractedQuestions(json: string): Question[] {
                 prompt: String(q.prompt ?? ""),
                 options,
                 allowOther: true,
-                multiSelect: false,
+                multiSelect: q.multiSelect === true,
             };
         })
         .filter((q) => q.prompt.length > 0);
