@@ -11,141 +11,24 @@
  *
  * Shortcuts:
  *   ctrl+g               # Open editor content in external editor
- *
- * Bang commands (auto-detected or forced):
- *   !vim file.txt        # Auto-detected as interactive
- *   !i any-command       # Force interactive mode with !i prefix
- *   !git rebase -i HEAD~3
- *   !htop
- *
- * Configuration via environment variables:
- *   INTERACTIVE_COMMANDS - Additional commands (comma-separated)
- *   INTERACTIVE_EXCLUDE  - Commands to exclude (comma-separated)
- *
- * Note: This only intercepts user `!` commands, not agent bash tool calls.
  */
 
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+    closeSync,
+    constants,
+    mkdtempSync,
+    openSync,
+    readFileSync,
+    rmSync,
+    writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type {
     ExtensionAPI,
     ExtensionUIContext,
 } from "@mariozechner/pi-coding-agent";
-
-// Default interactive commands - editors, pagers, git ops, TUIs
-const DEFAULT_INTERACTIVE_COMMANDS = [
-    // Editors
-    "vim",
-    "nvim",
-    "vi",
-    "nano",
-    "emacs",
-    "pico",
-    "micro",
-    "helix",
-    "hx",
-    "kak",
-    // Pagers
-    "less",
-    "more",
-    "most",
-    // Git interactive
-    "git commit",
-    "git rebase",
-    "git merge",
-    "git cherry-pick",
-    "git revert",
-    "git add -p",
-    "git add --patch",
-    "git add -i",
-    "git add --interactive",
-    "git stash -p",
-    "git stash --patch",
-    "git reset -p",
-    "git reset --patch",
-    "git checkout -p",
-    "git checkout --patch",
-    "git difftool",
-    "git mergetool",
-    // System monitors
-    "htop",
-    "top",
-    "btop",
-    "glances",
-    // File managers
-    "ranger",
-    "nnn",
-    "lf",
-    "mc",
-    "vifm",
-    // Git TUIs
-    "tig",
-    "lazygit",
-    "gitui",
-    // Fuzzy finders
-    "fzf",
-    "sk",
-    // Remote sessions
-    "ssh",
-    "telnet",
-    "mosh",
-    // Database clients
-    "psql",
-    "mysql",
-    "sqlite3",
-    "mongosh",
-    "redis-cli",
-    // Kubernetes/Docker
-    "kubectl edit",
-    "kubectl exec -it",
-    "docker exec -it",
-    "docker run -it",
-    // Other
-    "tmux",
-    "screen",
-    "ncdu",
-];
-
-function getInteractiveCommands(): string[] {
-    const additional =
-        process.env.INTERACTIVE_COMMANDS?.split(",")
-            .map((s) => s.trim())
-            .filter(Boolean) ?? [];
-    const excluded = new Set(
-        process.env.INTERACTIVE_EXCLUDE?.split(",").map((s) =>
-            s.trim().toLowerCase(),
-        ) ?? [],
-    );
-    return [...DEFAULT_INTERACTIVE_COMMANDS, ...additional].filter(
-        (cmd) => !excluded.has(cmd.toLowerCase()),
-    );
-}
-
-function isInteractiveCommand(command: string): boolean {
-    const trimmed = command.trim().toLowerCase();
-    const commands = getInteractiveCommands();
-
-    for (const cmd of commands) {
-        const cmdLower = cmd.toLowerCase();
-        if (
-            trimmed === cmdLower ||
-            trimmed.startsWith(`${cmdLower} `) ||
-            trimmed.startsWith(`${cmdLower}\t`)
-        ) {
-            return true;
-        }
-        const pipeIdx = trimmed.lastIndexOf("|");
-        if (pipeIdx !== -1) {
-            const afterPipe = trimmed.slice(pipeIdx + 1).trim();
-            if (afterPipe === cmdLower || afterPipe.startsWith(`${cmdLower} `)) {
-                return true;
-            }
-        }
-    }
-    return false;
-}
 
 function saveTtyState(): string | null {
     const result = spawnSync("stty", ["-g"], {
@@ -173,7 +56,8 @@ async function forceRerender(ui: ExtensionUIContext): Promise<void> {
 // Detect /dev/tty once; it won't appear mid-process.
 const hasDevTty = (() => {
     try {
-        writeFileSync("/dev/tty", "");
+        const fd = openSync("/dev/tty", constants.O_WRONLY | constants.O_NOCTTY);
+        closeSync(fd);
         return true;
     } catch {
         return false;
@@ -255,49 +139,6 @@ export default function (pi: ExtensionAPI) {
             const shArgs: string[] = args.trim().length > 0 ? ["-c", args] : [];
             await runShellInteractively(ctx.ui, shArgs);
         },
-    });
-
-    pi.on("user_bash", async (event, ctx) => {
-        let command = event.command;
-        let forceInteractive = false;
-
-        if (command.startsWith("i ") || command.startsWith("i\t")) {
-            forceInteractive = true;
-            command = command.slice(2).trim();
-        }
-
-        const shouldBeInteractive =
-            forceInteractive || isInteractiveCommand(command);
-        if (!shouldBeInteractive) {
-            return;
-        }
-
-        if (!ctx.hasUI) {
-            return {
-                result: {
-                    output: "(interactive commands require TUI)",
-                    exitCode: 1,
-                    cancelled: false,
-                    truncated: false,
-                },
-            };
-        }
-
-        const exitCode = await runShellInteractively(ctx.ui, ["-c", command]);
-
-        const output =
-            exitCode === 0
-                ? "(interactive command completed successfully)"
-                : `(interactive command exited with code ${exitCode})`;
-
-        return {
-            result: {
-                output,
-                exitCode: exitCode ?? 1,
-                cancelled: false,
-                truncated: false,
-            },
-        };
     });
 
     pi.registerShortcut("ctrl+g", {
