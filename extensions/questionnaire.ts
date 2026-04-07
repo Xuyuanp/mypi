@@ -39,20 +39,25 @@ interface QuestionOption {
 
 type RenderOption = QuestionOption & { isOther?: boolean };
 
+interface Selection {
+    value: string;
+    label: string;
+    wasCustom: boolean;
+    index?: number;
+}
+
 interface Question {
     id: string;
     label: string;
     prompt: string;
     options: QuestionOption[];
     allowOther: boolean;
+    multiSelect: boolean;
 }
 
-interface Answer {
+interface Answer extends Selection {
     id: string;
-    value: string;
-    label: string;
-    wasCustom: boolean;
-    index?: number;
+    selections?: Selection[];
 }
 
 interface QuestionnaireResult {
@@ -91,6 +96,11 @@ const QuestionSchema = Type.Object({
     allowOther: Type.Optional(
         Type.Boolean({
             description: "Allow 'Type something' option (default: true)",
+        }),
+    ),
+    multiSelect: Type.Optional(
+        Type.Boolean({
+            description: "Allow selecting multiple options (default: false)",
         }),
     ),
 });
@@ -183,6 +193,7 @@ function createQuestionnaireUI(
         let optionIndex = -1; // set on first render
         let cachedLines: string[] | undefined;
         const answers = new Map<string, Answer>();
+        const toggledIndices = new Map<string, Set<number>>();
 
         const editorTheme: EditorTheme = {
             borderColor: (s) => theme.fg("dim", s),
@@ -277,9 +288,54 @@ function createQuestionnaireUI(
             );
         }
 
+        function confirmMultiSelect(editorText?: string) {
+            const q = currentQuestion();
+            if (!q) return;
+            const opts = currentOptions();
+            const toggled = toggledIndices.get(q.id) ?? new Set();
+            const customText = editorText?.trim() ?? editor.getText().trim();
+
+            const sels: Selection[] = [];
+            for (const idx of [...toggled].sort((a, b) => a - b)) {
+                const opt = opts[idx];
+                if (opt && !opt.isOther) {
+                    sels.push({
+                        value: opt.value,
+                        label: opt.label,
+                        wasCustom: false,
+                        index: idx + 1,
+                    });
+                }
+            }
+            if (customText) {
+                sels.push({
+                    value: customText,
+                    label: customText,
+                    wasCustom: true,
+                });
+            }
+            if (sels.length === 0) return;
+
+            const labels = sels.map((s) => s.label).join(", ");
+            const value = sels.map((s) => s.value).join(", ");
+            answers.set(q.id, {
+                id: q.id,
+                value,
+                label: labels,
+                wasCustom: sels.some((s) => s.wasCustom),
+                selections: sels,
+            });
+            toggledIndices.delete(q.id);
+            advanceAfterAnswer();
+        }
+
         editor.onSubmit = (value) => {
             const q = currentQuestion();
             if (!q) return;
+            if (q.multiSelect) {
+                confirmMultiSelect(value);
+                return;
+            }
             const trimmed = value.trim();
             if (!trimmed) return;
             saveAnswer(q.id, trimmed, trimmed, true);
@@ -291,7 +347,22 @@ function createQuestionnaireUI(
             if (optionIndex < 0) {
                 const q = currentQuestion();
                 const answer = q ? answers.get(q.id) : undefined;
-                if (answer) {
+                if (answer?.selections) {
+                    const toggled = new Set<number>();
+                    let customText = "";
+                    for (const sel of answer.selections) {
+                        if (sel.wasCustom) {
+                            customText = sel.value;
+                        } else if (sel.index !== undefined) {
+                            toggled.add(sel.index - 1);
+                        }
+                    }
+                    toggledIndices.set(q.id, toggled);
+                    if (customText) editor.setText(customText);
+                    const sorted = [...toggled].sort((a, b) => a - b);
+                    optionIndex =
+                        sorted.length > 0 ? sorted[0] : recommendedIndex(opts);
+                } else if (answer) {
                     if (answer.wasCustom) {
                         const otherIdx = opts.findIndex((o) => o.isOther);
                         optionIndex = otherIdx >= 0 ? otherIdx : 0;
@@ -395,8 +466,23 @@ function createQuestionnaireUI(
                 return;
             }
 
-            // Select option
+            if (matchesKey(data, Key.space) && q?.multiSelect) {
+                const toggled = toggledIndices.get(q.id) ?? new Set();
+                if (toggled.has(optionIndex)) {
+                    toggled.delete(optionIndex);
+                } else {
+                    toggled.add(optionIndex);
+                }
+                toggledIndices.set(q.id, toggled);
+                refresh();
+                return;
+            }
+
             if (matchesKey(data, Key.enter) && q) {
+                if (q.multiSelect) {
+                    confirmMultiSelect();
+                    return;
+                }
                 const opt = opts[optionIndex];
                 saveAnswer(q.id, opt.value, opt.label, false, optionIndex + 1);
                 advanceAfterAnswer();
@@ -445,35 +531,56 @@ function createQuestionnaireUI(
                 lines.push("");
             }
 
+            const isMS = q?.multiSelect === true;
+
             function renderOptions() {
                 const savedAnswer = q ? answers.get(q.id) : undefined;
+                const toggled = q
+                    ? (toggledIndices.get(q.id) ?? EMPTY_NUM_SET)
+                    : EMPTY_NUM_SET;
+                const editorText = editor.getText().trim();
+
                 for (let i = 0; i < opts.length; i++) {
                     const opt = opts[i];
                     const selected = i === optionIndex;
                     const isOther = opt.isOther === true;
-                    const isAnswered =
-                        savedAnswer !== undefined &&
-                        !isOther &&
-                        savedAnswer.index === i + 1;
-                    const isAnsweredOther =
-                        savedAnswer !== undefined &&
-                        isOther &&
-                        savedAnswer.wasCustom;
                     const prefix = selected ? theme.fg("accent", "> ") : "  ";
                     const color = selected ? "accent" : "text";
+
+                    let checkbox = "";
+                    if (isMS) {
+                        const isToggled = isOther
+                            ? editorText.length > 0
+                            : toggled.has(i);
+                        const cbColor = selected
+                            ? "accent"
+                            : isToggled
+                              ? "success"
+                              : "muted";
+                        checkbox = theme.fg(cbColor, isToggled ? "[x] " : "[ ] ");
+                    }
+
                     const answeredMark =
-                        isAnswered || isAnsweredOther
+                        !isMS &&
+                        savedAnswer !== undefined &&
+                        ((!isOther && savedAnswer.index === i + 1) ||
+                            (isOther && savedAnswer.wasCustom))
                             ? theme.fg("accent", " [answered]")
                             : "";
                     const recBadge = opt.recommended
                         ? theme.fg("success", " [recommended]")
                         : "";
+
+                    const numPrefix = `${i + 1}. `;
+                    const extraIndent = isMS ? 4 : 0; // "[x] " width
+
                     if (isOther) {
-                        const numPrefix = `${i + 1}. `;
                         if (selected) {
                             const inlinePrefix =
-                                prefix + theme.fg("accent", numPrefix);
-                            const indent = " ".repeat(2 + numPrefix.length);
+                                prefix + checkbox + theme.fg("accent", numPrefix);
+                            const indent = " ".repeat(
+                                2 + extraIndent + numPrefix.length,
+                            );
                             const editorWidth = Math.max(10, width - indent.length);
                             const editorLines = editor.render(editorWidth);
                             if (editorLines.length > 0) {
@@ -483,21 +590,36 @@ function createQuestionnaireUI(
                                 }
                             }
                         } else {
-                            add(
-                                prefix +
-                                    theme.fg("muted", `${numPrefix}Type something`) +
-                                    answeredMark,
-                            );
+                            if (editorText) {
+                                add(
+                                    prefix +
+                                        checkbox +
+                                        theme.fg("muted", numPrefix) +
+                                        theme.fg("text", editorText) +
+                                        answeredMark,
+                                );
+                            } else {
+                                add(
+                                    prefix +
+                                        checkbox +
+                                        theme.fg(
+                                            "muted",
+                                            `${numPrefix}Type something`,
+                                        ) +
+                                        answeredMark,
+                                );
+                            }
                         }
                     } else {
                         add(
                             prefix +
-                                theme.fg(color, `${i + 1}. ${opt.label}`) +
+                                checkbox +
+                                theme.fg(color, `${numPrefix}${opt.label}`) +
                                 recBadge +
                                 answeredMark,
                         );
                         if (opt.description) {
-                            const indent = "     ";
+                            const indent = " ".repeat(5 + extraIndent);
                             const maxW = Math.max(10, width - indent.length);
                             for (const line of wrapText(opt.description, maxW)) {
                                 add(`${indent}${theme.fg("muted", line)}`);
@@ -513,9 +635,15 @@ function createQuestionnaireUI(
                 for (const question of questions) {
                     const answer = answers.get(question.id);
                     if (answer) {
-                        const prefix = answer.wasCustom ? "(wrote) " : "";
+                        const display = answer.selections
+                            ? answer.selections
+                                  .map((s) =>
+                                      s.wasCustom ? `(wrote) ${s.label}` : s.label,
+                                  )
+                                  .join(", ")
+                            : (answer.wasCustom ? "(wrote) " : "") + answer.label;
                         add(
-                            `${theme.fg("muted", ` ${question.label}: `)}${theme.fg("text", prefix + answer.label)}`,
+                            `${theme.fg("muted", ` ${question.label}: `)}${theme.fg("text", display)}`,
                         );
                     }
                 }
@@ -537,9 +665,15 @@ function createQuestionnaireUI(
 
             lines.push("");
             if (isOnOtherOption(opts)) {
+                const verb = isMS ? "confirm" : "submit";
                 const help = isMulti
-                    ? " Type your answer \u2022 Enter submit \u2022 \u2191 back \u2022 Tab switch \u2022 Esc cancel"
-                    : " Type your answer \u2022 Enter submit \u2022 \u2191 back \u2022 Esc cancel";
+                    ? ` Type your answer \u2022 Enter ${verb} \u2022 \u2191 back \u2022 Tab switch \u2022 Esc cancel`
+                    : ` Type your answer \u2022 Enter ${verb} \u2022 \u2191 back \u2022 Esc cancel`;
+                add(theme.fg("dim", help));
+            } else if (isMS) {
+                const help = isMulti
+                    ? " Space toggle \u2022 Enter confirm \u2022 Tab/\u2190\u2192/hl navigate \u2022 \u2191\u2193/jk select \u2022 Esc cancel"
+                    : " Space toggle \u2022 Enter confirm \u2022 \u2191\u2193/jk select \u2022 Esc cancel";
                 add(theme.fg("dim", help));
             } else {
                 const help = isMulti
@@ -627,10 +761,13 @@ function parseExtractedQuestions(json: string): Question[] {
                 prompt: String(q.prompt ?? ""),
                 options,
                 allowOther: true,
+                multiSelect: false,
             };
         })
         .filter((q) => q.prompt.length > 0);
 }
+
+const EMPTY_NUM_SET: ReadonlySet<number> = new Set();
 
 const SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠴", "⠦", "⠇", "⠏"];
 const SPINNER_INTERVAL_MS = 80;
@@ -691,10 +828,33 @@ function extractQuestionsWithOverlay(
     });
 }
 
+function formatMultiSelectAnswer(
+    qLabel: string,
+    selections: Selection[],
+): string {
+    const parts: string[] = [];
+    const selected = selections.filter((s) => !s.wasCustom);
+    const custom = selections.filter((s) => s.wasCustom);
+    if (selected.length > 0) {
+        parts.push(
+            `user selected: ${selected.map((s) => `${s.index}. ${s.label}`).join(", ")}`,
+        );
+    }
+    if (custom.length > 0) {
+        parts.push(
+            `user wrote: ${custom.map((s) => s.label).join(", ")}`,
+        );
+    }
+    return `${qLabel}: ${parts.join("; ")}`;
+}
+
 function formatAnswers(questions: Question[], answers: Answer[]): string {
     return answers
         .map((a) => {
             const qLabel = questions.find((q) => q.id === a.id)?.label || a.id;
+            if (a.selections) {
+                return formatMultiSelectAnswer(qLabel, a.selections);
+            }
             if (a.wasCustom) {
                 return `${qLabel}: ${a.label}`;
             }
@@ -726,6 +886,7 @@ export default function questionnaire(pi: ExtensionAPI) {
                 ...q,
                 label: q.label || `Q${i + 1}`,
                 allowOther: q.allowOther !== false,
+                multiSelect: q.multiSelect === true,
             }));
 
             const result = await showQuestionnaireUI(ctx.ui, questions);
@@ -741,6 +902,9 @@ export default function questionnaire(pi: ExtensionAPI) {
 
             const answerLines = result.answers.map((a) => {
                 const qLabel = questions.find((q) => q.id === a.id)?.label || a.id;
+                if (a.selections) {
+                    return formatMultiSelectAnswer(qLabel, a.selections);
+                }
                 if (a.wasCustom) {
                     return `${qLabel}: user wrote: ${a.label}`;
                 }
@@ -775,11 +939,25 @@ export default function questionnaire(pi: ExtensionAPI) {
                 return new Text(theme.fg("warning", "Cancelled"), 0, 0);
             }
             const lines = details.answers.map((a) => {
+                const check = theme.fg("success", "\u2713 ");
+                const id = theme.fg("accent", a.id);
+                if (a.selections) {
+                    const display = a.selections
+                        .map((s) =>
+                            s.wasCustom
+                                ? `${theme.fg("muted", "(wrote) ")}${s.label}`
+                                : s.index
+                                  ? `${s.index}. ${s.label}`
+                                  : s.label,
+                        )
+                        .join(", ");
+                    return `${check}${id}: ${display}`;
+                }
                 if (a.wasCustom) {
-                    return `${theme.fg("success", "\u2713 ")}${theme.fg("accent", a.id)}: ${theme.fg("muted", "(wrote) ")}${a.label}`;
+                    return `${check}${id}: ${theme.fg("muted", "(wrote) ")}${a.label}`;
                 }
                 const display = a.index ? `${a.index}. ${a.label}` : a.label;
-                return `${theme.fg("success", "\u2713 ")}${theme.fg("accent", a.id)}: ${display}`;
+                return `${check}${id}: ${display}`;
             });
             return new Text(lines.join("\n"), 0, 0);
         },
