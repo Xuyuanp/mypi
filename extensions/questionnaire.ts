@@ -23,12 +23,11 @@ import {
     Key,
     type KeybindingsManager,
     matchesKey,
-    // Text,
+    Text,
     type TUI,
     truncateToWidth,
 } from "@mariozechner/pi-tui";
-
-// import { Type } from "@sinclair/typebox";
+import { Type } from "@sinclair/typebox";
 
 // Types
 interface QuestionOption {
@@ -67,8 +66,7 @@ interface QuestionnaireResult {
     cancelled: boolean;
 }
 
-// Schema -- temporarily commented out with tool registration
-/*
+// Schema
 const QuestionOptionSchema = Type.Object({
     value: Type.String({ description: "The value returned when selected" }),
     label: Type.String({ description: "Display label for the option" }),
@@ -112,7 +110,6 @@ const QuestionnaireParams = Type.Object({
         description: "Questions to ask the user",
     }),
 });
-*/
 
 // /answer constants
 const DEFAULT_ANSWER_MODEL = "claude-haiku-4-5";
@@ -173,8 +170,6 @@ function wrapText(text: string, maxWidth: number): string[] {
     return lines.length > 0 ? lines : [""];
 }
 
-// temporarily commented out with tool registration
-/*
 function errorResult(
     message: string,
     questions: Question[] = [],
@@ -184,7 +179,6 @@ function errorResult(
         details: { questions, answers: [], cancelled: true },
     };
 }
-*/
 
 function createQuestionnaireUI(
     questions: Question[],
@@ -356,11 +350,7 @@ function createQuestionnaireUI(
         function ensureOptionIndex(opts: RenderOption[]) {
             if (optionIndex < 0) {
                 const q = currentQuestion();
-                if (!q) {
-                    optionIndex = recommendedIndex(opts);
-                    return;
-                }
-                const answer = answers.get(q.id);
+                const answer = q ? answers.get(q.id) : undefined;
                 if (answer?.selections) {
                     const toggled = new Set<number>();
                     let customText = "";
@@ -842,7 +832,10 @@ function extractQuestionsWithOverlay(
     });
 }
 
-function formatMultiSelectAnswer(qLabel: string, selections: Selection[]): string {
+function formatMultiSelectAnswer(
+    qLabel: string,
+    selections: Selection[],
+): string {
     const parts: string[] = [];
     const selected = selections.filter((s) => !s.wasCustom);
     const custom = selections.filter((s) => s.wasCustom);
@@ -852,7 +845,9 @@ function formatMultiSelectAnswer(qLabel: string, selections: Selection[]): strin
         );
     }
     if (custom.length > 0) {
-        parts.push(`user wrote: ${custom.map((s) => s.label).join(", ")}`);
+        parts.push(
+            `user wrote: ${custom.map((s) => s.label).join(", ")}`,
+        );
     }
     return `${qLabel}: ${parts.join("; ")}`;
 }
@@ -872,118 +867,8 @@ function formatAnswers(questions: Question[], answers: Answer[]): string {
         .join("\n");
 }
 
-async function runAnswerFlow(
-    assistantText: string,
-    ui: ExtensionUIContext,
-    modelRegistry: ModelRegistry,
-    sendAnswer: (text: string) => void,
-): Promise<void> {
-    const model = resolveModel(modelRegistry);
-    if (!model) {
-        const envHint = process.env.PI_ANSWER_MODEL
-            ? ` (PI_ANSWER_MODEL=${process.env.PI_ANSWER_MODEL})`
-            : ` (${DEFAULT_ANSWER_MODEL})`;
-        ui.notify(
-            `Model not available${envHint}. Check auth or set PI_ANSWER_MODEL.`,
-            "error",
-        );
-        return;
-    }
-
-    const questions = await extractQuestionsWithOverlay(ui, async (signal) => {
-        const auth = await modelRegistry.getApiKeyAndHeaders(model);
-        if (!auth.ok) {
-            throw new Error(`Auth failed for ${model.id}: ${auth.error}`);
-        }
-
-        const response = await completeSimple(
-            model,
-            {
-                systemPrompt: EXTRACTION_PROMPT,
-                messages: [
-                    {
-                        role: "user",
-                        content: [
-                            {
-                                type: "text",
-                                text: assistantText,
-                            },
-                        ],
-                        timestamp: Date.now(),
-                    },
-                ],
-            },
-            {
-                apiKey: auth.apiKey,
-                headers: auth.headers,
-                signal,
-            },
-        );
-
-        const responseText = response.content
-            .filter((c): c is { type: "text"; text: string } => c.type === "text")
-            .map((c) => c.text)
-            .join("");
-
-        return parseExtractedQuestions(responseText);
-    });
-
-    if (!questions) {
-        return;
-    }
-
-    if (questions.length === 0) {
-        ui.notify("No questions found in the last assistant message", "warning");
-        return;
-    }
-
-    const result = await showQuestionnaireUI(ui, questions);
-
-    if (result.cancelled) {
-        ui.notify("Cancelled", "warning");
-        return;
-    }
-
-    const text = formatAnswers(questions, result.answers);
-    sendAnswer(text);
-}
-
-function endsWithQuestion(text: string): boolean {
-    const lines = text.split("\n").filter((l) => l.trim().length > 0);
-    if (lines.length === 0) return false;
-    const check = [
-        lines[0],
-        lines.length > 1 ? lines[1] : undefined,
-        lines[lines.length - 1],
-    ];
-    return check.some((l) => l?.trimEnd().endsWith("?"));
-}
-
-function extractLastAssistantText(
-    messages: { role?: string; content?: unknown }[],
-): string | undefined {
-    for (let i = messages.length - 1; i >= 0; i--) {
-        const msg = messages[i];
-        if (msg.role === "assistant" && Array.isArray(msg.content)) {
-            const texts = msg.content
-                .filter(
-                    (c: unknown): c is { type: "text"; text: string } =>
-                        typeof c === "object" &&
-                        c !== null &&
-                        (c as Record<string, unknown>).type === "text" &&
-                        typeof (c as Record<string, unknown>).text === "string",
-                )
-                .map((c) => c.text);
-            if (texts.length > 0) return texts.join("\n");
-        }
-    }
-    return undefined;
-}
-
 // Extension entry point
 export default function questionnaire(pi: ExtensionAPI) {
-    // TODO: temporarily disabled -- using agent_end auto-answer instead
-    /*
     pi.registerTool({
         name: "questionnaire",
         label: "Questionnaire",
@@ -1081,23 +966,6 @@ export default function questionnaire(pi: ExtensionAPI) {
             return new Text(lines.join("\n"), 0, 0);
         },
     });
-    */
-
-    // Auto-answer when agent ends with a question
-    pi.on("agent_end", async (event, ctx) => {
-        if (!ctx.hasUI) return;
-
-        const assistantText = extractLastAssistantText(
-            event.messages as { role?: string; content?: unknown }[],
-        );
-        if (!assistantText) return;
-
-        if (!endsWithQuestion(assistantText)) return;
-
-        await runAnswerFlow(assistantText, ctx.ui, ctx.modelRegistry, (text) =>
-            pi.sendUserMessage(text),
-        );
-    });
 
     // /answer command
     pi.registerCommand("answer", {
@@ -1115,9 +983,85 @@ export default function questionnaire(pi: ExtensionAPI) {
                 return;
             }
 
-            await runAnswerFlow(assistantText, ctx.ui, ctx.modelRegistry, (text) =>
-                pi.sendUserMessage(text),
+            const model = resolveModel(ctx.modelRegistry);
+            if (!model) {
+                const envHint = process.env.PI_ANSWER_MODEL
+                    ? ` (PI_ANSWER_MODEL=${process.env.PI_ANSWER_MODEL})`
+                    : ` (${DEFAULT_ANSWER_MODEL})`;
+                ctx.ui.notify(
+                    `Model not available${envHint}. Check auth or set PI_ANSWER_MODEL.`,
+                    "error",
+                );
+                return;
+            }
+
+            const questions = await extractQuestionsWithOverlay(
+                ctx.ui,
+                async (signal) => {
+                    const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
+                    if (!auth.ok) {
+                        throw new Error(
+                            `Auth failed for ${model.id}: ${auth.error}`,
+                        );
+                    }
+
+                    const response = await completeSimple(
+                        model,
+                        {
+                            systemPrompt: EXTRACTION_PROMPT,
+                            messages: [
+                                {
+                                    role: "user",
+                                    content: [
+                                        {
+                                            type: "text",
+                                            text: assistantText,
+                                        },
+                                    ],
+                                    timestamp: Date.now(),
+                                },
+                            ],
+                        },
+                        {
+                            apiKey: auth.apiKey,
+                            headers: auth.headers,
+                            signal,
+                        },
+                    );
+
+                    const responseText = response.content
+                        .filter(
+                            (c): c is { type: "text"; text: string } =>
+                                c.type === "text",
+                        )
+                        .map((c) => c.text)
+                        .join("");
+
+                    return parseExtractedQuestions(responseText);
+                },
             );
+
+            if (!questions) {
+                return;
+            }
+
+            if (questions.length === 0) {
+                ctx.ui.notify(
+                    "No questions found in the last assistant message",
+                    "warning",
+                );
+                return;
+            }
+
+            const result = await showQuestionnaireUI(ctx.ui, questions);
+
+            if (result.cancelled) {
+                ctx.ui.notify("Cancelled", "warning");
+                return;
+            }
+
+            const text = formatAnswers(questions, result.answers);
+            pi.sendUserMessage(text);
         },
     });
 }
