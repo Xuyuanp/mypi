@@ -115,10 +115,6 @@ export default function (pi: ExtensionAPI) {
         isOwner = true;
         setOption(OPTION_RUNNING, "1");
         setStatus("idle");
-        syncName();
-    });
-
-    pi.on("session_switch", async () => {
         cachedName = undefined;
         syncName();
     });
