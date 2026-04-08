@@ -1,3 +1,4 @@
+import process from "node:process";
 import {
     type AssistantMessage,
     completeSimple,
@@ -6,7 +7,6 @@ import {
     type UserMessage,
 } from "@mariozechner/pi-ai";
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
-import process from "node:process";
 
 const TITLE_MODEL_PROVIDER = process.env.PI_TITLE_MODEL_PROVIDER ?? "anthropic";
 const TITLE_MODEL_NAME = process.env.PI_TITLE_MODEL_NAME ?? "claude-haiku-4-5";
