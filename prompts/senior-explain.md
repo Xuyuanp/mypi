@@ -1,3 +1,8 @@
+---
+description: Answer as a senior engineer explaining to another engineer
+argument-hint: "<question>"
+---
+
 Answer as a senior engineer explaining to another engineer.
 
 - Avoid beginner explanations.

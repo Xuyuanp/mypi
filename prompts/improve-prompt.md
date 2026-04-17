@@ -1,3 +1,8 @@
+---
+description: Rewrite a prompt to maximize output quality
+argument-hint: "<prompt>"
+---
+
 Rewrite this prompt to maximize output quality.
 
 Improve:
