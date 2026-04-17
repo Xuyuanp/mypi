@@ -1,5 +1,6 @@
 ---
 description: start a review-fix loop to fix all P0-P2 issues in the codebase, and make a decision log in DECISIONS.md for those you disagree with
+argument-hint: "[scope/context]"
 ---
 
 $ARGUMENTS <!-- optional: scope filter, extra context, e.g. "focus on pkg/server/" -->
