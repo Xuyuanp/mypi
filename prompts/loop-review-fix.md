@@ -9,7 +9,7 @@ $ARGUMENTS <!-- optional: scope filter, extra context, e.g. "focus on pkg/server
 
 Start a loop (max 5 iterations):
 
-1. Run command `pi --model openai/gpt-5.3-codex --print --offline --no-session --review uncommitted go > REVIEW.md` (set a longer timeout if needed; review can be slow on large diffs).
+1. Run command `pi --model github-copilot/gpt-5.3-codex --print --offline --no-session --review uncommitted go > REVIEW.md` (set a longer timeout if needed; review can be slow on large diffs).
 2. Read the result in REVIEW.md.
 3. Read DECISIONS.md (if it exists) to learn which issues have already been decided.
 4. For every P0-P2 issue in REVIEW.md, run the **Per-Issue Procedure** below.
