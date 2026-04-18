@@ -6,7 +6,8 @@
  * by default, or 1 hour when PI_CACHE_RETENTION=long.
  *
  * - Green dot: cache likely alive (within TTL of last LLM call)
- * - Yellow dot: cache likely expired (TTL elapsed since last LLM call)
+ * - Yellow dot: cache likely expired (TTL elapsed, or compaction
+ *   invalidated the server-side prefix)
  *
  * Only shown for Anthropic models.
  */
@@ -42,6 +43,7 @@ function renderDot(
 export default function (pi: ExtensionAPI) {
     let expiryTimer: ReturnType<typeof setTimeout> | null = null;
     let lastCtx: ExtensionContext | null = null;
+    let ttlMs = TTL_SHORT_MS;
 
     function clearTimer(): void {
         if (expiryTimer !== null) {
@@ -74,7 +76,7 @@ export default function (pi: ExtensionAPI) {
     }
 
     function resetTimer(ctx: ExtensionContext): void {
-        startTimer(ctx, getTtlMs());
+        startTimer(ctx, ttlMs);
     }
 
     /**
@@ -102,9 +104,9 @@ export default function (pi: ExtensionAPI) {
         const lastTs = findLastAnthropicTimestamp(ctx);
         if (lastTs === undefined) return;
 
+        ttlMs = getTtlMs();
         const elapsed = Date.now() - lastTs;
-        const ttl = getTtlMs();
-        const remaining = ttl - elapsed;
+        const remaining = ttlMs - elapsed;
 
         if (remaining > 0) {
             startTimer(ctx, remaining);
@@ -124,11 +126,21 @@ export default function (pi: ExtensionAPI) {
         if (event.model.provider !== "anthropic") {
             clearTimer();
             hide(ctx);
+        } else {
+            lastCtx = ctx;
         }
+    });
+
+    pi.on("session_compact", async (_event, ctx) => {
+        if (!ctx.hasUI) return;
+        clearTimer();
+        lastCtx = ctx;
+        setExpired();
     });
 
     pi.on("session_shutdown", async () => {
         clearTimer();
         lastCtx = null;
+        ttlMs = TTL_SHORT_MS;
     });
 }
