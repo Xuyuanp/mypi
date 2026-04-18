@@ -8,9 +8,11 @@
  * Commands:
  *   /edit [path]         # Open $EDITOR (defaults to nvim)
  *   /shell [command]     # Open $SHELL, optionally running a command
+ *   /view                # View last assistant message in editor (readonly)
  *
  * Shortcuts:
  *   ctrl+g               # Open editor content in external editor
+ *   ctrl+shift+v         # View last assistant message in editor (readonly)
  */
 
 import { spawnSync } from "node:child_process";
@@ -28,6 +30,7 @@ import { join } from "node:path";
 import type {
     ExtensionAPI,
     ExtensionUIContext,
+    ReadonlySessionManager,
 } from "@mariozechner/pi-coding-agent";
 
 function saveTtyState(): string | null {
@@ -111,6 +114,59 @@ async function runShellInteractively(
     return exitCode;
 }
 
+function getLastAssistantText(
+    sessionManager: ReadonlySessionManager,
+): string | undefined {
+    const branch = sessionManager.getBranch();
+    for (let i = branch.length - 1; i >= 0; i--) {
+        const entry = branch[i];
+        if (entry.type !== "message") continue;
+        const msg = entry.message;
+        if (msg.role !== "assistant") continue;
+        for (let j = msg.content.length - 1; j >= 0; j--) {
+            const block = msg.content[j];
+            if (block.type === "text") return block.text;
+        }
+        return undefined;
+    }
+    return undefined;
+}
+
+async function viewLastAssistantMessage(
+    ui: ExtensionUIContext,
+    sessionManager: ReadonlySessionManager,
+): Promise<void> {
+    const text = getLastAssistantText(sessionManager);
+    if (!text) {
+        ui.notify("No assistant message to view", "warning");
+        return;
+    }
+
+    const dir = mkdtempSync(join(tmpdir(), "pi-view-"));
+    const tmpFile = join(dir, "assistant.md");
+
+    try {
+        writeFileSync(tmpFile, text, "utf-8");
+
+        const editor = process.env.EDITOR || "nvim";
+        const args: string[] = [];
+        if (/n?vim$/.test(editor)) args.push("-R");
+        args.push(tmpFile);
+
+        const exitCode = runInteractiveCommand(defaultShell, [
+            "-c",
+            `${editor} ${args.join(" ")}`,
+        ]);
+        await forceRerender(ui);
+
+        if (exitCode !== 0 && exitCode !== null) {
+            ui.notify(`Editor exited with code ${exitCode}`, "warning");
+        }
+    } finally {
+        rmSync(dir, { recursive: true, force: true });
+    }
+}
+
 export default function (pi: ExtensionAPI) {
     pi.registerCommand("edit", {
         description: "Open editor",
@@ -138,6 +194,22 @@ export default function (pi: ExtensionAPI) {
 
             const shArgs: string[] = args.trim().length > 0 ? ["-c", args] : [];
             await runShellInteractively(ctx.ui, shArgs);
+        },
+    });
+
+    pi.registerCommand("view", {
+        description: "View last assistant message in editor",
+        handler: async (_args, ctx) => {
+            if (!ctx.hasUI || !ctx.isIdle()) return;
+            await viewLastAssistantMessage(ctx.ui, ctx.sessionManager);
+        },
+    });
+
+    pi.registerShortcut("ctrl+shift+v", {
+        description: "View last assistant message in editor",
+        handler: async (ctx) => {
+            if (!ctx.hasUI || !ctx.isIdle()) return;
+            await viewLastAssistantMessage(ctx.ui, ctx.sessionManager);
         },
     });
 
