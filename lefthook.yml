@@ -1,0 +1,13 @@
+# Lefthook git hooks manager
+# https://github.com/evilmartians/lefthook
+
+output:
+  - summary
+  - failure
+
+pre-commit:
+  commands:
+    check:
+      glob: "*.ts"
+      run: npm run check -- {staged_files}
+      stage_fixed: true

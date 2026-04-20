@@ -38,7 +38,7 @@
 ### Formatting & Linting
 
 - Enforced by [Biome](https://biomejs.dev/) via `biome.json`
-- Run `make format` to format, `make lint` to check, `make fix` to format + auto-fix safe lint issues
+- Run `npm run check` to format + lint + auto-fix safe issues
 - 4-space indentation, semicolons, double quotes for strings
 - Trailing commas in multi-line constructs
 - Line width: 85
