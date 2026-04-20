@@ -21,6 +21,12 @@
       "./themes/"
     ]
   },
+  "scripts": {
+    "check": "biome check --fix --no-errors-on-unmatched --error-on-warnings --files-ignore-unknown=true --colors=off"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.4.11"
+  },
   "peerDependencies": {
     "@mariozechner/pi-agent-core": "^0.67.6",
     "@mariozechner/pi-ai": "^0.67.6",
