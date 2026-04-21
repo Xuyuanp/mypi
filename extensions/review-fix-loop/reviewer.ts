@@ -15,8 +15,8 @@ import type { Api, Model } from "@mariozechner/pi-ai";
 import {
     AuthStorage,
     createAgentSession,
-    createReadOnlyTools,
     DefaultResourceLoader,
+    getAgentDir,
     ModelRegistry,
     SessionManager,
 } from "@mariozechner/pi-coding-agent";
@@ -246,6 +246,8 @@ export async function runReview(
         const systemPrompt = await buildReviewSystemPrompt(config.cwd);
 
         const loader = new DefaultResourceLoader({
+            cwd: config.cwd,
+            agentDir: getAgentDir(),
             noExtensions: true,
             noSkills: true,
             noPromptTemplates: true,
@@ -260,7 +262,7 @@ export async function runReview(
             model,
             thinkingLevel: config.thinkingLevel,
             cwd: config.cwd,
-            tools: createReadOnlyTools(config.cwd),
+            tools: ["read", "grep", "find", "ls"],
             resourceLoader: loader,
             sessionManager: SessionManager.inMemory(),
             authStorage,
