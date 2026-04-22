@@ -225,16 +225,43 @@ export default function (pi: ExtensionAPI) {
                 return;
             }
 
-            const files = args
+            let files = args
                 .trim()
                 .split(/\s+/)
                 .filter((f) => f.length > 0);
+
+            if (files.length === 0) {
+                const diff = spawnSync("git", ["diff", "--name-only", "HEAD"], {
+                    encoding: "utf-8",
+                });
+                const untracked = spawnSync(
+                    "git",
+                    ["ls-files", "--others", "--exclude-standard"],
+                    { encoding: "utf-8" },
+                );
+                const combined = [
+                    diff.status === 0 ? diff.stdout : "",
+                    untracked.status === 0 ? untracked.stdout : "",
+                ].join("\n");
+                files = combined
+                    .trim()
+                    .split("\n")
+                    .filter((f) => f.length > 0);
+            }
+
+            if (files.length === 0) {
+                ctx.ui.notify(
+                    "No files specified and no changed files found",
+                    "warning",
+                );
+                return;
+            }
 
             const outputFile = join(tmpdir(), `pi-nvim-review-${process.pid}.md`);
 
             try {
                 const escapedPath = outputFile.replace(/'/g, "\\'");
-                const setupCmd = `lua require('dotvim.review').setup({ output = '${escapedPath}' })`;
+                const setupCmd = `Review ${escapedPath}`;
 
                 const exitCode = runInteractiveCommand("nvim", [
                     "-R",
