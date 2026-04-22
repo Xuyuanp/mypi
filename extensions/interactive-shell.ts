@@ -9,6 +9,7 @@
  *   /edit [path]         # Open $EDITOR (defaults to nvim)
  *   /shell [command]     # Open $SHELL, optionally running a command
  *   /view                # View last assistant message in editor (readonly)
+ *   /nvim-review [files] # Open files in Neovim review mode
  *
  * Shortcuts:
  *   ctrl+g               # Open editor content in external editor
@@ -19,19 +20,21 @@ import { spawnSync } from "node:child_process";
 import {
     closeSync,
     constants,
-    mkdtempSync,
+    existsSync,
     openSync,
     readFileSync,
-    rmSync,
+    unlinkSync,
     writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type {
     ExtensionAPI,
+    ExtensionCommandContext,
     ExtensionUIContext,
-    ReadonlySessionManager,
 } from "@mariozechner/pi-coding-agent";
+
+type ReadonlySessionManager = ExtensionCommandContext["sessionManager"];
 
 function saveTtyState(): string | null {
     const result = spawnSync("stty", ["-g"], {
@@ -142,8 +145,7 @@ async function viewLastAssistantMessage(
         return;
     }
 
-    const dir = mkdtempSync(join(tmpdir(), "pi-view-"));
-    const tmpFile = join(dir, "assistant.md");
+    const tmpFile = join(tmpdir(), `pi-view-${process.pid}.md`);
 
     try {
         writeFileSync(tmpFile, text, "utf-8");
@@ -163,7 +165,9 @@ async function viewLastAssistantMessage(
             ui.notify(`Editor exited with code ${exitCode}`, "warning");
         }
     } finally {
-        rmSync(dir, { recursive: true, force: true });
+        try {
+            unlinkSync(tmpFile);
+        } catch {}
     }
 }
 
@@ -213,14 +217,59 @@ export default function (pi: ExtensionAPI) {
         },
     });
 
+    pi.registerCommand("nvim-review", {
+        description: "Open files in Neovim review mode",
+        handler: async (args, ctx) => {
+            if (!ctx.hasUI) {
+                ctx.ui.notify("/nvim-review requires interactive mode", "error");
+                return;
+            }
+
+            const files = args
+                .trim()
+                .split(/\s+/)
+                .filter((f) => f.length > 0);
+
+            const outputFile = join(tmpdir(), `pi-nvim-review-${process.pid}.md`);
+
+            try {
+                const escapedPath = outputFile.replace(/'/g, "\\'");
+                const setupCmd = `lua require('dotvim.review').setup({ output = '${escapedPath}' })`;
+
+                const exitCode = runInteractiveCommand("nvim", [
+                    "-R",
+                    "-c",
+                    setupCmd,
+                    ...files,
+                ]);
+                await forceRerender(ctx.ui);
+
+                if (exitCode !== 0 && exitCode !== null) {
+                    ctx.ui.notify(`Neovim exited with code ${exitCode}`, "warning");
+                    return;
+                }
+
+                if (!existsSync(outputFile)) return;
+
+                const result = readFileSync(outputFile, "utf-8").trim();
+                if (result.length === 0) return;
+
+                ctx.ui.setEditorText(result);
+            } finally {
+                try {
+                    unlinkSync(outputFile);
+                } catch {}
+            }
+        },
+    });
+
     pi.registerShortcut("ctrl+g", {
         description: "Open editor content in external editor",
         handler: async (ctx) => {
             const editor = process.env.VISUAL || process.env.EDITOR || "nvim";
             const text = ctx.ui.getEditorText();
 
-            const dir = mkdtempSync(join(tmpdir(), "pi-edit-"));
-            const tmpFile = join(dir, "EDITOR.md");
+            const tmpFile = join(tmpdir(), `pi-edit-${process.pid}.md`);
 
             try {
                 writeFileSync(tmpFile, text, "utf-8");
@@ -245,7 +294,9 @@ export default function (pi: ExtensionAPI) {
                 const msg = err instanceof Error ? err.message : String(err);
                 ctx.ui.notify(`External editor failed: ${msg}`, "error");
             } finally {
-                rmSync(dir, { recursive: true, force: true });
+                try {
+                    unlinkSync(tmpFile);
+                } catch {}
             }
         },
     });
