@@ -25,7 +25,7 @@ import {
     type TUI,
     truncateToWidth,
 } from "@mariozechner/pi-tui";
-import { Type } from "@sinclair/typebox";
+import { Type } from "typebox";
 
 // Types
 interface QuestionOption {

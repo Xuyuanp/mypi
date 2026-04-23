@@ -16,7 +16,7 @@ import { homedir } from "node:os";
 import { isAbsolute, resolve } from "node:path";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { createLsTool, createReadTool } from "@mariozechner/pi-coding-agent";
-import { Type } from "@sinclair/typebox";
+import { Type } from "typebox";
 
 function resolvePath(filePath: string, cwd: string): string {
     let p = filePath.startsWith("@") ? filePath.slice(1) : filePath;
