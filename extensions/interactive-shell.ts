@@ -249,14 +249,6 @@ export default function (pi: ExtensionAPI) {
                     .filter((f) => f.length > 0);
             }
 
-            if (files.length === 0) {
-                ctx.ui.notify(
-                    "No files specified and no changed files found",
-                    "warning",
-                );
-                return;
-            }
-
             const outputFile = join(tmpdir(), `pi-nvim-review-${process.pid}.md`);
 
             try {
