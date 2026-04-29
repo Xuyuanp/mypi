@@ -22,10 +22,12 @@
     ]
   },
   "scripts": {
-    "check": "biome check --fix --no-errors-on-unmatched --error-on-warnings --files-ignore-unknown=true --colors=off"
+    "check": "biome check --fix --no-errors-on-unmatched --error-on-warnings --files-ignore-unknown=true --colors=off",
+    "test": "vitest run"
   },
   "devDependencies": {
-    "@biomejs/biome": "2.4.11"
+    "@biomejs/biome": "2.4.11",
+    "vitest": "^4.1.5"
   },
   "peerDependencies": {
     "@mariozechner/pi-agent-core": "^0.69.0",

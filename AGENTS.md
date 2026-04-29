@@ -7,13 +7,14 @@
 ## Structure
 
 - `extensions/` - Custom pi extensions
+- `tests/` - Test files (vitest)
 - `themes/` - Custom themes for pi TUI
 - `prompts/` - Prompt templates
 - `skills/` - Specialized skills (future use)
 
 ## References
 
-- [KV_CACHE.md](./KV_CACHE.md) - KV-cache-friendly coding guidelines for LLM API calls with prompt caching. Read before writing extensions that make direct LLM calls (e.g. `streamSimple`).
+- [KV_CACHE.md](./docs/KV_CACHE.md) - KV-cache-friendly coding guidelines for LLM API calls with prompt caching. Read before writing extensions that make direct LLM calls (e.g. `streamSimple`).
 
 ## Code Style
 
@@ -80,3 +81,11 @@ export default function(pi: ExtensionAPI) {
     // Shortcuts: pi.registerShortcut(...)
 }
 ```
+
+### Testing
+
+- Framework: [vitest](https://vitest.dev/). Run `npm test` (or `npx vitest run`).
+- Test files live in `tests/` (NOT in `extensions/` -- pi auto-loads every `.ts` in `extensions/` as an extension).
+- Naming convention: `tests/<extension-name>.test.ts`.
+- Extension integration tests use the **faux mock provider** from `@mariozechner/pi-ai` plus the pi SDK (`createAgentSession`) to drive scripted tool-call sequences end-to-end. See [docs/extension-testing.md](./docs/extension-testing.md) for boilerplate and `tests/file-guard.test.ts` for a complete reference.
+- After a successful edit/write, always assert the resulting file content on disk.
