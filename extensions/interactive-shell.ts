@@ -282,6 +282,33 @@ export default function (pi: ExtensionAPI) {
         },
     });
 
+    pi.registerCommand("system-prompt", {
+        description: "View the current system prompt in nvim",
+        handler: async (_args, ctx) => {
+            if (!ctx.hasUI) {
+                ctx.ui.notify("/system-prompt requires interactive mode", "error");
+                return;
+            }
+
+            const prompt = ctx.getSystemPrompt();
+            const tmpFile = join(tmpdir(), `pi-system-prompt-${process.pid}.md`);
+
+            try {
+                writeFileSync(tmpFile, prompt, "utf-8");
+                const exitCode = runInteractiveCommand("nvim", ["-R", tmpFile]);
+                await forceRerender(ctx.ui);
+
+                if (exitCode !== 0 && exitCode !== null) {
+                    ctx.ui.notify(`Neovim exited with code ${exitCode}`, "warning");
+                }
+            } finally {
+                try {
+                    unlinkSync(tmpFile);
+                } catch {}
+            }
+        },
+    });
+
     pi.registerShortcut("ctrl+g", {
         description: "Open editor content in external editor",
         handler: async (ctx) => {
