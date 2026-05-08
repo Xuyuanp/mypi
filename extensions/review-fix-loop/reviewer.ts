@@ -11,7 +11,7 @@ import { execSync } from "node:child_process";
 import { unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { Api, Model } from "@mariozechner/pi-ai";
+import type { Api, Model } from "@earendil-works/pi-ai";
 import {
     AuthStorage,
     createAgentSession,
@@ -19,7 +19,7 @@ import {
     getAgentDir,
     ModelRegistry,
     SessionManager,
-} from "@mariozechner/pi-coding-agent";
+} from "@earendil-works/pi-coding-agent";
 
 import { buildReviewSystemPrompt, buildReviewUserPrompt } from "./prompts.js";
 import type { ReviewEventCallback, ReviewFixConfig } from "./types.js";

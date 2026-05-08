@@ -20,8 +20,11 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import readline from "node:readline";
-import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
-import { BorderedLoader } from "@mariozechner/pi-coding-agent";
+import type {
+    ExtensionAPI,
+    ExtensionContext,
+} from "@earendil-works/pi-coding-agent";
+import { BorderedLoader } from "@earendil-works/pi-coding-agent";
 import {
     type Component,
     Key,
@@ -29,7 +32,7 @@ import {
     type TUI,
     truncateToWidth,
     visibleWidth,
-} from "@mariozechner/pi-tui";
+} from "@earendil-works/pi-tui";
 
 type ModelKey = string; // `${provider}/${model}`
 type CwdKey = string; // normalized cwd path

@@ -2,7 +2,7 @@
  * Types and constants for the review-fix-loop extension.
  */
 
-import type { ThinkingLevel } from "@mariozechner/pi-agent-core";
+import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 
 export type { ThinkingLevel };
 

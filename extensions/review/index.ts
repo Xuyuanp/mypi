@@ -40,8 +40,11 @@
  * Note: PR review requires a clean working tree (no uncommitted changes to tracked files).
  */
 
-import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
-import { Text } from "@mariozechner/pi-tui";
+import type {
+    ExtensionAPI,
+    ExtensionContext,
+} from "@earendil-works/pi-coding-agent";
+import { Text } from "@earendil-works/pi-tui";
 import {
     executeEndReviewAction,
     executeReview,

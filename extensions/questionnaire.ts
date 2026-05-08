@@ -6,15 +6,15 @@
  *   using a cheap LLM call, show questionnaire UI, send answers back.
  */
 
-import { completeSimple } from "@mariozechner/pi-ai";
+import { completeSimple } from "@earendil-works/pi-ai";
 import type {
     ExtensionAPI,
     ExtensionCommandContext,
     ExtensionUIContext,
     Theme,
-} from "@mariozechner/pi-coding-agent";
-import { buildSessionContext } from "@mariozechner/pi-coding-agent";
-import type { Component } from "@mariozechner/pi-tui";
+} from "@earendil-works/pi-coding-agent";
+import { buildSessionContext } from "@earendil-works/pi-coding-agent";
+import type { Component } from "@earendil-works/pi-tui";
 import {
     Editor,
     type EditorTheme,
@@ -24,7 +24,7 @@ import {
     Text,
     type TUI,
     truncateToWidth,
-} from "@mariozechner/pi-tui";
+} from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 
 // Types

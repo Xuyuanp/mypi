@@ -1,6 +1,6 @@
 # Extension Testing
 
-Extension integration tests use the **faux mock provider** from `@mariozechner/pi-ai` plus the pi SDK (`createAgentSession`) to drive scripted tool-call sequences end-to-end.
+Extension integration tests use the **faux mock provider** from `@earendil-works/pi-ai` plus the pi SDK (`createAgentSession`) to drive scripted tool-call sequences end-to-end.
 
 ## Boilerplate
 
@@ -12,13 +12,13 @@ import {
     ModelRegistry,
     SessionManager,
     SettingsManager,
-} from "@mariozechner/pi-coding-agent";
+} from "@earendil-works/pi-coding-agent";
 import {
     fauxAssistantMessage,
     fauxText,
     fauxToolCall,
     registerFauxProvider,
-} from "@mariozechner/pi-ai";
+} from "@earendil-works/pi-ai";
 import myExtension from "../extensions/my-extension.js";
 
 // 1. Register faux provider & set a dummy API key

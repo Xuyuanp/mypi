@@ -38,13 +38,13 @@
  */
 
 import { parseArgs as nodeParseArgs } from "node:util";
-import type { Api, Model } from "@mariozechner/pi-ai";
+import type { Api, Model } from "@earendil-works/pi-ai";
 import type {
     ExtensionAPI,
     ExtensionCommandContext,
     ExtensionContext,
     ModelRegistry,
-} from "@mariozechner/pi-coding-agent";
+} from "@earendil-works/pi-coding-agent";
 import { buildFixPrompt } from "./prompts.js";
 import { isCleanVerdict, runReview } from "./reviewer.js";
 import type {

@@ -10,14 +10,14 @@ import { writeFileSync } from "node:fs";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { FauxProviderRegistration } from "@mariozechner/pi-ai";
+import type { FauxProviderRegistration } from "@earendil-works/pi-ai";
 import {
     fauxAssistantMessage,
     fauxText,
     fauxToolCall,
     registerFauxProvider,
-} from "@mariozechner/pi-ai";
-import type { AgentSessionEvent } from "@mariozechner/pi-coding-agent";
+} from "@earendil-works/pi-ai";
+import type { AgentSessionEvent } from "@earendil-works/pi-coding-agent";
 import {
     AuthStorage,
     createAgentSession,
@@ -25,7 +25,7 @@ import {
     ModelRegistry,
     SessionManager,
     SettingsManager,
-} from "@mariozechner/pi-coding-agent";
+} from "@earendil-works/pi-coding-agent";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import fileGuard from "../extensions/file-guard.js";
 

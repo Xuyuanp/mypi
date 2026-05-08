@@ -5,8 +5,11 @@ import {
     type Message,
     type TextContent,
     type UserMessage,
-} from "@mariozechner/pi-ai";
-import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
+} from "@earendil-works/pi-ai";
+import type {
+    ExtensionAPI,
+    ExtensionContext,
+} from "@earendil-works/pi-coding-agent";
 
 const TITLE_MODEL_PROVIDER = process.env.PI_TITLE_MODEL_PROVIDER ?? "anthropic";
 const TITLE_MODEL_NAME = process.env.PI_TITLE_MODEL_NAME ?? "claude-haiku-4-5";

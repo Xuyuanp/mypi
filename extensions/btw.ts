@@ -14,13 +14,13 @@
  * or Escape to dismiss. Works while the agent is processing.
  */
 
-import { streamSimple, type Usage } from "@mariozechner/pi-ai";
-import type { ExtensionAPI, Theme } from "@mariozechner/pi-coding-agent";
+import { streamSimple, type Usage } from "@earendil-works/pi-ai";
+import type { ExtensionAPI, Theme } from "@earendil-works/pi-coding-agent";
 import {
     buildSessionContext,
     convertToLlm,
     getMarkdownTheme,
-} from "@mariozechner/pi-coding-agent";
+} from "@earendil-works/pi-coding-agent";
 import {
     type Component,
     type Focusable,
@@ -29,7 +29,7 @@ import {
     type TUI,
     truncateToWidth,
     visibleWidth,
-} from "@mariozechner/pi-tui";
+} from "@earendil-works/pi-tui";
 
 const SIDE_QUESTION_PROMPT = `This is a side question from the user. You MUST answer this question directly in a single response.
 

@@ -5,7 +5,7 @@
  * pi.exec() without depending on module-level state.
  */
 
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 export async function getMergeBase(
     pi: ExtensionAPI,

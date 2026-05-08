@@ -32,7 +32,7 @@ import type {
     ExtensionAPI,
     ExtensionCommandContext,
     ExtensionUIContext,
-} from "@mariozechner/pi-coding-agent";
+} from "@earendil-works/pi-coding-agent";
 
 type ReadonlySessionManager = ExtensionCommandContext["sessionManager"];
 

@@ -16,7 +16,7 @@ import type {
     ExtensionAPI,
     ExtensionContext,
     ThemeColor,
-} from "@mariozechner/pi-coding-agent";
+} from "@earendil-works/pi-coding-agent";
 
 const STATUS_KEY = "kv-cache";
 const TTL_SHORT_MS = 5 * 60 * 1000;

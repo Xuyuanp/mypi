@@ -33,7 +33,7 @@
 - Use `import type` for type-only imports
 - Node.js built-ins use the `node:` prefix (e.g. `node:fs`, `node:path`, `node:os`)
 - Define interfaces/types locally in each file rather than in shared type files
-- Tool parameter schemas use `@sinclair/typebox` (`Type.Object`, `Type.String`, etc.) and `StringEnum` from `@mariozechner/pi-ai`
+- Tool parameter schemas use `@sinclair/typebox` (`Type.Object`, `Type.String`, etc.) and `StringEnum` from `@earendil-works/pi-ai`
 - Default export is `export default function(pi: ExtensionAPI) { ... }` (anonymous) or a named function for larger extensions
 
 ### Formatting & Linting
@@ -66,7 +66,7 @@
  * Block comment describing the extension's purpose and usage.
  */
 
-import type { ... } from "@mariozechner/pi-coding-agent";
+import type { ... } from "@earendil-works/pi-coding-agent";
 // other imports
 
 // Types / interfaces
@@ -87,5 +87,5 @@ export default function(pi: ExtensionAPI) {
 - Framework: [vitest](https://vitest.dev/). Run `npm test` (or `npx vitest run`).
 - Test files live in `tests/` (NOT in `extensions/` -- pi auto-loads every `.ts` in `extensions/` as an extension).
 - Naming convention: `tests/<extension-name>.test.ts`.
-- Extension integration tests use the **faux mock provider** from `@mariozechner/pi-ai` plus the pi SDK (`createAgentSession`) to drive scripted tool-call sequences end-to-end. See [docs/extension-testing.md](./docs/extension-testing.md) for boilerplate and `tests/file-guard.test.ts` for a complete reference.
+- Extension integration tests use the **faux mock provider** from `@earendil-works/pi-ai` plus the pi SDK (`createAgentSession`) to drive scripted tool-call sequences end-to-end. See [docs/extension-testing.md](./docs/extension-testing.md) for boilerplate and `tests/file-guard.test.ts` for a complete reference.
 - After a successful edit/write, always assert the resulting file content on disk.

@@ -18,7 +18,7 @@
  * Requires tmux >= 3.0 for pane-level options (-p flag).
  */
 
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 type Status = "idle" | "thinking" | "tool" | "input";
 

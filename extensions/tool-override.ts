@@ -14,8 +14,8 @@
 import { stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { isAbsolute, resolve } from "node:path";
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
-import { createLsTool, createReadTool } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { createLsTool, createReadTool } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 
 function resolvePath(filePath: string, cwd: string): string {

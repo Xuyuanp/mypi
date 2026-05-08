@@ -17,8 +17,8 @@ import type {
     ExtensionCommandContext,
     ExtensionContext,
     ToolResultEvent,
-} from "@mariozechner/pi-coding-agent";
-import { DynamicBorder } from "@mariozechner/pi-coding-agent";
+} from "@earendil-works/pi-coding-agent";
+import { DynamicBorder } from "@earendil-works/pi-coding-agent";
 import {
     type Component,
     Container,
@@ -26,7 +26,7 @@ import {
     matchesKey,
     Text,
     type TUI,
-} from "@mariozechner/pi-tui";
+} from "@earendil-works/pi-tui";
 
 function formatUsd(cost: number): string {
     if (!Number.isFinite(cost) || cost <= 0) return "$0.00";

@@ -10,8 +10,8 @@ import type {
     ExtensionAPI,
     ExtensionCommandContext,
     ExtensionContext,
-} from "@mariozechner/pi-coding-agent";
-import { BorderedLoader } from "@mariozechner/pi-coding-agent";
+} from "@earendil-works/pi-coding-agent";
+import { BorderedLoader } from "@earendil-works/pi-coding-agent";
 import { hasBlockingReviewFindings } from "./parsing.js";
 import {
     buildReviewPrompt,

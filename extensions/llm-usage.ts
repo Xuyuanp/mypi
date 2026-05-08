@@ -7,7 +7,7 @@
  * Requires env var: LLM_BRIDGE_API_KEY
  */
 
-import type { ExtensionAPI, ThemeColor } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI, ThemeColor } from "@earendil-works/pi-coding-agent";
 
 const USAGE_URL = "https://llm-bridge.tigerbrokers.net/usage";
 const STATUS_KEY = "quota-usage";
