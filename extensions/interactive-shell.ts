@@ -135,6 +135,42 @@ function getLastAssistantText(
     return undefined;
 }
 
+/**
+ * Collect the candidate file list for /nvim-review when the user
+ * passes no explicit paths.
+ *
+ * Both git invocations run with `cwd` so the resulting paths are
+ * usable as nvim arguments (i.e. relative to `cwd`):
+ *   - `git diff --name-only --relative HEAD` is scoped to `cwd`'s
+ *     subtree and prints paths relative to `cwd`.
+ *   - `git ls-files --others --exclude-standard` is scoped to `cwd`'s
+ *     subtree and prints paths relative to `cwd`.
+ *
+ * Without `--relative`, `git diff` prints paths relative to the repo
+ * root, which would break when pi runs in a subdirectory of the repo.
+ *
+ * Returns an empty array when `cwd` is not inside a git repository.
+ */
+export function collectReviewFiles(cwd: string): string[] {
+    const diff = spawnSync("git", ["diff", "--name-only", "--relative", "HEAD"], {
+        cwd,
+        encoding: "utf-8",
+    });
+    const untracked = spawnSync(
+        "git",
+        ["ls-files", "--others", "--exclude-standard"],
+        { cwd, encoding: "utf-8" },
+    );
+    const combined = [
+        diff.status === 0 ? diff.stdout : "",
+        untracked.status === 0 ? untracked.stdout : "",
+    ].join("\n");
+    return combined
+        .trim()
+        .split("\n")
+        .filter((f) => f.length > 0);
+}
+
 async function viewLastAssistantMessage(
     ui: ExtensionUIContext,
     sessionManager: ReadonlySessionManager,
@@ -231,22 +267,7 @@ export default function (pi: ExtensionAPI) {
                 .filter((f) => f.length > 0);
 
             if (files.length === 0) {
-                const diff = spawnSync("git", ["diff", "--name-only", "HEAD"], {
-                    encoding: "utf-8",
-                });
-                const untracked = spawnSync(
-                    "git",
-                    ["ls-files", "--others", "--exclude-standard"],
-                    { encoding: "utf-8" },
-                );
-                const combined = [
-                    diff.status === 0 ? diff.stdout : "",
-                    untracked.status === 0 ? untracked.stdout : "",
-                ].join("\n");
-                files = combined
-                    .trim()
-                    .split("\n")
-                    .filter((f) => f.length > 0);
+                files = collectReviewFiles(process.cwd());
             }
 
             const outputFile = join(tmpdir(), `pi-nvim-review-${process.pid}.md`);
