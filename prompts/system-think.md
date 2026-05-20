@@ -1,3 +1,8 @@
+---
+description: Approach a problem like a systems thinker with structured analysis and tradeoffs
+argument-hint: "<problem>"
+---
+
 Approach this like a systems thinker.
 
 1. Define the core problem clearly

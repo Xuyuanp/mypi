@@ -1,3 +1,8 @@
+---
+description: Create a high-quality research brief on a topic
+argument-hint: "<topic>"
+---
+
 Create a high-quality research brief on this topic.
 
 Include:

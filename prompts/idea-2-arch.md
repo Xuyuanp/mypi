@@ -1,3 +1,8 @@
+---
+description: Turn an idea into a concrete implementation architecture
+argument-hint: "<idea description>"
+---
+
 I want to build this. Design the implementation.
 
 Give:

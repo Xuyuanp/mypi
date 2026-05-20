@@ -1,3 +1,8 @@
+---
+description: Explain a concept from first principles, building upward layer by layer
+argument-hint: "<concept or topic>"
+---
+
 Explain this from first principles.
 
 - Start with the most fundamental concepts.
