@@ -228,9 +228,18 @@ async function sendNotification(
 
 export default function (pi: ExtensionAPI) {
     let tmuxContext: TmuxContext | undefined;
+    let sessionActive = false;
 
     getTmuxContext(pi.exec).then((resolved) => {
         tmuxContext = resolved;
+    });
+
+    pi.on("session_start", async () => {
+        sessionActive = true;
+    });
+
+    pi.on("session_shutdown", async () => {
+        sessionActive = false;
     });
 
     async function notify(
@@ -246,10 +255,12 @@ export default function (pi: ExtensionAPI) {
     }
 
     pi.on("agent_end", async (_event, ctx) => {
+        if (!sessionActive) return;
         await notify(ctx, "Ready for input");
     });
 
     pi.on("tool_call", async (event, ctx) => {
+        if (!sessionActive) return;
         if (event.toolName === "questionnaire") {
             await notify(ctx, "Question waiting for answer");
         }

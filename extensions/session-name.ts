@@ -177,6 +177,7 @@ export function getFirstAssistantText(ctx: ExtensionContext): string | null {
 export async function generateAndSetTitle(
     pi: ExtensionAPI,
     ctx: ExtensionContext,
+    isActive: () => boolean = () => true,
 ): Promise<void> {
     const userText = getFirstUserText(ctx);
     if (!userText?.trim()) {
@@ -190,6 +191,7 @@ export async function generateAndSetTitle(
     for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
         try {
             const title = await generateTitle(userText, assistantText, ctx);
+            if (!isActive()) return;
             if (title) {
                 pi.setSessionName(title);
                 pi.appendEntry(TITLE_ENTRY_TYPE, {
@@ -202,6 +204,7 @@ export async function generateAndSetTitle(
                 return;
             }
         } catch (error) {
+            if (!isActive()) return;
             lastError = error instanceof Error ? error : new Error(String(error));
             if (attempt < MAX_RETRIES) {
                 ctx.ui.notify(
@@ -211,6 +214,8 @@ export async function generateAndSetTitle(
             }
         }
     }
+
+    if (!isActive()) return;
 
     // All retries exhausted -- fallback
     const fallback = buildFallbackTitle(userText);
@@ -227,26 +232,33 @@ export async function generateAndSetTitle(
 
 interface SessionNameState {
     hasAutoNamed: boolean;
+    sessionActive: boolean;
 }
 
 export default function sessionNameExtension(pi: ExtensionAPI) {
     const state: SessionNameState = {
         hasAutoNamed: false,
+        sessionActive: false,
     };
 
     pi.on("session_start", async () => {
         state.hasAutoNamed = false;
+        state.sessionActive = true;
+    });
+
+    pi.on("session_shutdown", async () => {
+        state.sessionActive = false;
     });
 
     pi.on("turn_end", async (_event, ctx) => {
-        if (state.hasAutoNamed) return;
+        if (!state.sessionActive || state.hasAutoNamed) return;
 
         if (pi.getSessionName()) {
             state.hasAutoNamed = true;
             return;
         }
 
-        await generateAndSetTitle(pi, ctx);
+        await generateAndSetTitle(pi, ctx, () => state.sessionActive);
         state.hasAutoNamed = true;
     });
 }

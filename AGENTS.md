@@ -58,6 +58,8 @@
 - `try/catch` with empty catch body (`catch { }`) when errors are intentionally ignored
 - Return fallback values from catch blocks rather than re-throwing
 - Retry loops with a `MAX_RETRIES` constant and final fallback (see `session-name.ts`)
+- Do NOT use broad try/catch to guard against stale `pi`/`ctx` access. Instead, subscribe to `session_shutdown` and use a `sessionActive` flag to cooperatively bail out. Check the flag at await boundaries (after async operations return) before calling mutation methods (`pi.setSessionName`, `pi.appendEntry`, `ctx.ui.notify`, `pi.exec`, etc.). The framework guarantees `session_shutdown` fires and is awaited before runtime invalidation.
+- When an async event handler accesses shared resources across await boundaries, look for the resource's lifecycle event first (e.g. `session_shutdown`), not error-based detection. Flags communicate intent; try/catch hides bugs.
 
 ### Extension Structure
 
