@@ -4,9 +4,11 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { fileURLToPath } from "node:url";
 import { getAgentDir, parseFrontmatter } from "@earendil-works/pi-coding-agent";
 
-export type AgentScope = "user" | "project" | "both";
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const SYSTEM_AGENTS_DIR = path.join(__dirname, "agents");
 
 export interface AgentConfig {
     name: string;
@@ -14,16 +16,15 @@ export interface AgentConfig {
     tools?: string[];
     model?: string;
     systemPrompt: string;
-    source: "user" | "project";
+    source: "user" | "system";
     filePath: string;
 }
 
 export interface AgentDiscoveryResult {
     agents: AgentConfig[];
-    projectAgentsDir: string | null;
 }
 
-function loadAgentsFromDir(dir: string, source: "user" | "project"): AgentConfig[] {
+function loadAgentsFromDir(dir: string, source: "user" | "system"): AgentConfig[] {
     const agents: AgentConfig[] = [];
 
     if (!fs.existsSync(dir)) {
@@ -75,51 +76,19 @@ function loadAgentsFromDir(dir: string, source: "user" | "project"): AgentConfig
     return agents;
 }
 
-function isDirectory(p: string): boolean {
-    try {
-        return fs.statSync(p).isDirectory();
-    } catch {
-        return false;
-    }
-}
-
-function findNearestProjectAgentsDir(cwd: string): string | null {
-    let currentDir = cwd;
-    while (true) {
-        const candidate = path.join(currentDir, ".pi", "agents");
-        if (isDirectory(candidate)) return candidate;
-
-        const parentDir = path.dirname(currentDir);
-        if (parentDir === currentDir) return null;
-        currentDir = parentDir;
-    }
-}
-
-export function discoverAgents(
-    cwd: string,
-    scope: AgentScope,
-): AgentDiscoveryResult {
+export function discoverAgents(): AgentDiscoveryResult {
     const userDir = path.join(getAgentDir(), "agents");
-    const projectAgentsDir = findNearestProjectAgentsDir(cwd);
 
-    const userAgents = scope === "project" ? [] : loadAgentsFromDir(userDir, "user");
-    const projectAgents =
-        scope === "user" || !projectAgentsDir
-            ? []
-            : loadAgentsFromDir(projectAgentsDir, "project");
+    const systemAgents = loadAgentsFromDir(SYSTEM_AGENTS_DIR, "system");
+    const userAgents = loadAgentsFromDir(userDir, "user");
 
     const agentMap = new Map<string, AgentConfig>();
 
-    if (scope === "both") {
-        for (const agent of userAgents) agentMap.set(agent.name, agent);
-        for (const agent of projectAgents) agentMap.set(agent.name, agent);
-    } else if (scope === "user") {
-        for (const agent of userAgents) agentMap.set(agent.name, agent);
-    } else {
-        for (const agent of projectAgents) agentMap.set(agent.name, agent);
-    }
+    // System agents have lowest priority (overridden by user)
+    for (const agent of systemAgents) agentMap.set(agent.name, agent);
+    for (const agent of userAgents) agentMap.set(agent.name, agent);
 
-    return { agents: Array.from(agentMap.values()), projectAgentsDir };
+    return { agents: Array.from(agentMap.values()) };
 }
 
 export function formatAgentList(

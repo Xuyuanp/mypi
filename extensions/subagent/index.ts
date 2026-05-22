@@ -17,7 +17,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import type { Message } from "@earendil-works/pi-ai";
-import { StringEnum } from "@earendil-works/pi-ai";
+
 import {
     type ExtensionAPI,
     getMarkdownTheme,
@@ -25,7 +25,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Container, Markdown, Spacer, Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
-import { type AgentConfig, type AgentScope, discoverAgents } from "./agents.js";
+import { type AgentConfig, discoverAgents } from "./agents.js";
 
 const ICON_RUNNING = "○";
 const ICON_SUCCESS = "●";
@@ -194,9 +194,9 @@ interface UsageStats {
     turns: number;
 }
 
-interface SingleResult {
+interface AgentRunResult {
     agent: string;
-    agentSource: "user" | "project" | "unknown";
+    agentSource: "user" | "system" | "unknown";
     task: string;
     exitCode: number;
     messages: Message[];
@@ -208,9 +208,7 @@ interface SingleResult {
 }
 
 interface SubagentDetails {
-    agentScope: AgentScope;
-    projectAgentsDir: string | null;
-    result: SingleResult;
+    result: AgentRunResult;
 }
 
 function getFinalOutput(messages: Message[]): string {
@@ -282,16 +280,17 @@ function getPiInvocation(args: string[]): { command: string; args: string[] } {
 
 type OnUpdateCallback = (partial: AgentToolResult<SubagentDetails>) => void;
 
-async function runSingleAgent(
+async function runSubagent(
     defaultCwd: string,
     agents: AgentConfig[],
     agentName: string,
     task: string,
     cwd: string | undefined,
+    fallbackModel: string | undefined,
     signal: AbortSignal | undefined,
     onUpdate: OnUpdateCallback | undefined,
-    makeDetails: (result: SingleResult) => SubagentDetails,
-): Promise<SingleResult> {
+    makeDetails: (result: AgentRunResult) => SubagentDetails,
+): Promise<AgentRunResult> {
     const agent = agents.find((a) => a.name === agentName);
 
     if (!agent) {
@@ -325,14 +324,19 @@ async function runSingleAgent(
         "--offline",
         "--print",
     ];
-    if (agent.model) args.push("--model", agent.model);
+    const modelArg = agent.model ?? fallbackModel;
+    if (modelArg) args.push("--model", modelArg);
+    // Disable thinking unless the model name includes a thinking level
+    // (e.g., "anthropic/claude-sonnet:high")
+    const hasThinkingLevel = modelArg && /:[a-z]+$/.test(modelArg);
+    if (!hasThinkingLevel) args.push("--thinking", "off");
     if (agent.tools && agent.tools.length > 0)
         args.push("--tools", agent.tools.join(","));
 
     let tmpPromptDir: string | null = null;
     let tmpPromptPath: string | null = null;
 
-    const currentResult: SingleResult = {
+    const currentResult: AgentRunResult = {
         agent: agentName,
         agentSource: agent.source,
         task,
@@ -491,12 +495,6 @@ async function runSingleAgent(
     }
 }
 
-const AgentScopeSchema = StringEnum(["user", "project", "both"] as const, {
-    description:
-        'Which agent directories to use. Default: "user". Use "both" to include project-local agents.',
-    default: "user",
-});
-
 const SubagentParams = Type.Object({
     agent: Type.String({
         description: "Name of the agent to invoke",
@@ -504,7 +502,6 @@ const SubagentParams = Type.Object({
     task: Type.String({
         description: "Task to delegate to the agent",
     }),
-    agentScope: Type.Optional(AgentScopeSchema),
     cwd: Type.Optional(
         Type.String({
             description: "Working directory for the agent process",
@@ -512,71 +509,46 @@ const SubagentParams = Type.Object({
     ),
 });
 
+function buildToolDescription(agents: AgentConfig[]): string {
+    const lines = ["Delegate tasks to specialized subagents with isolated context."];
+    if (agents.length > 0) {
+        lines.push("Available agents:");
+        for (const agent of agents) {
+            lines.push(`- ${agent.name}: ${agent.description}`);
+        }
+    }
+    return lines.join("\n");
+}
+
 export default function (pi: ExtensionAPI) {
+    // Pre-load agents at registration time so the LLM
+    // knows which agents are available from the tool description.
+    const knownAgents = discoverAgents().agents;
+
     pi.registerTool({
         name: "subagent",
         label: "Subagent",
-        description: [
-            "Delegate tasks to specialized subagents with isolated context.",
-            'Default agent scope is "user" (from ~/.pi/agent/agents).',
-            'To enable project-local agents in .pi/agents, set agentScope: "both" (or "project").',
-        ].join(" "),
+        description: buildToolDescription(knownAgents),
         parameters: SubagentParams,
 
         async execute(_toolCallId, params, signal, onUpdate, ctx) {
-            const agentScope: AgentScope = params.agentScope ?? "user";
-            const discovery = discoverAgents(ctx.cwd, agentScope);
-            const agents = discovery.agents;
+            const agents = discoverAgents().agents;
 
-            const makeDetails = (result: SingleResult): SubagentDetails => ({
-                agentScope,
-                projectAgentsDir: discovery.projectAgentsDir,
+            const makeDetails = (result: AgentRunResult): SubagentDetails => ({
                 result,
             });
 
-            if ((agentScope === "project" || agentScope === "both") && ctx.hasUI) {
-                const agent = agents.find((a) => a.name === params.agent);
-                if (agent?.source === "project") {
-                    const dir = discovery.projectAgentsDir ?? "(unknown)";
-                    const ok = await ctx.ui.confirm(
-                        "Run project-local agent?",
-                        `Agent: ${agent.name}\nSource: ${dir}\n\nProject agents are repo-controlled. Only continue for trusted repositories.`,
-                    );
-                    if (!ok)
-                        return {
-                            content: [
-                                {
-                                    type: "text",
-                                    text: "Canceled: project-local agent not approved.",
-                                },
-                            ],
-                            details: makeDetails({
-                                agent: params.agent,
-                                agentSource: "project",
-                                task: params.task,
-                                exitCode: 1,
-                                messages: [],
-                                stderr: "",
-                                usage: {
-                                    input: 0,
-                                    output: 0,
-                                    cacheRead: 0,
-                                    cacheWrite: 0,
-                                    cost: 0,
-                                    contextTokens: 0,
-                                    turns: 0,
-                                },
-                            }),
-                        };
-                }
-            }
+            const parentModel = ctx.model
+                ? `${ctx.model.provider}/${ctx.model.id}`
+                : undefined;
 
-            const result = await runSingleAgent(
+            const result = await runSubagent(
                 ctx.cwd,
                 agents,
                 params.agent,
                 params.task,
                 params.cwd,
+                parentModel,
                 signal,
                 onUpdate,
                 makeDetails,
@@ -617,7 +589,6 @@ export default function (pi: ExtensionAPI) {
         },
 
         renderCall(args, theme, _context) {
-            const scope: AgentScope = args.agentScope ?? "user";
             const agentName = args.agent || "...";
             const taskPreview = args.task
                 ? args.task.length > 60
@@ -627,8 +598,7 @@ export default function (pi: ExtensionAPI) {
             const text =
                 theme.fg("toolTitle", theme.bold("subagent ")) +
                 theme.fg("accent", agentName) +
-                theme.fg("muted", ` [${scope}] `) +
-                theme.fg("dim", taskPreview);
+                theme.fg("dim", ` ${taskPreview}`);
             return new Text(text, 0, 0);
         },
 
