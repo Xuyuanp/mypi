@@ -500,6 +500,9 @@ const SubagentParams = Type.Object({
     agent: Type.String({
         description: "Name of the agent to invoke",
     }),
+    description: Type.String({
+        description: "A short (3-5 word) summary of what this subagent will do",
+    }),
     task: Type.String({
         description: "Task to delegate to the agent",
     }),
@@ -534,7 +537,8 @@ ${agentList}
 **Usage**
 
 - Use \`agent\` to select an available agent by name.
-- Provide a clear, self-contained \`task\` description. The subagent has no access to your conversation history.
+- Always provide a short \`description\` (3-5 words) summarizing the task.
+- Provide a clear, self-contained \`task\`. The subagent has no access to your conversation history.
 - Be explicit about whether the subagent should write code or only do research.
 - Use \`model\` to override the agent's default model (e.g. for a harder task that needs a stronger model).
 - Use \`cwd\` to override the working directory when the task targets a different project root.
@@ -633,15 +637,11 @@ export default function (pi: ExtensionAPI) {
 
         renderCall(args, theme, _context) {
             const agentName = args.agent || "...";
-            const taskPreview = args.task
-                ? args.task.length > 60
-                    ? `${args.task.slice(0, 60)}...`
-                    : args.task
-                : "...";
+            const desc = args.description || "...";
             const text =
                 theme.fg("toolTitle", theme.bold("subagent ")) +
-                theme.fg("accent", agentName) +
-                theme.fg("dim", ` ${taskPreview}`);
+                theme.fg("text", agentName) +
+                theme.fg("dim", ` ${desc}`);
             return new Text(text, 0, 0);
         },
 
