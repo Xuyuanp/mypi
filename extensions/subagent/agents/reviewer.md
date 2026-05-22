@@ -1,11 +1,11 @@
 ---
-name: review
+name: reviewer
 description: >-
   Comprehensive code reviewer with structured rubric, priority tagging, and human callouts.
   Caller must include the full diff in the task — this agent has no bash/git access. Example:
   'review the changes:\n```diff\n<real diff here>```' or write the diff to a file and provide the file path if the diff contains more then 200 lines.
 tools: read, grep, find, ls
-model: github-copilot/gpt-5.3-codex
+model: github-copilot/gpt-5.5:xhigh
 ---
 
 # Review Guidelines
