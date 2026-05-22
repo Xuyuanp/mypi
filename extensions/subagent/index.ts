@@ -510,14 +510,48 @@ const SubagentParams = Type.Object({
 });
 
 function buildToolDescription(agents: AgentConfig[]): string {
-    const lines = ["Delegate tasks to specialized subagents with isolated context."];
-    if (agents.length > 0) {
-        lines.push("Available agents:");
-        for (const agent of agents) {
-            lines.push(`- ${agent.name}: ${agent.description}`);
-        }
-    }
-    return lines.join("\n");
+    const agentList =
+        agents.length > 0
+            ? agents.map((a) => `- ${a.name}: ${a.description}`).join("\n")
+            : "(none)";
+
+    return `Start a subagent instance to work on a focused task.
+
+Each instance runs in an isolated context with its own tool set.
+The subagent result is only visible to you. If the user should see it, summarize it yourself.
+
+**Available Agents**
+
+${agentList}
+
+**Usage**
+
+- Use \`agent\` to select an available agent by name.
+- Provide a clear, self-contained \`task\` description. The subagent has no access to your conversation history.
+- Be explicit about whether the subagent should write code or only do research.
+- Use \`cwd\` to override the working directory when the task targets a different project root.
+
+**Scout Agent -- Preferred for Codebase Research**
+
+When you need to understand the codebase before making changes, fixing bugs, or planning features,
+prefer the \`scout\` agent over doing the search yourself. It is optimized for fast, read-only
+codebase investigation. Use it when:
+
+- Your task will clearly require more than 3 search queries
+- You need to understand how a module, feature, or code path works
+- You want to investigate multiple independent questions -- launch multiple scout agents concurrently
+
+When calling scout, specify the desired thoroughness in the task:
+
+- "quick": targeted lookups -- find a specific file, function, or config value
+- "medium": understand a module -- how does auth work, what calls this API
+- "thorough": cross-cutting analysis -- architecture overview, dependency mapping, multi-module investigation
+
+**When NOT to Use Subagent**
+
+- Reading a known file path
+- Searching a small number of known files
+- Tasks that can be completed in one or two direct tool calls`;
 }
 
 export default function (pi: ExtensionAPI) {
