@@ -286,6 +286,7 @@ async function runSubagent(
     agentName: string,
     task: string,
     cwd: string | undefined,
+    modelOverride: string | undefined,
     fallbackModel: string | undefined,
     signal: AbortSignal | undefined,
     onUpdate: OnUpdateCallback | undefined,
@@ -324,7 +325,7 @@ async function runSubagent(
         "--offline",
         "--print",
     ];
-    const modelArg = agent.model ?? fallbackModel;
+    const modelArg = (modelOverride || undefined) ?? agent.model ?? fallbackModel;
     if (modelArg) args.push("--model", modelArg);
     // Disable thinking unless the model name includes a thinking level
     // (e.g., "anthropic/claude-sonnet:high")
@@ -352,7 +353,7 @@ async function runSubagent(
             contextTokens: 0,
             turns: 0,
         },
-        model: agent.model,
+        model: modelArg,
     };
 
     const emitUpdate = () => {
@@ -502,6 +503,12 @@ const SubagentParams = Type.Object({
     task: Type.String({
         description: "Task to delegate to the agent",
     }),
+    model: Type.Optional(
+        Type.String({
+            description:
+                'Override the model for this invocation (e.g. "anthropic/claude-sonnet:high")',
+        }),
+    ),
     cwd: Type.Optional(
         Type.String({
             description: "Working directory for the agent process",
@@ -529,6 +536,7 @@ ${agentList}
 - Use \`agent\` to select an available agent by name.
 - Provide a clear, self-contained \`task\` description. The subagent has no access to your conversation history.
 - Be explicit about whether the subagent should write code or only do research.
+- Use \`model\` to override the agent's default model (e.g. for a harder task that needs a stronger model).
 - Use \`cwd\` to override the working directory when the task targets a different project root.
 
 **Scout Agent -- Preferred for Codebase Research**
@@ -582,6 +590,7 @@ export default function (pi: ExtensionAPI) {
                 params.agent,
                 params.task,
                 params.cwd,
+                params.model,
                 parentModel,
                 signal,
                 onUpdate,
