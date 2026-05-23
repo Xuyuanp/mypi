@@ -62,6 +62,10 @@ const SUBAGENT_PREAMBLE = `You are now running as a subagent. All the \`user\` m
 
 `;
 
+function escapeXml(str: string): string {
+    return str.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
 function formatTokens(count: number): string {
     if (count < 1000) return count.toString();
     if (count < 10000) return `${(count / 1000).toFixed(1)}k`;
@@ -582,7 +586,12 @@ const SubagentParams = Type.Object({
 function buildToolDescription(agents: AgentConfig[]): string {
     const agentList =
         agents.length > 0
-            ? agents.map((a) => `- ${a.name}: ${a.description}`).join("\n")
+            ? agents
+                  .map(
+                      (a) =>
+                          `<agent>\n  <name>${escapeXml(a.name)}</name>\n  <description>${escapeXml(a.description)}</description>\n</agent>`,
+                  )
+                  .join("\n")
             : "(none)";
 
     return `Start a subagent instance to work on a focused task.
@@ -590,9 +599,9 @@ function buildToolDescription(agents: AgentConfig[]): string {
 Each instance runs in an isolated context with its own tool set.
 The subagent result is only visible to you. If the user should see it, summarize it yourself.
 
-**Available Agents**
-
+<available_agents>
 ${agentList}
+</available_agents>
 
 **Usage**
 
