@@ -21,6 +21,7 @@ import type { Message } from "@earendil-works/pi-ai";
 import {
     type ExtensionAPI,
     getMarkdownTheme,
+    type ThemeColor,
     withFileMutationQueue,
 } from "@earendil-works/pi-coding-agent";
 import { Container, Markdown, Spacer, Text } from "@earendil-works/pi-tui";
@@ -30,6 +31,32 @@ import { type AgentConfig, discoverAgents } from "./agents.js";
 const ICON_RUNNING = "○";
 const ICON_SUCCESS = "●";
 const ICON_ERROR = "●";
+type ToolCallStatus = "success" | "error" | "pending";
+
+function toolStatusIconPlain(status: ToolCallStatus): string {
+    switch (status) {
+        case "success":
+            return ICON_SUCCESS;
+        case "error":
+            return ICON_ERROR;
+        case "pending":
+            return ICON_RUNNING;
+    }
+}
+
+function toolStatusIcon(
+    status: ToolCallStatus,
+    theme: { fg: (color: ThemeColor, text: string) => string },
+): string {
+    switch (status) {
+        case "success":
+            return theme.fg("success", ICON_SUCCESS);
+        case "error":
+            return theme.fg("error", ICON_ERROR);
+        case "pending":
+            return theme.fg("warning", ICON_RUNNING);
+    }
+}
 
 const SUBAGENT_PREAMBLE = `You are now running as a subagent. All the \`user\` messages are sent by the main agent. The main agent cannot see your context, it can only see your last message when you finish the task. You must treat the parent agent as your caller. Do not directly ask the end user questions. If something is unclear, explain the ambiguity in your final summary to the parent agent.
 
@@ -209,6 +236,7 @@ interface AgentRunResult {
 
 interface SubagentDetails {
     result: AgentRunResult;
+    execStatuses?: Record<string, boolean>;
 }
 
 function getFinalOutput(messages: Message[]): string {
@@ -225,21 +253,43 @@ function getFinalOutput(messages: Message[]): string {
 
 type DisplayItem =
     | { type: "text"; text: string }
-    | { type: "toolCall"; name: string; args: Record<string, any> };
+    | {
+          type: "toolCall";
+          name: string;
+          args: Record<string, any>;
+          status: ToolCallStatus;
+      };
 
-function getDisplayItems(messages: Message[]): DisplayItem[] {
+function getDisplayItems(
+    messages: Message[],
+    execStatusMap?: Map<string, boolean>,
+): DisplayItem[] {
     const items: DisplayItem[] = [];
+    const resultMap = new Map<string, boolean>();
+    for (const msg of messages) {
+        if (msg.role === "toolResult") {
+            resultMap.set(msg.toolCallId, msg.isError);
+        }
+    }
     for (const msg of messages) {
         if (msg.role === "assistant") {
             for (const part of msg.content) {
                 if (part.type === "text")
                     items.push({ type: "text", text: part.text });
-                else if (part.type === "toolCall")
+                else if (part.type === "toolCall") {
+                    let status: ToolCallStatus = "pending";
+                    if (resultMap.has(part.id)) {
+                        status = resultMap.get(part.id) ? "error" : "success";
+                    } else if (execStatusMap?.has(part.id)) {
+                        status = execStatusMap.get(part.id) ? "error" : "success";
+                    }
                     items.push({
                         type: "toolCall",
                         name: part.name,
                         args: part.arguments,
+                        status,
                     });
+                }
             }
         }
     }
@@ -291,6 +341,7 @@ async function runSubagent(
     signal: AbortSignal | undefined,
     onUpdate: OnUpdateCallback | undefined,
     makeDetails: (result: AgentRunResult) => SubagentDetails,
+    execStatusMap: Map<string, boolean>,
 ): Promise<AgentRunResult> {
     const agent = agents.find((a) => a.name === agentName);
 
@@ -359,13 +410,13 @@ async function runSubagent(
     const emitUpdate = () => {
         if (!onUpdate) return;
 
-        const items = getDisplayItems(currentResult.messages);
+        const items = getDisplayItems(currentResult.messages, execStatusMap);
         const toolCalls = items.filter((i) => i.type === "toolCall");
         const lastToolCall =
             toolCalls.length > 0 ? toolCalls[toolCalls.length - 1] : null;
 
         const lastToolLine = lastToolCall
-            ? formatToolCallPlain(lastToolCall.name, lastToolCall.args)
+            ? `${toolStatusIconPlain(lastToolCall.status)} ${formatToolCallPlain(lastToolCall.name, lastToolCall.args)}`
             : "(running...)";
 
         const usageStr = formatUsageStats(currentResult.usage, currentResult.model);
@@ -435,6 +486,15 @@ async function runSubagent(
                         if (msg.errorMessage)
                             currentResult.errorMessage = msg.errorMessage;
                     }
+                    emitUpdate();
+                }
+
+                if (event.type === "tool_execution_start" && event.toolCallId) {
+                    emitUpdate();
+                }
+
+                if (event.type === "tool_execution_end" && event.toolCallId) {
+                    execStatusMap.set(event.toolCallId, !!event.isError);
                     emitUpdate();
                 }
 
@@ -580,8 +640,13 @@ export default function (pi: ExtensionAPI) {
         async execute(_toolCallId, params, signal, onUpdate, ctx) {
             const agents = discoverAgents().agents;
 
+            // Tracks per-tool-call completion from tool_execution_end events.
+            // Shared with runSubagent so makeDetails can snapshot it.
+            const execStatusMap = new Map<string, boolean>();
+
             const makeDetails = (result: AgentRunResult): SubagentDetails => ({
                 result,
+                execStatuses: Object.fromEntries(execStatusMap),
             });
 
             const parentModel = ctx.model
@@ -599,6 +664,7 @@ export default function (pi: ExtensionAPI) {
                 signal,
                 onUpdate,
                 makeDetails,
+                execStatusMap,
             );
 
             const isError =
@@ -669,7 +735,10 @@ export default function (pi: ExtensionAPI) {
                 : isError
                   ? theme.fg("error", ICON_ERROR)
                   : theme.fg("success", ICON_SUCCESS);
-            const displayItems = getDisplayItems(r.messages);
+            const execStatusMap = details.execStatuses
+                ? new Map(Object.entries(details.execStatuses))
+                : undefined;
+            const displayItems = getDisplayItems(r.messages, execStatusMap);
             const toolCallItems = displayItems.filter((i) => i.type === "toolCall");
             const finalOutput = getFinalOutput(r.messages);
 
@@ -689,9 +758,10 @@ export default function (pi: ExtensionAPI) {
                     );
                 } else {
                     for (const item of toolCallItems) {
+                        const icon = toolStatusIcon(item.status, theme);
                         container.addChild(
                             new Text(
-                                theme.fg("muted", "  → ") +
+                                ` ${icon} ` +
                                     formatToolCall(
                                         item.name,
                                         item.args,
@@ -722,8 +792,9 @@ export default function (pi: ExtensionAPI) {
             let text = "";
             for (const item of recentToolCalls) {
                 if (text) text += "\n";
+                const icon = toolStatusIcon(item.status, theme);
                 text +=
-                    theme.fg("muted", "  → ") +
+                    ` ${icon} ` +
                     formatToolCall(item.name, item.args, theme.fg.bind(theme));
             }
             if (isError) {
