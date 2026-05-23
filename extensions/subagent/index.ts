@@ -455,6 +455,11 @@ async function runSubagent(
                 cwd: cwd ?? defaultCwd,
                 shell: false,
                 stdio: ["ignore", "pipe", "pipe"],
+                env: {
+                    ...process.env,
+                    PI_SUBAGENT: "1",
+                    PI_SUBAGENT_NAME: agent.name,
+                },
             });
             let buffer = "";
 
