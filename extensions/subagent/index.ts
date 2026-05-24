@@ -73,6 +73,15 @@ function formatTokens(count: number): string {
     return `${(count / 1000000).toFixed(1)}M`;
 }
 
+function formatDuration(ms: number): string {
+    if (ms < 1000) return `${ms}ms`;
+    const seconds = ms / 1000;
+    if (seconds < 60) return `${seconds.toFixed(1)}s`;
+    const minutes = Math.floor(seconds / 60);
+    const remainingSec = Math.round(seconds % 60);
+    return `${minutes}m${remainingSec}s`;
+}
+
 function formatUsageStats(
     usage: {
         input: number;
@@ -84,6 +93,7 @@ function formatUsageStats(
         turns?: number;
     },
     model?: string,
+    durationMs?: number,
 ): string {
     const parts: string[] = [];
     if (usage.turns) parts.push(`${usage.turns} turn${usage.turns > 1 ? "s" : ""}`);
@@ -95,6 +105,7 @@ function formatUsageStats(
     if (usage.contextTokens && usage.contextTokens > 0) {
         parts.push(`ctx:${formatTokens(usage.contextTokens)}`);
     }
+    if (durationMs !== undefined) parts.push(formatDuration(durationMs));
     if (model) parts.push(model);
     return parts.join(" ");
 }
@@ -236,6 +247,7 @@ interface AgentRunResult {
     model?: string;
     stopReason?: string;
     errorMessage?: string;
+    durationMs?: number;
 }
 
 interface SubagentDetails {
@@ -437,6 +449,8 @@ async function runSubagent(
         });
     };
 
+    const startTime = Date.now();
+
     try {
         const fullSystemPrompt = agent.systemPrompt.trim()
             ? `${SUBAGENT_PREAMBLE}${agent.systemPrompt}`
@@ -547,6 +561,7 @@ async function runSubagent(
         });
 
         currentResult.exitCode = exitCode;
+        currentResult.durationMs = Date.now() - startTime;
         if (wasAborted) throw new Error("Subagent was aborted");
         return currentResult;
     } finally {
@@ -793,7 +808,7 @@ export default function (pi: ExtensionAPI) {
                         );
                     }
                 }
-                const usageStr = formatUsageStats(r.usage, r.model);
+                const usageStr = formatUsageStats(r.usage, r.model, r.durationMs);
                 container.addChild(new Spacer(1));
                 container.addChild(
                     new Text(`${statusIcon} ${theme.fg("dim", usageStr)}`, 0, 0),
@@ -815,10 +830,10 @@ export default function (pi: ExtensionAPI) {
                 const errorMsg = r.errorMessage || r.stopReason || "failed";
                 if (text) text += "\n";
                 text += `${statusIcon} ${theme.fg("error", errorMsg)}`;
-                const usageStr = formatUsageStats(r.usage, r.model);
+                const usageStr = formatUsageStats(r.usage, r.model, r.durationMs);
                 if (usageStr) text += `\n${theme.fg("dim", usageStr)}`;
             } else {
-                const usageStr = formatUsageStats(r.usage, r.model);
+                const usageStr = formatUsageStats(r.usage, r.model, r.durationMs);
                 if (text) text += "\n";
                 text += `${statusIcon} ${theme.fg("dim", usageStr)}`;
             }
