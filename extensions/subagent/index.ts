@@ -817,8 +817,15 @@ export default function (pi: ExtensionAPI) {
             }
 
             // Collapsed view — last 3 tool calls
+            const hiddenCount = toolCallItems.length - 3;
             const recentToolCalls = toolCallItems.slice(-3);
             let text = "";
+            if (hiddenCount > 0) {
+                text += theme.fg(
+                    "dim",
+                    ` ... ${hiddenCount} more tool call${hiddenCount > 1 ? "s" : ""}`,
+                );
+            }
             for (const item of recentToolCalls) {
                 if (text) text += "\n";
                 const icon = toolStatusIcon(item.status, theme);
