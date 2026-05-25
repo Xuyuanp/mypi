@@ -50,11 +50,11 @@ function toolStatusIcon(
 ): string {
     switch (status) {
         case "success":
-            return theme.fg("success", ICON_SUCCESS);
+            return theme.fg("dim", ICON_SUCCESS);
         case "error":
-            return theme.fg("error", ICON_ERROR);
+            return ICON_ERROR;
         case "pending":
-            return theme.fg("warning", ICON_RUNNING);
+            return theme.fg("dim", ICON_RUNNING);
     }
 }
 
@@ -125,19 +125,19 @@ function formatToolCall(
             const command = (args.command as string) || "...";
             const preview =
                 command.length > 60 ? `${command.slice(0, 60)}...` : command;
-            return themeFg("muted", "$ ") + themeFg("toolOutput", preview);
+            return themeFg("muted", "bash ") + themeFg("dim", preview);
         }
         case "read": {
             const rawPath = (args.file_path || args.path || "...") as string;
             const filePath = shortenPath(rawPath);
             const offset = args.offset as number | undefined;
             const limit = args.limit as number | undefined;
-            let text = themeFg("accent", filePath);
+            let text = themeFg("dim", filePath);
             if (offset !== undefined || limit !== undefined) {
                 const startLine = offset ?? 1;
                 const endLine = limit !== undefined ? startLine + limit - 1 : "";
                 text += themeFg(
-                    "warning",
+                    "dim",
                     `:${startLine}${endLine ? `-${endLine}` : ""}`,
                 );
             }
@@ -148,26 +148,24 @@ function formatToolCall(
             const filePath = shortenPath(rawPath);
             const content = (args.content || "") as string;
             const lines = content.split("\n").length;
-            let text = themeFg("muted", "write ") + themeFg("accent", filePath);
+            let text = themeFg("muted", "write ") + themeFg("dim", filePath);
             if (lines > 1) text += themeFg("dim", ` (${lines} lines)`);
             return text;
         }
         case "edit": {
             const rawPath = (args.file_path || args.path || "...") as string;
-            return (
-                themeFg("muted", "edit ") + themeFg("accent", shortenPath(rawPath))
-            );
+            return themeFg("muted", "edit ") + themeFg("dim", shortenPath(rawPath));
         }
         case "ls": {
             const rawPath = (args.path || ".") as string;
-            return themeFg("muted", "ls ") + themeFg("accent", shortenPath(rawPath));
+            return themeFg("muted", "ls ") + themeFg("dim", shortenPath(rawPath));
         }
         case "find": {
             const pattern = (args.pattern || "*") as string;
             const rawPath = (args.path || ".") as string;
             return (
                 themeFg("muted", "find ") +
-                themeFg("accent", pattern) +
+                themeFg("dim", pattern) +
                 themeFg("dim", ` in ${shortenPath(rawPath)}`)
             );
         }
@@ -176,7 +174,7 @@ function formatToolCall(
             const rawPath = (args.path || ".") as string;
             return (
                 themeFg("muted", "grep ") +
-                themeFg("accent", `/${pattern}/`) +
+                themeFg("dim", `/${pattern}/`) +
                 themeFg("dim", ` in ${shortenPath(rawPath)}`)
             );
         }
@@ -184,7 +182,7 @@ function formatToolCall(
             const argsStr = JSON.stringify(args);
             const preview =
                 argsStr.length > 50 ? `${argsStr.slice(0, 50)}...` : argsStr;
-            return themeFg("accent", toolName) + themeFg("dim", ` ${preview}`);
+            return themeFg("muted", toolName) + themeFg("dim", ` ${preview}`);
         }
     }
 }
@@ -203,7 +201,7 @@ function formatToolCallPlain(
             const command = (args.command as string) || "...";
             const preview =
                 command.length > 60 ? `${command.slice(0, 60)}...` : command;
-            return `$ ${preview}`;
+            return `bash ${preview}`;
         }
         case "read": {
             const rawPath = (args.file_path || args.path || "...") as string;
@@ -759,11 +757,6 @@ export default function (pi: ExtensionAPI) {
                 (r.exitCode !== 0 ||
                     r.stopReason === "error" ||
                     r.stopReason === "aborted");
-            const statusIcon = isRunning
-                ? theme.fg("success", ICON_RUNNING)
-                : isError
-                  ? theme.fg("error", ICON_ERROR)
-                  : theme.fg("success", ICON_SUCCESS);
             const execStatusMap = details.execStatuses
                 ? new Map(Object.entries(details.execStatuses))
                 : undefined;
@@ -810,9 +803,7 @@ export default function (pi: ExtensionAPI) {
                 }
                 const usageStr = formatUsageStats(r.usage, r.model, r.durationMs);
                 container.addChild(new Spacer(1));
-                container.addChild(
-                    new Text(`${statusIcon} ${theme.fg("dim", usageStr)}`, 0, 0),
-                );
+                container.addChild(new Text(theme.fg("dim", usageStr), 0, 0));
                 return container;
             }
 
@@ -836,13 +827,13 @@ export default function (pi: ExtensionAPI) {
             if (isError) {
                 const errorMsg = r.errorMessage || r.stopReason || "failed";
                 if (text) text += "\n";
-                text += `${statusIcon} ${theme.fg("error", errorMsg)}`;
+                text += theme.fg("error", errorMsg);
                 const usageStr = formatUsageStats(r.usage, r.model, r.durationMs);
                 if (usageStr) text += `\n${theme.fg("dim", usageStr)}`;
             } else {
                 const usageStr = formatUsageStats(r.usage, r.model, r.durationMs);
                 if (text) text += "\n";
-                text += `${statusIcon} ${theme.fg("dim", usageStr)}`;
+                text += theme.fg("dim", usageStr);
             }
             return new Text(text, 0, 0);
         },
