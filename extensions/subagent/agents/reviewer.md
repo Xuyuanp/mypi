@@ -2,8 +2,11 @@
 name: reviewer
 description: >-
   Comprehensive code reviewer with structured rubric, priority tagging, and human callouts.
-  Caller must include the full diff in the task — this agent has no bash/git access. Example:
-  'review the changes:\n```diff\n<real diff here>```' or write the diff to a file and provide the file path if the diff contains more then 200 lines.
+  Caller must include the full diff in the task — this agent has no bash/git access.
+  IMPORTANT: When the diff exceeds 200 lines, write it to a temporary file first and pass
+  the file path in the task (e.g. 'review the diff in /tmp/review-abc.diff'). The agent has
+  the `read` tool and will load the file itself. For short diffs (<= 200 lines), inline the
+  diff directly in the task inside a ```diff code fence.
 tools: read, grep, find, ls
 model: github-copilot/gpt-5.5:xhigh
 ---
