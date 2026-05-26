@@ -467,12 +467,12 @@ async function runSubagent(
 
     try {
         const fullSystemPrompt = agent.systemPrompt.trim()
-            ? `${SUBAGENT_PREAMBLE}${agent.systemPrompt}`
+            ? `${SUBAGENT_PREAMBLE}\n${agent.systemPrompt}`
             : SUBAGENT_PREAMBLE.trim();
         const tmp = await writePromptToTempFile(agent.name, fullSystemPrompt);
         tmpPromptDir = tmp.dir;
         tmpPromptPath = tmp.filePath;
-        args.push("--system-prompt", tmpPromptPath);
+        args.push("--append-system-prompt", tmpPromptPath);
 
         args.push(`Task: ${task}`);
         let wasAborted = false;
