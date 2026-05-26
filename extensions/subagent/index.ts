@@ -29,6 +29,7 @@ import type { Message } from "@earendil-works/pi-ai";
 import {
     type ExtensionAPI,
     getMarkdownTheme,
+    type Skill,
     type ThemeColor,
     withFileMutationQueue,
 } from "@earendil-works/pi-coding-agent";
@@ -250,6 +251,16 @@ interface UsageStats {
     turns: number;
 }
 
+const ZERO_USAGE: Readonly<UsageStats> = Object.freeze({
+    input: 0,
+    output: 0,
+    cacheRead: 0,
+    cacheWrite: 0,
+    cost: 0,
+    contextTokens: 0,
+    turns: 0,
+});
+
 interface AgentRunResult {
     agent: string;
     agentSource: "user" | "system" | "unknown";
@@ -373,12 +384,19 @@ async function runSubagent(
         "--mode",
         "json",
         "--no-extensions",
-        "--no-skills",
         "--no-session",
         "--no-context-files",
         "--offline",
         "--print",
     ];
+    // --no-skills disables auto-discovered skills;
+    // --skill re-adds specific ones (resolved file paths).
+    args.push("--no-skills");
+    if (agent.skills?.length) {
+        for (const skill of agent.skills) {
+            args.push("--skill", skill);
+        }
+    }
     const modelArg = agent.model;
     if (modelArg) args.push("--model", modelArg);
     // Disable thinking unless the model name includes a thinking level
@@ -398,15 +416,7 @@ async function runSubagent(
         exitCode: -1,
         messages: [],
         stderr: "",
-        usage: {
-            input: 0,
-            output: 0,
-            cacheRead: 0,
-            cacheWrite: 0,
-            cost: 0,
-            contextTokens: 0,
-            turns: 0,
-        },
+        usage: { ...ZERO_USAGE },
         model: modelArg,
     };
 
@@ -588,6 +598,12 @@ const SubagentParams = Type.Object({
             description: "Working directory for the agent process",
         }),
     ),
+    skills: Type.Optional(
+        Type.Array(Type.String(), {
+            description:
+                "Override skills for this invocation. Replaces agent default skills.",
+        }),
+    ),
 });
 
 function buildToolDescription(agents: AgentConfig[]): string {
@@ -647,6 +663,15 @@ export default function (pi: ExtensionAPI) {
     // knows which agents are available from the tool description.
     const knownAgents = discoverAgents().agents;
 
+    // Cache loaded skills from the parent session so we can resolve
+    // skill names to filesystem paths for --skill flags.
+    let skillCache = new Map<string, Skill>();
+
+    pi.on("before_agent_start", (event) => {
+        const skills = event.systemPromptOptions.skills;
+        skillCache = skills ? new Map(skills.map((s) => [s.name, s])) : new Map();
+    });
+
     pi.registerTool({
         name: "subagent",
         label: "Subagent",
@@ -665,6 +690,23 @@ export default function (pi: ExtensionAPI) {
                 execStatuses: Object.fromEntries(execStatusMap),
             });
 
+            const earlyError = (
+                msg: string,
+                agentSource: AgentRunResult["agentSource"],
+            ) => ({
+                content: [{ type: "text" as const, text: msg }],
+                details: makeDetails({
+                    agent: params.agent,
+                    agentSource,
+                    task: params.task,
+                    exitCode: 1,
+                    messages: [],
+                    stderr: msg,
+                    usage: ZERO_USAGE,
+                }),
+                isError: true,
+            });
+
             const parentModel = ctx.model
                 ? `${ctx.model.provider}/${ctx.model.id}`
                 : undefined;
@@ -675,32 +717,32 @@ export default function (pi: ExtensionAPI) {
                 const available =
                     agents.map((a) => `"${a.name}"`).join(", ") || "none";
                 const msg = `Unknown agent: "${params.agent}". Available agents: ${available}.`;
-                return {
-                    content: [{ type: "text", text: msg }],
-                    details: makeDetails({
-                        agent: params.agent,
-                        agentSource: "unknown",
-                        task: params.task,
-                        exitCode: 1,
-                        messages: [],
-                        stderr: msg,
-                        usage: {
-                            input: 0,
-                            output: 0,
-                            cacheRead: 0,
-                            cacheWrite: 0,
-                            cost: 0,
-                            contextTokens: 0,
-                            turns: 0,
-                        },
-                    }),
-                    isError: true,
-                };
+                return earlyError(msg, "unknown");
             }
 
+            const skillNames =
+                params.skills !== undefined ? params.skills : agent.skills;
+            const unresolvedSkills = skillNames?.filter(
+                (name) => !skillCache.has(name),
+            );
+            if (unresolvedSkills?.length) {
+                const available =
+                    skillCache.size > 0
+                        ? [...skillCache.keys()].map((n) => `"${n}"`).join(", ")
+                        : "none (skill cache empty)";
+                const msg = `Unknown skill${unresolvedSkills.length > 1 ? "s" : ""}: ${unresolvedSkills.map((n) => `"${n}"`).join(", ")}. Available: ${available}.`;
+                return earlyError(msg, agent.source);
+            }
+            const resolvedSkillPaths = skillNames?.map(
+                (name) => skillCache.get(name)!.filePath,
+            );
+
+            // Note: skills is overwritten from names to resolved file paths
+            // for the subprocess --skill flag.
             const resolvedAgent: AgentConfig = {
                 ...agent,
                 model: (params.model || undefined) ?? agent.model ?? parentModel,
+                skills: resolvedSkillPaths?.length ? resolvedSkillPaths : undefined,
             };
 
             const result = await runSubagent(

@@ -14,6 +14,7 @@ export interface AgentConfig {
     name: string;
     description: string;
     tools?: string[];
+    skills?: string[];
     model?: string;
     systemPrompt: string;
     source: "user" | "system";
@@ -22,6 +23,14 @@ export interface AgentConfig {
 
 export interface AgentDiscoveryResult {
     agents: AgentConfig[];
+}
+
+function parseCommaSeparated(value: string | undefined): string[] | undefined {
+    const items = value
+        ?.split(",")
+        .map((s) => s.trim())
+        .filter(Boolean);
+    return items && items.length > 0 ? items : undefined;
 }
 
 function loadAgentsFromDir(dir: string, source: "user" | "system"): AgentConfig[] {
@@ -57,15 +66,11 @@ function loadAgentsFromDir(dir: string, source: "user" | "system"): AgentConfig[
             continue;
         }
 
-        const tools = frontmatter.tools
-            ?.split(",")
-            .map((t: string) => t.trim())
-            .filter(Boolean);
-
         agents.push({
             name: frontmatter.name,
             description: frontmatter.description,
-            tools: tools && tools.length > 0 ? tools : undefined,
+            tools: parseCommaSeparated(frontmatter.tools),
+            skills: parseCommaSeparated(frontmatter.skills),
             model: frontmatter.model,
             systemPrompt: body,
             source,
