@@ -1,14 +1,22 @@
 /**
- * Subagent Tool - Delegate tasks to specialized agents
+ * Subagent Tool - Task delegation to specialized agents.
  *
- * Spawns a separate `pi` process for each subagent invocation,
- * giving it an isolated context window.
+ * Discovers agent definitions (system + user) from .md files with
+ * YAML frontmatter, each specifying allowed tools, model, and a
+ * system prompt body. Spawns an isolated `pi` subprocess per
+ * invocation (--mode json, no extensions/skills) and streams
+ * structured JSON events (message_end, tool_execution_start/end,
+ * tool_result_end) back in real-time.
  *
- * Single mode only: { agent: "name", task: "..." }
- *
- * The tool does NOT declare executionMode: "sequential", so the
- * agent loop can invoke multiple subagent calls in one batch and
- * they will execute concurrently via Promise.all.
+ * Key capabilities:
+ * - Concurrent execution: no executionMode declared, so the agent
+ *   loop can batch multiple subagent calls via Promise.all.
+ * - Model override: per-call model param > agent default > parent.
+ * - Abort support: SIGTERM on signal, SIGKILL after 5s timeout.
+ * - TUI rendering: collapsed/expanded views with tool-specific
+ *   formatting, status icons, and usage stats (tokens/cost/time).
+ * - Token tracking: accumulates input, output, cache read/write,
+ *   cost, and context tokens across all turns.
  */
 
 import { spawn } from "node:child_process";
@@ -58,8 +66,16 @@ function toolStatusIcon(
     }
 }
 
-const SUBAGENT_PREAMBLE = `You are now running as a subagent. All the \`user\` messages are sent by the main agent. The main agent cannot see your context, it can only see your last message when you finish the task. You must treat the parent agent as your caller. Do not directly ask the end user questions. If something is unclear, explain the ambiguity in your final summary to the parent agent.
-
+const SUBAGENT_PREAMBLE = `${[
+    "You are now running as a subagent.",
+    "All the `user` messages are sent by the main agent.",
+    "The main agent cannot see your context,",
+    "it can only see your last message when you finish the task.",
+    "You must treat the parent agent as your caller.",
+    "Do not directly ask the end user questions.",
+    "If something is unclear,",
+    "explain the ambiguity in your final summary to the parent agent.",
+].join(" ")}
 `;
 
 function escapeXml(str: string): string {
