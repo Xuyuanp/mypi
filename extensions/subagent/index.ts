@@ -361,41 +361,14 @@ function getPiInvocation(args: string[]): { command: string; args: string[] } {
 type OnUpdateCallback = (partial: AgentToolResult<SubagentDetails>) => void;
 
 async function runSubagent(
-    defaultCwd: string,
-    agents: AgentConfig[],
-    agentName: string,
+    agent: AgentConfig,
     task: string,
-    cwd: string | undefined,
-    modelOverride: string | undefined,
-    fallbackModel: string | undefined,
+    cwd: string,
     signal: AbortSignal | undefined,
     onUpdate: OnUpdateCallback | undefined,
     makeDetails: (result: AgentRunResult) => SubagentDetails,
     execStatusMap: Map<string, boolean>,
 ): Promise<AgentRunResult> {
-    const agent = agents.find((a) => a.name === agentName);
-
-    if (!agent) {
-        const available = agents.map((a) => `"${a.name}"`).join(", ") || "none";
-        return {
-            agent: agentName,
-            agentSource: "unknown",
-            task,
-            exitCode: 1,
-            messages: [],
-            stderr: `Unknown agent: "${agentName}". Available agents: ${available}.`,
-            usage: {
-                input: 0,
-                output: 0,
-                cacheRead: 0,
-                cacheWrite: 0,
-                cost: 0,
-                contextTokens: 0,
-                turns: 0,
-            },
-        };
-    }
-
     const args: string[] = [
         "--mode",
         "json",
@@ -406,7 +379,7 @@ async function runSubagent(
         "--offline",
         "--print",
     ];
-    const modelArg = (modelOverride || undefined) ?? agent.model ?? fallbackModel;
+    const modelArg = agent.model;
     if (modelArg) args.push("--model", modelArg);
     // Disable thinking unless the model name includes a thinking level
     // (e.g., "anthropic/claude-sonnet:high")
@@ -419,7 +392,7 @@ async function runSubagent(
     let tmpPromptPath: string | null = null;
 
     const currentResult: AgentRunResult = {
-        agent: agentName,
+        agent: agent.name,
         agentSource: agent.source,
         task,
         exitCode: -1,
@@ -480,7 +453,7 @@ async function runSubagent(
         const exitCode = await new Promise<number>((resolve) => {
             const invocation = getPiInvocation(args);
             const proc = spawn(invocation.command, invocation.args, {
-                cwd: cwd ?? defaultCwd,
+                cwd,
                 shell: false,
                 stdio: ["ignore", "pipe", "pipe"],
                 env: {
@@ -696,14 +669,44 @@ export default function (pi: ExtensionAPI) {
                 ? `${ctx.model.provider}/${ctx.model.id}`
                 : undefined;
 
+            const agent = agents.find((a) => a.name === params.agent);
+
+            if (!agent) {
+                const available =
+                    agents.map((a) => `"${a.name}"`).join(", ") || "none";
+                const msg = `Unknown agent: "${params.agent}". Available agents: ${available}.`;
+                return {
+                    content: [{ type: "text", text: msg }],
+                    details: makeDetails({
+                        agent: params.agent,
+                        agentSource: "unknown",
+                        task: params.task,
+                        exitCode: 1,
+                        messages: [],
+                        stderr: msg,
+                        usage: {
+                            input: 0,
+                            output: 0,
+                            cacheRead: 0,
+                            cacheWrite: 0,
+                            cost: 0,
+                            contextTokens: 0,
+                            turns: 0,
+                        },
+                    }),
+                    isError: true,
+                };
+            }
+
+            const resolvedAgent: AgentConfig = {
+                ...agent,
+                model: (params.model || undefined) ?? agent.model ?? parentModel,
+            };
+
             const result = await runSubagent(
-                ctx.cwd,
-                agents,
-                params.agent,
+                resolvedAgent,
                 params.task,
-                params.cwd,
-                params.model,
-                parentModel,
+                params.cwd ?? ctx.cwd,
                 signal,
                 onUpdate,
                 makeDetails,
