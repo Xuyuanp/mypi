@@ -200,7 +200,7 @@ function makeGoal(overrides: Partial<SessionGoal> = {}): SessionGoal {
         token_budget: null,
         tokens_used: 0,
         time_used_seconds: 0,
-        turns_used: 0,
+        iters_used: 0,
         created_at: now,
         updated_at: now,
         ...overrides,
@@ -376,8 +376,8 @@ describe("goals extension", () => {
         expect(result.autonomousRuns).toBeGreaterThanOrEqual(1);
         const goal = getGoalFromSession(result.sessionManager);
         expect(goal!.status).toBe("complete");
-        // turns_used is incremented before each autonomous continuation.
-        expect(goal!.turns_used).toBeGreaterThanOrEqual(1);
+        // iters_used is incremented before each autonomous continuation.
+        expect(goal!.iters_used).toBeGreaterThanOrEqual(1);
     });
 
     it("test_completion_report_returned: budgeted goal yields completion report", async () => {
@@ -618,9 +618,9 @@ describe("goals extension", () => {
         expect(goal!.status).toBe("paused");
     });
 
-    // ── Regression: startup must enforce budget / turn cap before continuing ──
+    // ── Regression: startup must enforce budget / iteration cap before continuing ──
 
-    it("test_startup_enforces_turn_cap: pre-staged active goal at MAX turns transitions to budget_limited", async () => {
+    it("test_startup_enforces_iter_cap: pre-staged active goal at MAX iters transitions to budget_limited", async () => {
         const KNOWN_SESSION = "known-session-aaaa-bbbb-cccc-dddd";
         const sm = SessionManager.inMemory(h.cwd);
         stageGoal(
@@ -628,7 +628,7 @@ describe("goals extension", () => {
             KNOWN_SESSION,
             makeGoal({
                 objective: "already at cap",
-                turns_used: 100,
+                iters_used: 100,
             }),
         );
         // Sentinel: if continuation fires, this response is consumed.
@@ -671,12 +671,12 @@ describe("goals extension", () => {
         expect(sentinelConsumed).toBe(false);
     });
 
-    // ── Regression: exact turn-cap hit must transition to budget_limited ──
+    // ── Regression: exact iteration-cap hit must transition to budget_limited ──
 
-    it("test_exact_turn_cap_transitions_to_budget_limited: incrementing to MAX_AUTONOMOUS_TURNS does not leave goal active", async () => {
-        // Pre-stage a goal at turns_used = 99. session_start sees < 100
+    it("test_exact_iter_cap_transitions_to_budget_limited: incrementing to MAX_AUTONOMOUS_ITERS does not leave goal active", async () => {
+        // Pre-stage a goal at iters_used = 99. session_start sees < 100
         // and schedules a continuation. The autonomous run finishes with
-        // a tool call. agent_end's incrementTurns pushes turns_used to 100
+        // a tool call. agent_end's incrementIters pushes iters_used to 100
         // exactly. With the bug, scheduleContinuation's setImmediate
         // bails on >= 100 and the goal stays "active". With the fix,
         // agent_end's [8b] post-increment cap check transitions the goal
@@ -688,7 +688,7 @@ describe("goals extension", () => {
             KNOWN_SESSION,
             makeGoal({
                 objective: "long running",
-                turns_used: 99,
+                iters_used: 99,
             }),
         );
 
@@ -710,13 +710,13 @@ describe("goals extension", () => {
 
         const goal = getGoalFromSession(sm);
         expect(goal).not.toBeNull();
-        expect(goal!.turns_used).toBe(100);
+        expect(goal!.iters_used).toBe(100);
         expect(goal!.status).toBe("budget_limited");
     });
 
-    // ── Regression: startup-triggered run that completes should count turns ──
+    // ── Regression: startup-triggered run that completes should count iterations ──
 
-    it("test_startup_completion_run_counts_turn: first autonomous run from session_start increments turns_used even if it completes the goal", async () => {
+    it("test_startup_completion_run_counts_iter: first autonomous run from session_start increments iters_used even if it completes the goal", async () => {
         const KNOWN_SESSION = "startup-complete-turn-count";
         const sm = SessionManager.inMemory(h.cwd);
         stageGoal(
@@ -724,7 +724,7 @@ describe("goals extension", () => {
             KNOWN_SESSION,
             makeGoal({
                 objective: "complete me on resume",
-                turns_used: 5,
+                iters_used: 5,
             }),
         );
         h.faux.setResponses([
@@ -742,7 +742,7 @@ describe("goals extension", () => {
         expect(goal).not.toBeNull();
         expect(goal!.status).toBe("complete");
         // The completing autonomous run is counted: 5 -> 6.
-        expect(goal!.turns_used).toBe(6);
+        expect(goal!.iters_used).toBe(6);
     });
 
     // ── Regression: completion run tokens must be accounted ──
@@ -941,7 +941,7 @@ describe("goals extension", () => {
         expect(sentinelConsumed).toBe(false);
     });
 
-    it("test_resume_at_turn_cap_does_not_leave_goal_active: /goal resume without raising turn cap keeps goal budget_limited", async () => {
+    it("test_resume_at_iter_cap_does_not_leave_goal_active: /goal resume without raising iteration cap keeps goal budget_limited", async () => {
         const KNOWN_SESSION = "resume-at-turn-cap-session";
         const sm = SessionManager.inMemory(h.cwd);
         stageGoal(
@@ -949,7 +949,7 @@ describe("goals extension", () => {
             KNOWN_SESSION,
             makeGoal({
                 objective: "do stuff",
-                turns_used: 100,
+                iters_used: 100,
                 status: "budget_limited",
             }),
         );

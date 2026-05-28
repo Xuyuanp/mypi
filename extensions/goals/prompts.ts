@@ -4,7 +4,7 @@
  * before insertion to prevent injection of higher-priority instructions.
  */
 
-import { MAX_AUTONOMOUS_TURNS, type SessionGoal } from "./types.js";
+import { MAX_AUTONOMOUS_ITERS, type SessionGoal } from "./types.js";
 
 /** Escape XML reserved characters so user-provided text cannot break out of tags. */
 export function xmlEscape(input: string): string {
@@ -36,7 +36,7 @@ export function renderContinuationPrompt(goal: SessionGoal): string {
         `- Tokens used: ${goal.tokens_used}`,
         `- Token budget: ${tokenBudgetLabel(goal)}`,
         `- Tokens remaining: ${remainingTokensLabel(goal)}`,
-        `- Autonomous turns used: ${goal.turns_used} / ${MAX_AUTONOMOUS_TURNS}`,
+        `- Autonomous iterations used: ${goal.iters_used} / ${MAX_AUTONOMOUS_ITERS}`,
         "",
         "Rules:",
         "- Keep the full objective intact. Do not redefine success around a smaller task.",
@@ -59,7 +59,7 @@ export function renderBudgetLimitPrompt(goal: SessionGoal): string {
         "Usage:",
         `- Tokens used: ${goal.tokens_used} / ${budget}`,
         `- Time: ${goal.time_used_seconds}s`,
-        `- Turns: ${goal.turns_used}`,
+        `- Iterations: ${goal.iters_used}`,
         "",
         "The system has marked the goal as budget-limited. Do not start new work.",
         "Wrap up: summarize progress, identify remaining work, and leave the user",

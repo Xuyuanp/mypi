@@ -9,7 +9,7 @@
  * Mutations split into two groups:
  *  - Status / objective / budget mutations and createGoal/deleteGoal
  *    persist immediately (they are user- or model-visible state changes).
- *  - Token/time accounting and turn increments only mutate memory; the
+ *  - Token/time accounting and iteration increments only mutate memory; the
  *    caller batches them and calls `persist()` once when ready (matching
  *    the agent_end flow's persist points).
  *
@@ -42,8 +42,8 @@ export interface GoalStore {
     updateBudget(budget: number): SessionGoal | null;
     /** Accumulate token/time in memory. Call persist() afterward when ready. */
     accountTokens(tokenDelta: number, timeDelta: number): void;
-    /** Increment turn counter in memory. Call persist() afterward when ready. */
-    incrementTurns(): void;
+    /** Increment iteration counter in memory. Call persist() afterward when ready. */
+    incrementIters(): void;
     /** Persist current in-memory snapshot to session entry. */
     persist(): void;
     deleteGoal(): void;
@@ -101,7 +101,7 @@ export function createGoalStore(
                 token_budget: tokenBudget ?? null,
                 tokens_used: 0,
                 time_used_seconds: 0,
-                turns_used: 0,
+                iters_used: 0,
                 created_at: ts,
                 updated_at: ts,
             };
@@ -139,9 +139,9 @@ export function createGoalStore(
             };
         },
 
-        incrementTurns(): void {
+        incrementIters(): void {
             if (!goal) return;
-            goal = { ...goal, turns_used: goal.turns_used + 1 };
+            goal = { ...goal, iters_used: goal.iters_used + 1 };
         },
 
         persist(): void {
@@ -173,7 +173,17 @@ export function createGoalStore(
                     entry.customType === GOAL_ENTRY_TYPE
                 ) {
                     const data = entry.data as GoalEntryData;
-                    goal = data.kind === "cleared" ? null : data.goal;
+                    if (data.kind === "cleared") {
+                        goal = null;
+                    } else {
+                        const raw = data.goal as SessionGoal & {
+                            turns_used?: number;
+                        };
+                        goal = {
+                            ...raw,
+                            iters_used: raw.iters_used ?? raw.turns_used ?? 0,
+                        };
+                    }
                     return;
                 }
             }

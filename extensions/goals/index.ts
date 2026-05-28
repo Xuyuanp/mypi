@@ -38,7 +38,7 @@ import {
     EVT_GOAL_CREATED,
     EVT_GOAL_UPDATED,
     type GoalStatus,
-    MAX_AUTONOMOUS_TURNS,
+    MAX_AUTONOMOUS_ITERS,
     OBJECTIVE_UPDATED_MESSAGE_TYPE,
     type SessionGoal,
     STALE_GOAL_SECONDS,
@@ -80,7 +80,7 @@ function formatStatus(goal: SessionGoal): string {
         goal.token_budget === null
             ? "unlimited"
             : goal.token_budget.toLocaleString();
-    return `[Goal: ${goal.status} | ${tokens}/${budget} tokens | turn ${goal.turns_used}/${MAX_AUTONOMOUS_TURNS}]`;
+    return `[Goal: ${goal.status} | ${tokens}/${budget} tokens | iter ${goal.iters_used}/${MAX_AUTONOMOUS_ITERS}]`;
 }
 
 function timeAgo(epochSeconds: number): string {
@@ -269,10 +269,10 @@ export default function goalsExtension(pi: ExtensionAPI) {
             // Re-check goal state & guardrails before firing. State may
             // have changed under us during the setImmediate delay
             // (concurrent mutation, command, etc.); never start a run
-            // that would violate the turn cap or budget.
+            // that would violate the iteration cap or budget.
             const current = store.getGoal();
             if (!current || current.status !== "active") return;
-            if (current.turns_used >= MAX_AUTONOMOUS_TURNS) return;
+            if (current.iters_used >= MAX_AUTONOMOUS_ITERS) return;
             if (
                 current.token_budget !== null &&
                 current.tokens_used >= current.token_budget
@@ -281,7 +281,7 @@ export default function goalsExtension(pi: ExtensionAPI) {
             }
             isAutonomousContinuation = true;
             emit(EVT_GOAL_CONTINUATION, {
-                turn_number: current.turns_used,
+                iter_number: current.iters_used,
             });
             // Render the prompt from the freshly-read goal (current),
             // not a stale capture: between scheduling and execution,
@@ -333,7 +333,7 @@ export default function goalsExtension(pi: ExtensionAPI) {
     function transitionToBudgetLimited(
         ctx: ExtensionContext,
         goal: SessionGoal,
-        isTurnCap: boolean,
+        isIterCap: boolean,
     ): void {
         const previousStatus = goal.status;
         const updated = store.updateStatus("budget_limited");
@@ -346,8 +346,8 @@ export default function goalsExtension(pi: ExtensionAPI) {
         const wrapUp = renderBudgetLimitPrompt(updated);
         if (ctx.hasUI) {
             ctx.ui.notify(
-                isTurnCap
-                    ? "Goal reached the autonomous turn cap. Wrapping up..."
+                isIterCap
+                    ? "Goal reached the autonomous iteration cap. Wrapping up..."
                     : `Goal budget reached (${updated.token_budget} tokens). Wrapping up...`,
                 "warning",
             );
@@ -430,14 +430,14 @@ export default function goalsExtension(pi: ExtensionAPI) {
                 return;
             }
             // Enforce safety caps BEFORE scheduling continuation. A crash
-            // between incrementTurns() and the next run could leave a goal
-            // "active" with turns_used >= MAX or tokens_used >= budget; on
+            // between incrementIters() and the next run could leave a goal
+            // "active" with iters_used >= MAX or tokens_used >= budget; on
             // restart we must transition it to budget_limited rather than
             // resuming the loop.
-            const turnCapHit = goal.turns_used >= MAX_AUTONOMOUS_TURNS;
+            const iterCapHit = goal.iters_used >= MAX_AUTONOMOUS_ITERS;
             const budgetHit =
                 goal.token_budget !== null && goal.tokens_used >= goal.token_budget;
-            if (turnCapHit || budgetHit) {
+            if (iterCapHit || budgetHit) {
                 const updated = store.updateStatus("budget_limited");
                 if (updated) {
                     emit(EVT_GOAL_UPDATED, {
@@ -447,8 +447,8 @@ export default function goalsExtension(pi: ExtensionAPI) {
                     refreshStatus(ctx, updated);
                     if (ctx.hasUI) {
                         ctx.ui.notify(
-                            turnCapHit
-                                ? "Goal at autonomous turn cap. Resume with /goal resume after raising the limit."
+                            iterCapHit
+                                ? "Goal at autonomous iteration cap. Resume with /goal resume after raising the limit."
                                 : `Goal already over budget (${updated.tokens_used}/${updated.token_budget}). Resume with /goal resume after raising the budget.`,
                             "warning",
                         );
@@ -580,13 +580,13 @@ export default function goalsExtension(pi: ExtensionAPI) {
 
             // [1b] For autonomous runs where the goal was active at run
             // start but transitioned away during the run (e.g., model
-            // called update_goal(complete)), still count the turn.
+            // called update_goal(complete)), still count the iteration.
             // Without this, the final autonomous run is undercounted in
-            // turns_used.
+            // iters_used.
             const transitionedAway =
                 wasAutonomous && store.getGoal()!.status !== "active";
             if (transitionedAway) {
-                store.incrementTurns();
+                store.incrementIters();
             }
 
             // Early-return paths follow; flush accounting first.
@@ -663,7 +663,7 @@ export default function goalsExtension(pi: ExtensionAPI) {
             pauseGoal(
                 ctx,
                 "system",
-                `Goal paused: no progress detected after ${EMPTY_PROGRESS_LIMIT} turns.`,
+                `Goal paused: no progress detected after ${EMPTY_PROGRESS_LIMIT} iterations.`,
             );
             return;
         }
@@ -672,27 +672,27 @@ export default function goalsExtension(pi: ExtensionAPI) {
         const budgetHit =
             budgetExceededDuringRun ||
             (goal.token_budget !== null && goal.tokens_used >= goal.token_budget);
-        const turnCapHit = goal.turns_used >= MAX_AUTONOMOUS_TURNS;
-        if (budgetHit || turnCapHit) {
-            transitionToBudgetLimited(ctx, goal, turnCapHit);
+        const iterCapHit = goal.iters_used >= MAX_AUTONOMOUS_ITERS;
+        if (budgetHit || iterCapHit) {
+            transitionToBudgetLimited(ctx, goal, iterCapHit);
             return;
         }
 
         // [7] Pending user input: skip continuation, let it run as its own turn.
         if (ctx.hasPendingMessages()) return;
 
-        // [8] All conditions pass: increment turn counter and continue.
-        store.incrementTurns();
+        // [8] All conditions pass: increment iteration counter and continue.
+        store.incrementIters();
         store.persist();
         goal = store.getGoal()!;
         refreshStatus(ctx, goal);
 
-        // [8b] Post-increment cap check: incrementTurns may have pushed
-        // turns_used to exactly MAX_AUTONOMOUS_TURNS. If so, transition to
+        // [8b] Post-increment cap check: incrementIters may have pushed
+        // iters_used to exactly MAX_AUTONOMOUS_ITERS. If so, transition to
         // budget_limited with wrap-up rather than calling
         // scheduleContinuation (which would silently block without
         // transitioning).
-        const postIncrementCapHit = goal.turns_used >= MAX_AUTONOMOUS_TURNS;
+        const postIncrementCapHit = goal.iters_used >= MAX_AUTONOMOUS_ITERS;
         const postIncrementBudgetHit =
             goal.token_budget !== null && goal.tokens_used >= goal.token_budget;
         if (postIncrementCapHit || postIncrementBudgetHit) {
@@ -882,7 +882,7 @@ export default function goalsExtension(pi: ExtensionAPI) {
                             `Status: ${goal.status}`,
                             `Tokens: ${goal.tokens_used}${goal.token_budget !== null ? `/${goal.token_budget}` : ""}`,
                             `Time: ${goal.time_used_seconds}s`,
-                            `Turns: ${goal.turns_used}/${MAX_AUTONOMOUS_TURNS}`,
+                            `Iterations: ${goal.iters_used}/${MAX_AUTONOMOUS_ITERS}`,
                         ];
                         ctx.ui.notify(lines.join("\n"), "info");
                     }
@@ -936,15 +936,15 @@ export default function goalsExtension(pi: ExtensionAPI) {
                     // are STILL violated (user resumed without raising the
                     // limit), reject the transition rather than leaving the
                     // goal stuck in "active" with no continuation running.
-                    const turnCapStillHit = goal.turns_used >= MAX_AUTONOMOUS_TURNS;
+                    const iterCapStillHit = goal.iters_used >= MAX_AUTONOMOUS_ITERS;
                     const budgetStillHit =
                         goal.token_budget !== null &&
                         goal.tokens_used >= goal.token_budget;
-                    if (turnCapStillHit || budgetStillHit) {
+                    if (iterCapStillHit || budgetStillHit) {
                         if (ctx.hasUI) {
                             ctx.ui.notify(
-                                turnCapStillHit
-                                    ? "Cannot resume: autonomous turn cap still reached. Raise the limit first."
+                                iterCapStillHit
+                                    ? "Cannot resume: autonomous iteration cap still reached. Raise the limit first."
                                     : `Cannot resume: token budget still exceeded (${goal.tokens_used}/${goal.token_budget}). Raise the budget first.`,
                                 "warning",
                             );

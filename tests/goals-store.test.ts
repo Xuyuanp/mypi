@@ -88,7 +88,7 @@ describe("GoalStore", () => {
         expect(replaced!.objective).toBe("second");
         expect(replaced!.token_budget).toBe(200);
         expect(replaced!.tokens_used).toBe(0);
-        expect(replaced!.turns_used).toBe(0);
+        expect(replaced!.iters_used).toBe(0);
     });
 
     it("test_store_update_status_succeeds: updateStatus mutates and returns the goal", () => {
@@ -105,13 +105,13 @@ describe("GoalStore", () => {
         store.createGoal("obj", null);
         const entriesAfterCreate = countGoalEntries(sm);
         store.accountTokens(123, 4);
-        store.incrementTurns();
+        store.incrementIters();
 
         // In-memory mutation visible immediately.
         const goal = store.getGoal();
         expect(goal!.tokens_used).toBe(123);
         expect(goal!.time_used_seconds).toBe(4);
-        expect(goal!.turns_used).toBe(1);
+        expect(goal!.iters_used).toBe(1);
 
         // No new entry appended.
         expect(countGoalEntries(sm)).toBe(entriesAfterCreate);
@@ -194,6 +194,37 @@ describe("GoalStore", () => {
         store2.reconstruct(ctxOf(sm));
 
         expect(store2.getGoal()!.status).toBe("paused");
+    });
+
+    it("test_store_reconstruct_migrates_turns_used: old persisted turns_used is migrated to iters_used", () => {
+        // Simulate a persisted entry from before the rename: the goal
+        // has `turns_used` but no `iters_used` field.
+        const sm = SessionManager.inMemory();
+        sm.newSession({ id: "migration-test" });
+        const oldGoal = {
+            objective: "legacy goal",
+            status: "active",
+            token_budget: null,
+            tokens_used: 500,
+            time_used_seconds: 30,
+            turns_used: 7, // old field name
+            created_at: 1_000_000,
+            updated_at: 1_000_001,
+        };
+        sm.appendCustomEntry(GOAL_ENTRY_TYPE, {
+            kind: "snapshot",
+            goal: oldGoal,
+        });
+
+        const store = createGoalStore(makeStubPi(sm));
+        store.reconstruct(ctxOf(sm));
+
+        const goal = store.getGoal();
+        expect(goal).not.toBeNull();
+        expect(goal!.iters_used).toBe(7);
+        // Ensure incrementIters works correctly after migration.
+        store.incrementIters();
+        expect(store.getGoal()!.iters_used).toBe(8);
     });
 
     it("test_store_reconstruct_after_clear_then_create: latest goal entry wins over earlier sentinel", () => {

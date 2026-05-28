@@ -24,7 +24,7 @@ const RULES: readonly TransitionRule[] = [
         to: "paused",
         actors: new Set<TransitionActor>(["user", "system"]),
     },
-    // Active -> BudgetLimited: only the system, when tokens or turn cap hit.
+    // Active -> BudgetLimited: only the system, when tokens or iteration cap hit.
     {
         from: "active",
         to: "budget_limited",

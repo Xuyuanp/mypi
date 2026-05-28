@@ -10,13 +10,13 @@ export interface SessionGoal {
     token_budget: number | null;
     tokens_used: number;
     time_used_seconds: number;
-    turns_used: number;
+    iters_used: number;
     created_at: number;
     updated_at: number;
 }
 
 /** Hard cap on consecutive autonomous continuation runs without user input. */
-export const MAX_AUTONOMOUS_TURNS = 100;
+export const MAX_AUTONOMOUS_ITERS = 100;
 
 /**
  * Number of consecutive autonomous continuation runs producing no tool calls
