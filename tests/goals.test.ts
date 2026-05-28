@@ -40,14 +40,12 @@ interface Harness {
 
 async function makeHarness(): Promise<Harness> {
     const dir = await mkdtemp(join(tmpdir(), "goals-test-"));
-    process.env.PI_GOALS_ENABLED = "1";
     const faux = registerFauxProvider();
     return {
         cwd: dir,
         faux,
         cleanup: async () => {
             faux.unregister();
-            delete process.env.PI_GOALS_ENABLED;
             await rm(dir, { recursive: true, force: true });
         },
     };
@@ -991,18 +989,6 @@ describe("goals extension", () => {
         const result = await runScenario(h, "/goal create task --budget 0");
 
         expect(getGoalFromSession(result.sessionManager)).toBeNull();
-    });
-
-    it("test_tools_hidden_when_feature_disabled: getActiveToolNames excludes goal tools", async () => {
-        delete process.env.PI_GOALS_ENABLED;
-
-        const { session } = await makeMiniSession(h);
-        const active = session.getActiveToolNames();
-        session.dispose();
-
-        expect(active).not.toContain("create_goal");
-        expect(active).not.toContain("get_goal");
-        expect(active).not.toContain("update_goal");
     });
 
     // ── New: session_tree branch navigation ──────────────────────────

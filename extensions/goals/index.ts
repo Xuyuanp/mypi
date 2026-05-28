@@ -7,8 +7,6 @@
  *
  * State is stored in session entries via `pi.appendEntry`, so it is branch-
  * aware and travels with session forks. See `store.ts`.
- *
- * Feature gate: enabled when env `PI_GOALS_ENABLED=1` is set.
  */
 
 import { StringEnum } from "@earendil-works/pi-ai";
@@ -171,8 +169,6 @@ function toolJsonResult(payload: unknown) {
 // ── Extension ───────────────────────────────────────────────────────────
 
 export default function goalsExtension(pi: ExtensionAPI) {
-    if (process.env.PI_GOALS_ENABLED !== "1") return;
-
     // ── Per-run state (closure) ──────────────────────────────────────
 
     let isAutonomousContinuation = false;
