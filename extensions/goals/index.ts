@@ -138,8 +138,6 @@ const CreateGoalParams = Type.Object({
     ),
 });
 
-const GetGoalParams = Type.Object({});
-
 const UpdateGoalParams = Type.Object({
     status: StringEnum(["complete"] as const, {
         description: "Required. Must be 'complete'.",
@@ -756,20 +754,6 @@ export default function goalsExtension(pi: ExtensionAPI) {
             return toolJsonResult({
                 goal: created,
                 remaining_tokens: remainingTokens(created),
-            } satisfies GoalToolResult);
-        },
-    });
-
-    pi.registerTool({
-        name: "get_goal",
-        label: "Get Goal",
-        description: "Get the current goal including status, budgets, and usage.",
-        parameters: GetGoalParams,
-        async execute(_id, _params, _signal, _onUpdate, _ctx) {
-            const goal = store.getGoal();
-            return toolJsonResult({
-                goal,
-                remaining_tokens: remainingTokens(goal),
             } satisfies GoalToolResult);
         },
     });

@@ -1,5 +1,5 @@
 ---
-description: goal-driven review-fix using the `reviewer` subagent; progress is tracked via create_goal / get_goal / update_goal with a token budget
+description: goal-driven review-fix using the `reviewer` subagent; progress is tracked via create_goal / update_goal with a token budget
 argument-hint: "[scope/context] [--budget <tokens>]"
 ---
 
@@ -7,7 +7,7 @@ $ARGUMENTS <!-- optional: scope filter / extra focus, plus optional `--budget <N
 
 ## Review-Fix (goal-driven, subagent reviewer)
 
-The work is tracked through the **goal tools** (`create_goal`, `get_goal`,
+The work is tracked through the **goal tools** (`create_goal`,
 `update_goal`). Progress is made by calling the `reviewer` subagent (via
 the `subagent` tool) on the current uncommitted diff and feeding findings
 back to you for fixing. The goal is complete when the diff receives a clean
@@ -44,7 +44,7 @@ Each iteration performs the steps below. Call `update_goal` (`status:
 active and the next iteration will continue the work.
 
 Budget enforcement is handled by the goal tools and is out of scope for
-this procedure -- do not poll `get_goal` just to check tokens.
+this procedure -- do not poll the goal status just to check tokens.
 
 1. **Collect the diff.** In a single bash invocation, write the following to
    `/tmp/pi-review-diff-<unix_ts>-<pid>.md` (use `$$` for the pid and
