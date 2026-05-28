@@ -12,10 +12,15 @@
 import { StringEnum } from "@earendil-works/pi-ai";
 import type {
     AgentEndEvent,
+    AgentToolResult,
     ExtensionAPI,
     ExtensionContext,
+    Theme,
+    ToolRenderResultOptions,
     TurnEndEvent,
 } from "@earendil-works/pi-coding-agent";
+import type { Component } from "@earendil-works/pi-tui";
+import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import {
     renderBudgetLimitPrompt,
@@ -170,6 +175,127 @@ function toolJsonResult(payload: unknown) {
         content: [{ type: "text" as const, text: JSON.stringify(payload) }],
         details: payload,
     };
+}
+
+// ── Tool Renderers ──────────────────────────────────────────────────────
+
+type CreateGoalArgs = { objective?: string; token_budget?: number };
+type UpdateGoalArgs = { status?: string };
+
+interface RenderContext {
+    lastComponent: Component | undefined;
+    argsComplete: boolean;
+}
+
+function formatBudgetShort(budget: number): string {
+    if (budget >= 1_000_000) return `${(budget / 1_000_000).toFixed(1)}M`;
+    if (budget >= 1_000) return `${Math.round(budget / 1_000)}k`;
+    return String(budget);
+}
+
+function getOrCreateText(context: RenderContext): Text {
+    return context.lastComponent instanceof Text
+        ? context.lastComponent
+        : new Text("", 0, 0);
+}
+
+function renderCreateGoalCall(
+    args: CreateGoalArgs,
+    theme: Theme,
+    context: RenderContext,
+): Text {
+    const text = getOrCreateText(context);
+    if (!context.argsComplete) {
+        text.setText(
+            theme.fg("toolTitle", theme.bold("create_goal ")) +
+                theme.fg("muted", "creating..."),
+        );
+        return text;
+    }
+    let content = theme.fg("toolTitle", theme.bold("create_goal "));
+    if (args.objective) {
+        const truncated =
+            args.objective.length > 60
+                ? `${args.objective.slice(0, 57)}...`
+                : args.objective;
+        content += theme.fg("dim", `"${truncated}"`);
+    }
+    if (args.token_budget) {
+        content += theme.fg(
+            "dim",
+            ` budget: ${formatBudgetShort(args.token_budget)}`,
+        );
+    }
+    text.setText(content);
+    return text;
+}
+
+function renderCreateGoalResult(
+    result: AgentToolResult<unknown>,
+    options: ToolRenderResultOptions,
+    theme: Theme,
+    context: RenderContext,
+): Text {
+    const text = getOrCreateText(context);
+    const details = result.details as GoalToolResult | { error: string } | undefined;
+    if (details && "error" in details) {
+        text.setText(theme.fg("error", details.error));
+        return text;
+    }
+
+    if (!options.expanded) {
+        text.setText("");
+        return text;
+    }
+
+    // Expanded: show full objective + budget
+    const goal = (details as GoalToolResult | undefined)?.goal;
+    if (!goal) {
+        text.setText("");
+        return text;
+    }
+    let content = theme.fg("muted", goal.objective);
+    if (goal.token_budget !== null) {
+        content += `\n${theme.fg("dim", `budget: ${goal.token_budget.toLocaleString()} tokens`)}`;
+    }
+    text.setText(content);
+    return text;
+}
+
+function renderUpdateGoalCall(
+    args: UpdateGoalArgs,
+    theme: Theme,
+    context: RenderContext,
+): Text {
+    const text = getOrCreateText(context);
+    if (!context.argsComplete) {
+        text.setText(
+            theme.fg("toolTitle", theme.bold("update_goal ")) +
+                theme.fg("muted", "completing..."),
+        );
+        return text;
+    }
+    let content = theme.fg("toolTitle", theme.bold("update_goal "));
+    content += theme.fg("muted", "status: ");
+    content += theme.fg("accent", args.status ?? "complete");
+    text.setText(content);
+    return text;
+}
+
+function renderUpdateGoalResult(
+    result: AgentToolResult<unknown>,
+    _options: ToolRenderResultOptions,
+    theme: Theme,
+    context: RenderContext,
+): Text {
+    const text = getOrCreateText(context);
+    const details = result.details as { error: string } | undefined;
+    if (details && "error" in details) {
+        text.setText(theme.fg("error", details.error));
+        return text;
+    }
+    text.setText("");
+    return text;
 }
 
 // ── Extension ───────────────────────────────────────────────────────────
@@ -724,6 +850,15 @@ export default function goalsExtension(pi: ExtensionAPI) {
         description:
             "Create a persistent goal only when explicitly requested by the user. Do not infer goals from ordinary tasks. Set token_budget only when an explicit budget is requested.",
         parameters: CreateGoalParams,
+
+        renderCall(args, theme, context) {
+            return renderCreateGoalCall(args, theme, context);
+        },
+
+        renderResult(result, options, theme, context) {
+            return renderCreateGoalResult(result, options, theme, context);
+        },
+
         async execute(_id, params, _signal, _onUpdate, ctx) {
             const objective = params.objective?.trim() ?? "";
             if (objective.length === 0) {
@@ -764,6 +899,15 @@ export default function goalsExtension(pi: ExtensionAPI) {
         description:
             "Mark the goal complete only when the objective is fully achieved and no required work remains. Do not call merely because the budget is low or you are stopping.",
         parameters: UpdateGoalParams,
+
+        renderCall(args, theme, context) {
+            return renderUpdateGoalCall(args, theme, context);
+        },
+
+        renderResult(result, options, theme, context) {
+            return renderUpdateGoalResult(result, options, theme, context);
+        },
+
         async execute(_id, _params, _signal, _onUpdate, ctx) {
             const goal = store.getGoal();
             if (!goal) {

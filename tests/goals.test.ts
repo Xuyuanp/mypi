@@ -285,7 +285,7 @@ describe("goals extension", () => {
         await h.cleanup();
     });
 
-    it("test_create_goal_tool: model creates goal, get_goal returns it", async () => {
+    it("test_create_goal_tool: model creates goal and marks complete", async () => {
         h.faux.setResponses([
             fauxAssistantMessage(
                 fauxToolCall("create_goal", { objective: "Test objective" }),
