@@ -5,13 +5,13 @@ argument-hint: "[scope/context] [--budget <tokens>]"
 
 $ARGUMENTS <!-- optional: scope filter / extra focus, plus optional `--budget <N>` token budget -->
 
-## Review-Fix Loop (goal-driven, subagent reviewer)
+## Review-Fix (goal-driven, subagent reviewer)
 
 The work is tracked through the **goal tools** (`create_goal`, `get_goal`,
 `update_goal`). Progress is made by calling the `reviewer` subagent (via
 the `subagent` tool) on the current uncommitted diff and feeding findings
-back to you for fixing. You stop on a clean verdict, an empty diff, or when
-the reviewer cannot drive further progress.
+back to you for fixing. The goal is complete when the diff receives a clean
+verdict, no changes remain, or the reviewer cannot drive further progress.
 
 The reviewer subagent has **no `bash` / git access**, so you must collect the
 diff yourself and pass the file path in its `task`.
@@ -20,13 +20,10 @@ diff yourself and pass the file path in its `task`.
 
 ### Setup (run once, before any review work)
 
-1. **Sanity check.** Run `git rev-parse --git-dir`. If it fails, stop and
-   report "not a git repository". Do NOT call `create_goal` in this case.
-
-2. **Parse `$ARGUMENTS`.** Split off `--budget <N>` if present; the remainder
+1. **Parse `$ARGUMENTS`.** Split off `--budget <N>` if present; the remainder
    is the scope/extra-focus string passed to the reviewer.
 
-3. **Create the goal.** Call `create_goal` with:
+2. **Create the goal.** Call `create_goal` with:
     - `objective`: a single sentence describing the desired end state, for
       example:
       `"All uncommitted changes pass review by the reviewer subagent (verdict 'correct', no blocking P0-P2 issues), with declined findings logged in DECISIONS.md. Scope/focus: <scope-string or 'entire diff'>."`
@@ -42,9 +39,9 @@ diff yourself and pass the file path in its `task`.
 
 ### Procedure
 
-While the goal is active, do the work below. Exit only when one of the
-**exit conditions** fires; otherwise the goal is not yet satisfied and the
-agent must keep working on it.
+Each iteration performs the steps below. Call `update_goal` (`status:
+"complete"`) when an exit condition is met; otherwise the goal remains
+active and the next iteration will continue the work.
 
 Budget enforcement is handled by the goal tools and is out of scope for
 this procedure -- do not poll `get_goal` just to check tokens.
@@ -105,7 +102,7 @@ this procedure -- do not poll `get_goal` just to check tokens.
     - Otherwise, the goal is not yet satisfied; keep working on it.
 
    Treat ambiguous wording (`partially correct`, `not correct`,
-   `incorrect`) as **not** clean.
+   `incorrect`) as **not** clean -- the goal is not yet satisfied.
 
 ---
 
@@ -231,11 +228,12 @@ that the new entry supersedes it:
 
 ## Output Summary Format
 
-Output once, after the loop exits. Always include `Goal status` so the user
-can tell whether the goal is still active (resumable) or complete.
+Output once, after the goal reaches a terminal state. Always include
+`Goal status` so the user can tell whether the goal is still active
+(resumable) or complete.
 
 ```markdown
-## Review-Fix Summary (goal-driven, subagent)
+## Review-Fix Summary
 
 - **Exit reason**: clean / no-changes / stuck-on-declines / reviewer-error / error
 - **Goal status**: complete / active (resumable)
