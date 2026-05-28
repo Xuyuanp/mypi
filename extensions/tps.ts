@@ -45,6 +45,7 @@ export default function (pi: ExtensionAPI) {
         let cacheRead = 0;
         let cacheWrite = 0;
         let totalTokens = 0;
+        let costTotal = 0;
 
         for (const message of event.messages) {
             if (!isAssistantMessage(message)) continue;
@@ -53,13 +54,21 @@ export default function (pi: ExtensionAPI) {
             cacheRead += message.usage.cacheRead;
             cacheWrite += message.usage.cacheWrite;
             totalTokens += message.usage.totalTokens;
+            costTotal += message.usage.cost.total;
         }
 
         if (output <= 0) return;
 
         const elapsedSeconds = generationMs / 1000;
         const tokensPerSecond = output / elapsedSeconds;
-        const message = `TPS ${tokensPerSecond.toFixed(1)} tok/s | out ${output.toLocaleString()}, in ${input.toLocaleString()}, cache r/w ${cacheRead.toLocaleString()}/${cacheWrite.toLocaleString()}, total ${totalTokens.toLocaleString()} | gen ${elapsedSeconds.toFixed(1)}s`;
+        const promptTokens = input + cacheRead + cacheWrite;
+        const hasCacheActivity = cacheRead > 0 || cacheWrite > 0;
+        const hitRateSegment =
+            hasCacheActivity && promptTokens > 0
+                ? `, ${((cacheRead / promptTokens) * 100).toFixed(1)}%`
+                : "";
+        const costSegment = costTotal > 0 ? ` | $${costTotal.toFixed(4)}` : "";
+        const message = `TPS ${tokensPerSecond.toFixed(1)} tok/s | out ${output.toLocaleString()}, in ${input.toLocaleString()}, cache r/w ${cacheRead.toLocaleString()}/${cacheWrite.toLocaleString()}, total ${totalTokens.toLocaleString()}${hitRateSegment}${costSegment} | ${elapsedSeconds.toFixed(1)}s`;
         ctx.ui.notify(message, "info");
     });
 }
