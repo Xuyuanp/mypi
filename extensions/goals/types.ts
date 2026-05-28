@@ -5,8 +5,6 @@
 export type GoalStatus = "active" | "paused" | "budget_limited" | "complete";
 
 export interface SessionGoal {
-    session_id: string;
-    goal_id: string;
     objective: string;
     status: GoalStatus;
     token_budget: number | null;
@@ -34,6 +32,9 @@ export const STALE_GOAL_SECONDS = 86400;
 
 /** Status key used for the footer status indicator. */
 export const STATUS_KEY = "goal";
+
+/** Custom entry type for persisted goal state snapshots. */
+export const GOAL_ENTRY_TYPE = "session-goal";
 
 /** Custom message type for hidden goal continuation prompts. */
 export const CONTINUATION_MESSAGE_TYPE = "goal-continuation";

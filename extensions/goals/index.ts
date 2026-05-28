@@ -5,11 +5,12 @@
  * continues across turn boundaries until the goal is achieved, the budget is
  * exhausted, or the user intervenes.
  *
+ * State is stored in session entries via `pi.appendEntry`, so it is branch-
+ * aware and travels with session forks. See `store.ts`.
+ *
  * Feature gate: enabled when env `PI_GOALS_ENABLED=1` is set.
  */
 
-import { homedir } from "node:os";
-import { join } from "node:path";
 import { StringEnum } from "@earendil-works/pi-ai";
 import type {
     AgentEndEvent,
@@ -18,14 +19,18 @@ import type {
     TurnEndEvent,
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import { GoalDatabase } from "./db.js";
 import {
     renderBudgetLimitPrompt,
     renderCompletionReport,
     renderContinuationPrompt,
     renderObjectiveUpdatedPrompt,
 } from "./prompts.js";
-import { canTransition, validateModelTransition } from "./state-machine.js";
+import {
+    canTransition,
+    type TransitionActor,
+    validateModelTransition,
+} from "./state-machine.js";
+import { createGoalStore, type GoalStore } from "./store.js";
 import {
     BUDGET_LIMIT_MESSAGE_TYPE,
     CONTINUATION_MESSAGE_TYPE,
@@ -43,13 +48,6 @@ import {
 } from "./types.js";
 
 // ── Helpers ─────────────────────────────────────────────────────────────
-
-/** Default DB path. Override via PI_GOALS_DB_PATH (used by tests). */
-function defaultDbPath(): string {
-    return (
-        process.env.PI_GOALS_DB_PATH || join(homedir(), ".pi", "state", "goals.db")
-    );
-}
 
 /**
  * Extract billable token usage from a TurnEndEvent message.
@@ -95,6 +93,29 @@ function timeAgo(epochSeconds: number): string {
     return `${Math.floor(delta / 86400)}d ago`;
 }
 
+/**
+ * Pure helper for the empty-progress counter step inside agent_end.
+ *
+ * - User-initiated runs always reset the counter: a fresh user turn is by
+ *   definition progress, regardless of whether the assistant happened to
+ *   call a tool. Otherwise a text-only user reply would leave a stale
+ *   autonomous count intact and prematurely auto-pause on the next empty
+ *   run.
+ * - Autonomous runs reset on tool calls (real progress) and increment
+ *   when the assistant produced text only.
+ *
+ * Exported for unit testing; called from agent_end.
+ */
+export function nextEmptyProgressCount(
+    current: number,
+    wasAutonomous: boolean,
+    currentRunHadToolCalls: boolean,
+): number {
+    if (!wasAutonomous) return 0;
+    if (currentRunHadToolCalls) return 0;
+    return current + 1;
+}
+
 // ── Tool schemas ────────────────────────────────────────────────────────
 
 const CreateGoalParams = Type.Object({
@@ -117,12 +138,6 @@ const UpdateGoalParams = Type.Object({
     status: StringEnum(["complete"] as const, {
         description: "Required. Must be 'complete'.",
     }),
-    expected_goal_id: Type.Optional(
-        Type.String({
-            description:
-                "Optional. The goal_id from the most recent get_goal call. If provided and the stored goal_id has changed, the call fails.",
-        }),
-    ),
 });
 
 interface GoalToolResult {
@@ -158,23 +173,6 @@ function toolJsonResult(payload: unknown) {
 export default function goalsExtension(pi: ExtensionAPI) {
     if (process.env.PI_GOALS_ENABLED !== "1") return;
 
-    // ── DB ───────────────────────────────────────────────────────────
-
-    let db: GoalDatabase | null = null;
-    let dbInitError: string | undefined;
-
-    function ensureDb(): GoalDatabase | null {
-        if (db) return db;
-        if (dbInitError) return null;
-        try {
-            db = new GoalDatabase(defaultDbPath());
-            return db;
-        } catch (err) {
-            dbInitError = err instanceof Error ? err.message : String(err);
-            return null;
-        }
-    }
-
     // ── Per-run state (closure) ──────────────────────────────────────
 
     let isAutonomousContinuation = false;
@@ -200,11 +198,30 @@ export default function goalsExtension(pi: ExtensionAPI) {
      */
     let usageUnavailableWarned = false;
 
-    // ── Helpers that need ctx ─────────────────────────────────────────
+    /**
+     * Lifecycle flags for cooperative bail-out inside setImmediate
+     * callbacks. AGENTS.md forbids broad try/catch around stale ctx; we
+     * use lifecycle-driven flags instead.
+     *
+     *  - sessionActive: cleared on session_shutdown.
+     *  - scheduleGeneration: bumped on session_start AND session_tree.
+     *    Each setImmediate captures the generation at schedule time and
+     *    bails when it changes (covers the reload race where the same
+     *    closure sees shutdown+session_start, plus branch navigation).
+     */
+    let sessionActive = true;
+    let scheduleGeneration = 0;
 
-    function getSessionId(ctx: ExtensionContext): string {
-        return ctx.sessionManager.getSessionId();
-    }
+    // ── Store ────────────────────────────────────────────────────────
+    // Declared after the lifecycle flags so the store can read them via
+    // an injected predicate. Persistence is skipped when the session is
+    // inactive, replacing the previous try/catch around pi.appendEntry.
+
+    const store: GoalStore = createGoalStore(pi, {
+        isSessionActive: () => sessionActive,
+    });
+
+    // ── Helpers that need ctx ─────────────────────────────────────────
 
     function emit(channel: string, payload: unknown): void {
         try {
@@ -224,61 +241,67 @@ export default function goalsExtension(pi: ExtensionAPI) {
     }
 
     /**
+     * Defer `body` to the next tick, gated by the lifecycle flags and
+     * the idle/pending-messages guards that every continuation needs.
+     *
+     * Cooperative bail-out per AGENTS.md: lifecycle flags express
+     * intent; all checks are pure local-state reads with no ctx access
+     * before they pass. `sessionActive` covers shutdown-without-restart;
+     * the generation counter covers reload (session_shutdown +
+     * session_start in the same closure) and /tree branch navigation.
+     */
+    function scheduleSafeImmediate(ctx: ExtensionContext, body: () => void): void {
+        const myGeneration = scheduleGeneration;
+        setImmediate(() => {
+            if (!sessionActive) return;
+            if (myGeneration !== scheduleGeneration) return;
+            if (!ctx.isIdle()) return;
+            if (ctx.hasPendingMessages()) return;
+            body();
+        });
+    }
+
+    /**
      * Schedule the next autonomous continuation.
      *
      * Must be deferred via setImmediate: agent_end fires while the agent's
      * activeRun is still set; calling agent.prompt() synchronously throws.
      * setImmediate runs after the current run's lifecycle has cleared.
      */
-    function scheduleContinuation(ctx: ExtensionContext, sessionId: string): void {
-        setImmediate(() => {
-            // Re-check goal state & guardrails before firing. The DB may
-            // have changed under us during the setImmediate delay (concurrent
-            // mutation, command, etc.); never start a run that would violate
-            // the turn cap or budget.
-            //
-            // The whole body is wrapped because ctx may be stale (session
-            // disposed/replaced) by the time setImmediate fires. ctx.isIdle
-            // and friends throw on stale ctx; treat that as "do not
-            // continue" rather than crashing the process.
+    function scheduleContinuation(ctx: ExtensionContext): void {
+        scheduleSafeImmediate(ctx, () => {
+            // Re-check goal state & guardrails before firing. State may
+            // have changed under us during the setImmediate delay
+            // (concurrent mutation, command, etc.); never start a run
+            // that would violate the turn cap or budget.
+            const current = store.getGoal();
+            if (!current || current.status !== "active") return;
+            if (current.turns_used >= MAX_AUTONOMOUS_TURNS) return;
+            if (
+                current.token_budget !== null &&
+                current.tokens_used >= current.token_budget
+            ) {
+                return;
+            }
+            isAutonomousContinuation = true;
+            emit(EVT_GOAL_CONTINUATION, {
+                turn_number: current.turns_used,
+            });
+            // Render the prompt from the freshly-read goal (current),
+            // not a stale capture: between scheduling and execution,
+            // objective or budget may have been updated by another
+            // command.
+            const prompt = renderContinuationPrompt(current);
             try {
-                const dbi = ensureDb();
-                if (!dbi) return;
-                const current = dbi.getGoal(sessionId);
-                if (!current || current.status !== "active") return;
-                if (current.turns_used >= MAX_AUTONOMOUS_TURNS) return;
-                if (
-                    current.token_budget !== null &&
-                    current.tokens_used >= current.token_budget
-                ) {
-                    return;
-                }
-                if (!ctx.isIdle()) return;
-                if (ctx.hasPendingMessages()) return;
-                isAutonomousContinuation = true;
-                emit(EVT_GOAL_CONTINUATION, {
-                    session_id: sessionId,
-                    turn_number: current.turns_used,
-                });
-                // Render the prompt from the freshly-read goal (current),
-                // not the stale `goal` parameter from the caller. Between
-                // scheduling and execution, objective or budget may have
-                // been updated by another session/command.
-                const prompt = renderContinuationPrompt(current);
-                try {
-                    pi.sendMessage(
-                        {
-                            customType: CONTINUATION_MESSAGE_TYPE,
-                            content: prompt,
-                            display: false,
-                        },
-                        { triggerTurn: true },
-                    );
-                } catch {
-                    isAutonomousContinuation = false;
-                }
+                pi.sendMessage(
+                    {
+                        customType: CONTINUATION_MESSAGE_TYPE,
+                        content: prompt,
+                        display: false,
+                    },
+                    { triggerTurn: true },
+                );
             } catch {
-                // Stale ctx (session disposed) or transient runtime error.
                 isAutonomousContinuation = false;
             }
         });
@@ -286,17 +309,14 @@ export default function goalsExtension(pi: ExtensionAPI) {
 
     function pauseGoal(
         ctx: ExtensionContext,
-        sessionId: string,
-        actor: "user" | "system",
+        actor: TransitionActor,
         reason: string,
     ): SessionGoal | null {
-        const dbi = ensureDb();
-        if (!dbi) return null;
-        const goal = dbi.getGoal(sessionId);
+        const goal = store.getGoal();
         if (!goal) return null;
         if (!canTransition(goal.status, "paused", actor)) return goal;
         const previousStatus = goal.status;
-        const updated = dbi.updateStatus(sessionId, null, "paused");
+        const updated = store.updateStatus("paused");
         if (updated) {
             emit(EVT_GOAL_UPDATED, {
                 goal: updated,
@@ -316,13 +336,11 @@ export default function goalsExtension(pi: ExtensionAPI) {
      */
     function transitionToBudgetLimited(
         ctx: ExtensionContext,
-        dbi: GoalDatabase,
-        sessionId: string,
         goal: SessionGoal,
         isTurnCap: boolean,
     ): void {
         const previousStatus = goal.status;
-        const updated = dbi.updateStatus(sessionId, null, "budget_limited");
+        const updated = store.updateStatus("budget_limited");
         if (!updated) return;
         emit(EVT_GOAL_UPDATED, {
             goal: updated,
@@ -338,13 +356,10 @@ export default function goalsExtension(pi: ExtensionAPI) {
                 "warning",
             );
         }
-        // Send wrap-up steering prompt as a one-shot turn. The entire
-        // body is wrapped in try/catch because ctx may be stale (session
-        // disposed/replaced) by the time setImmediate fires.
-        setImmediate(() => {
+        // Send wrap-up steering prompt as a one-shot turn. Same lifecycle
+        // bail-out as scheduleContinuation via the shared helper.
+        scheduleSafeImmediate(ctx, () => {
             try {
-                if (!ctx.isIdle()) return;
-                if (ctx.hasPendingMessages()) return;
                 pi.sendMessage(
                     {
                         customType: BUDGET_LIMIT_MESSAGE_TYPE,
@@ -354,35 +369,46 @@ export default function goalsExtension(pi: ExtensionAPI) {
                     { triggerTurn: true },
                 );
             } catch {
-                // Stale ctx or transient runtime error -- goal is already
-                // budget_limited, the wrap-up prompt is best-effort.
+                // sendMessage failure is best-effort: goal is already
+                // budget_limited, the wrap-up prompt is non-essential.
             }
         });
     }
 
-    // ── Event: session_start ─────────────────────────────────────────
-
-    pi.on("session_start", async (_event, ctx) => {
-        // Reset per-session flags.
+    /**
+     * Reset all per-run and per-loop bookkeeping. Called from
+     * session_start and session_tree -- both indicate the previous
+     * branch's logical loop is no longer the active loop.
+     */
+    function resetLoopState(): void {
+        // Per-run flags (set in agent_start, consumed in agent_end).
         isAutonomousContinuation = false;
         currentRunHadToolCalls = false;
         currentRunTokens = 0;
         budgetExceededDuringRun = false;
+        goalActiveAtRunStart = false;
+        // Per-loop flags (accumulated across multiple autonomous runs in
+        // the same branch's continuation loop).
         emptyProgressCount = 0;
         usageUnavailableWarned = false;
+    }
 
-        const dbi = ensureDb();
-        if (!dbi) {
-            if (ctx.hasUI && dbInitError) {
-                ctx.ui.notify(
-                    `Goals: failed to open database: ${dbInitError}`,
-                    "error",
-                );
-            }
-            return;
-        }
-        const sessionId = getSessionId(ctx);
-        const goal = dbi.getGoal(sessionId);
+    // ── Event: session_shutdown ─────────────────────────────────────
+
+    pi.on("session_shutdown", async () => {
+        // Cooperative bail-out flag for any in-flight setImmediate.
+        sessionActive = false;
+    });
+
+    // ── Event: session_start ─────────────────────────────────────────
+
+    pi.on("session_start", async (_event, ctx) => {
+        sessionActive = true;
+        scheduleGeneration++;
+        resetLoopState();
+
+        store.reconstruct(ctx);
+        const goal = store.getGoal();
         if (!goal) {
             refreshStatus(ctx, null);
             return;
@@ -391,7 +417,7 @@ export default function goalsExtension(pi: ExtensionAPI) {
         if (goal.status === "active") {
             const ageSeconds = Math.floor(Date.now() / 1000) - goal.updated_at;
             if (ageSeconds > STALE_GOAL_SECONDS) {
-                const updated = dbi.updateStatus(sessionId, null, "paused");
+                const updated = store.updateStatus("paused");
                 if (updated) {
                     emit(EVT_GOAL_UPDATED, {
                         goal: updated,
@@ -416,7 +442,7 @@ export default function goalsExtension(pi: ExtensionAPI) {
             const budgetHit =
                 goal.token_budget !== null && goal.tokens_used >= goal.token_budget;
             if (turnCapHit || budgetHit) {
-                const updated = dbi.updateStatus(sessionId, null, "budget_limited");
+                const updated = store.updateStatus("budget_limited");
                 if (updated) {
                     emit(EVT_GOAL_UPDATED, {
                         goal: updated,
@@ -438,7 +464,7 @@ export default function goalsExtension(pi: ExtensionAPI) {
                 ctx.ui.notify(`Resuming active goal: ${goal.objective}`, "info");
             }
             refreshStatus(ctx, goal);
-            scheduleContinuation(ctx, sessionId);
+            scheduleContinuation(ctx);
             return;
         }
 
@@ -452,9 +478,25 @@ export default function goalsExtension(pi: ExtensionAPI) {
         }
     });
 
+    // ── Event: session_tree ─────────────────────────────────────────
+
+    pi.on("session_tree", async (_event, ctx) => {
+        // Bump first so any in-flight setImmediate from the previous
+        // branch bails on its generation check before touching ctx.
+        scheduleGeneration++;
+        resetLoopState();
+        store.reconstruct(ctx);
+        refreshStatus(ctx, store.getGoal());
+        // Intentionally do NOT auto-schedule a continuation, and do NOT
+        // apply session_start's stale/over-budget transition logic.
+        // Branch navigation is exploratory; the user resumes via
+        // /goal resume, and persisting status mutations on every /tree
+        // would dirty every branch the user visits.
+    });
+
     // ── Event: agent_start ──────────────────────────────────────────
 
-    pi.on("agent_start", async (_event, ctx) => {
+    pi.on("agent_start", async (_event, _ctx) => {
         currentRunHadToolCalls = false;
         currentRunTokens = 0;
         budgetExceededDuringRun = false;
@@ -464,13 +506,9 @@ export default function goalsExtension(pi: ExtensionAPI) {
         // runs that began while the goal was active (plus the
         // active-to-complete/paused transition run).
         goalActiveAtRunStart = false;
-        const dbi = ensureDb();
-        if (dbi) {
-            const sessionId = getSessionId(ctx);
-            const goal = dbi.getGoal(sessionId);
-            if (goal && goal.status === "active") {
-                goalActiveAtRunStart = true;
-            }
+        const goal = store.getGoal();
+        if (goal && goal.status === "active") {
+            goalActiveAtRunStart = true;
         }
     });
 
@@ -489,10 +527,7 @@ export default function goalsExtension(pi: ExtensionAPI) {
         // update_goal). Runs that start with an already-paused/complete
         // goal do not consume budget.
         if (!goalActiveAtRunStart) return;
-        const dbi = ensureDb();
-        if (!dbi) return;
-        const sessionId = getSessionId(ctx);
-        const goal = dbi.getGoal(sessionId);
+        const goal = store.getGoal();
         if (!goal) return;
 
         const delta = tokenDelta(event);
@@ -526,69 +561,62 @@ export default function goalsExtension(pi: ExtensionAPI) {
     // ── Event: agent_end ────────────────────────────────────────────
 
     pi.on("agent_end", async (event: AgentEndEvent, ctx) => {
-        const dbi = ensureDb();
-        if (!dbi) {
-            isAutonomousContinuation = false;
-            return;
-        }
-        const sessionId = getSessionId(ctx);
-        let goal = dbi.getGoal(sessionId);
         const wasAutonomous = isAutonomousContinuation;
         isAutonomousContinuation = false;
-        if (!goal) {
+        if (!store.getGoal()) {
             return;
         }
 
         // [1] Flush token / time accounting. Only if the goal was active
-        // when this run started. This covers the transitioning run (active
-        // at start, flipped to complete/paused mid-run by update_goal) but
-        // skips unrelated runs that start while the goal is already in a
-        // terminal state (paused/complete/budget_limited).
+        // when this run started. Covers the transitioning run (active at
+        // start, flipped to complete/paused mid-run by update_goal); skips
+        // unrelated runs that start while the goal is already in a
+        // terminal state.
         if (goalActiveAtRunStart) {
             const elapsed = Math.max(
                 0,
                 Math.floor((Date.now() - runStartTimestamp) / 1000),
             );
-            if (currentRunTokens > 0 || elapsed > 0) {
-                const updated = dbi.accountTokens(
-                    sessionId,
-                    currentRunTokens,
-                    elapsed,
-                );
-                if (updated) goal = updated;
+            const hadAccounting = currentRunTokens > 0 || elapsed > 0;
+            if (hadAccounting) {
+                store.accountTokens(currentRunTokens, elapsed);
+            }
+
+            // [1b] For autonomous runs where the goal was active at run
+            // start but transitioned away during the run (e.g., model
+            // called update_goal(complete)), still count the turn.
+            // Without this, the final autonomous run is undercounted in
+            // turns_used.
+            const transitionedAway =
+                wasAutonomous && store.getGoal()!.status !== "active";
+            if (transitionedAway) {
+                store.incrementTurns();
+            }
+
+            // Early-return paths follow; flush accounting first.
+            if (hadAccounting || transitionedAway) {
+                store.persist();
             }
         }
         currentRunTokens = 0;
 
-        // [1b] For autonomous runs where the goal was active at run
-        // start but transitioned away during the run (e.g., model called
-        // update_goal(complete)), still count the turn. Without this, the
-        // final autonomous run is undercounted in turns_used.
-        if (wasAutonomous && goalActiveAtRunStart && goal.status !== "active") {
-            dbi.incrementTurns(sessionId);
-        }
+        // Capture once after accounting; mutations below re-read.
+        const goalAfterAccounting = store.getGoal();
+        if (!goalAfterAccounting) return;
 
-        // After accounting, the rest of the loop logic (empty progress,
-        // continuation, budget transitions) only applies to active goals.
-        if (goal.status !== "active") {
+        // After accounting, the rest of the loop logic only applies to
+        // active goals.
+        if (goalAfterAccounting.status !== "active") {
             return;
         }
+        let goal = goalAfterAccounting;
 
-        // [2] Track empty progress for autonomous runs only.
-        if (wasAutonomous) {
-            if (currentRunHadToolCalls) {
-                emptyProgressCount = 0;
-            } else {
-                emptyProgressCount += 1;
-            }
-        } else {
-            // User intervention always resets the counter -- a fresh user
-            // turn is by definition progress, regardless of whether the
-            // assistant happened to call a tool in response. Otherwise a
-            // text-only user reply would leave a stale autonomous count
-            // intact and prematurely auto-pause on the next empty run.
-            emptyProgressCount = 0;
-        }
+        // [2] Update empty-progress counter for this run.
+        emptyProgressCount = nextEmptyProgressCount(
+            emptyProgressCount,
+            wasAutonomous,
+            currentRunHadToolCalls,
+        );
 
         const stopReason = lastAssistantStopReason(event.messages);
 
@@ -596,7 +624,6 @@ export default function goalsExtension(pi: ExtensionAPI) {
         if (stopReason === "aborted") {
             pauseGoal(
                 ctx,
-                sessionId,
                 "system",
                 "Goal paused -- interrupted. Resume with /goal resume.",
             );
@@ -607,7 +634,6 @@ export default function goalsExtension(pi: ExtensionAPI) {
         if (stopReason === "error") {
             pauseGoal(
                 ctx,
-                sessionId,
                 "system",
                 "Goal paused due to error. Resume with /goal resume.",
             );
@@ -616,16 +642,14 @@ export default function goalsExtension(pi: ExtensionAPI) {
 
         // [4b] Continuation requires stopReason === "stop" (spec section
         // 8.1.3). Any other value -- including `undefined` (no assistant
-        // message was produced, e.g. run failed before model output) --
-        // indicates an unhealthy or incomplete run. For autonomous runs,
-        // pause the goal to break the loop. For user-initiated runs, just
-        // skip continuation scheduling without pausing (the user can
-        // re-engage).
+        // message was produced) -- indicates an unhealthy run. For
+        // autonomous runs, pause the goal to break the loop. For user-
+        // initiated runs, just skip continuation scheduling without
+        // pausing (the user can re-engage).
         if (stopReason !== "stop") {
             if (wasAutonomous) {
                 pauseGoal(
                     ctx,
-                    sessionId,
                     "system",
                     stopReason === undefined
                         ? "Goal paused -- run ended without assistant output. Resume with /goal resume."
@@ -642,20 +666,19 @@ export default function goalsExtension(pi: ExtensionAPI) {
             emptyProgressCount = 0;
             pauseGoal(
                 ctx,
-                sessionId,
                 "system",
                 `Goal paused: no progress detected after ${EMPTY_PROGRESS_LIMIT} turns.`,
             );
             return;
         }
 
-        // [6] Budget hit: transition to budget_limited and inject wrap-up prompt.
+        // [6] Budget hit: transition to budget_limited and inject wrap-up.
         const budgetHit =
             budgetExceededDuringRun ||
             (goal.token_budget !== null && goal.tokens_used >= goal.token_budget);
         const turnCapHit = goal.turns_used >= MAX_AUTONOMOUS_TURNS;
         if (budgetHit || turnCapHit) {
-            transitionToBudgetLimited(ctx, dbi, sessionId, goal, turnCapHit);
+            transitionToBudgetLimited(ctx, goal, turnCapHit);
             return;
         }
 
@@ -663,29 +686,24 @@ export default function goalsExtension(pi: ExtensionAPI) {
         if (ctx.hasPendingMessages()) return;
 
         // [8] All conditions pass: increment turn counter and continue.
-        const incremented = dbi.incrementTurns(sessionId);
-        if (!incremented) return;
-        refreshStatus(ctx, incremented);
+        store.incrementTurns();
+        store.persist();
+        goal = store.getGoal()!;
+        refreshStatus(ctx, goal);
 
         // [8b] Post-increment cap check: incrementTurns may have pushed
         // turns_used to exactly MAX_AUTONOMOUS_TURNS. If so, transition to
-        // budget_limited with wrap-up rather than calling scheduleContinuation
-        // (which would silently block without transitioning).
-        const postIncrementCapHit = incremented.turns_used >= MAX_AUTONOMOUS_TURNS;
+        // budget_limited with wrap-up rather than calling
+        // scheduleContinuation (which would silently block without
+        // transitioning).
+        const postIncrementCapHit = goal.turns_used >= MAX_AUTONOMOUS_TURNS;
         const postIncrementBudgetHit =
-            incremented.token_budget !== null &&
-            incremented.tokens_used >= incremented.token_budget;
+            goal.token_budget !== null && goal.tokens_used >= goal.token_budget;
         if (postIncrementCapHit || postIncrementBudgetHit) {
-            transitionToBudgetLimited(
-                ctx,
-                dbi,
-                sessionId,
-                incremented,
-                postIncrementCapHit,
-            );
+            transitionToBudgetLimited(ctx, goal, postIncrementCapHit);
             return;
         }
-        scheduleContinuation(ctx, sessionId);
+        scheduleContinuation(ctx);
     });
 
     // ── Tools ───────────────────────────────────────────────────────
@@ -708,15 +726,7 @@ export default function goalsExtension(pi: ExtensionAPI) {
                     "objective exceeds the 4000 character limit.",
                 );
             }
-            const dbi = ensureDb();
-            if (!dbi) {
-                return toolErrorResult(
-                    `Goals database unavailable: ${dbInitError ?? "unknown error"}`,
-                );
-            }
-            const sessionId = getSessionId(ctx);
-            const created = dbi.createGoal(
-                sessionId,
+            const created = store.createGoal(
                 objective,
                 params.token_budget ?? null,
                 false,
@@ -743,15 +753,8 @@ export default function goalsExtension(pi: ExtensionAPI) {
         label: "Get Goal",
         description: "Get the current goal including status, budgets, and usage.",
         parameters: GetGoalParams,
-        async execute(_id, _params, _signal, _onUpdate, ctx) {
-            const dbi = ensureDb();
-            if (!dbi) {
-                return toolErrorResult(
-                    `Goals database unavailable: ${dbInitError ?? "unknown error"}`,
-                );
-            }
-            const sessionId = getSessionId(ctx);
-            const goal = dbi.getGoal(sessionId);
+        async execute(_id, _params, _signal, _onUpdate, _ctx) {
+            const goal = store.getGoal();
             return toolJsonResult({
                 goal,
                 remaining_tokens: remainingTokens(goal),
@@ -765,40 +768,19 @@ export default function goalsExtension(pi: ExtensionAPI) {
         description:
             "Mark the goal complete only when the objective is fully achieved and no required work remains. Do not call merely because the budget is low or you are stopping.",
         parameters: UpdateGoalParams,
-        async execute(_id, params, _signal, _onUpdate, ctx) {
-            const dbi = ensureDb();
-            if (!dbi) {
-                return toolErrorResult(
-                    `Goals database unavailable: ${dbInitError ?? "unknown error"}`,
-                );
-            }
-            const sessionId = getSessionId(ctx);
-            const goal = dbi.getGoal(sessionId);
+        async execute(_id, _params, _signal, _onUpdate, ctx) {
+            const goal = store.getGoal();
             if (!goal) {
                 return toolErrorResult("No active goal to update.");
-            }
-            if (
-                params.expected_goal_id !== undefined &&
-                params.expected_goal_id !== goal.goal_id
-            ) {
-                return toolErrorResult(
-                    "Goal was changed externally. Call get_goal to read current state.",
-                );
             }
             const validation = validateModelTransition(goal.status, "complete");
             if (!validation.valid) {
                 return toolErrorResult(validation.error ?? "Invalid transition.");
             }
             const previousStatus = goal.status;
-            const updated = dbi.updateStatus(
-                sessionId,
-                params.expected_goal_id ?? goal.goal_id,
-                "complete",
-            );
+            const updated = store.updateStatus("complete");
             if (!updated) {
-                return toolErrorResult(
-                    "Goal was changed externally. Call get_goal to read current state.",
-                );
+                return toolErrorResult("Failed to update goal.");
             }
             emit(EVT_GOAL_UPDATED, {
                 goal: updated,
@@ -816,6 +798,7 @@ export default function goalsExtension(pi: ExtensionAPI) {
             } satisfies UpdateGoalToolResult);
         },
     });
+
     // ── Commands ────────────────────────────────────────────────────
 
     function parseCommand(args: string): { sub: string; rest: string } {
@@ -836,7 +819,6 @@ export default function goalsExtension(pi: ExtensionAPI) {
      * Parse `<text> [--budget N]` or `--budget N <text>`.
      * Returns objective without the budget flag and the parsed budget.
      */
-
     function parseObjectiveAndBudget(rest: string): {
         objective: string;
         budget: number | null;
@@ -887,23 +869,12 @@ export default function goalsExtension(pi: ExtensionAPI) {
         description:
             "Manage the session goal: /goal create|status|pause|resume|edit|budget|complete|clear",
         handler: async (args, ctx) => {
-            const dbi = ensureDb();
-            if (!dbi) {
-                if (ctx.hasUI) {
-                    ctx.ui.notify(
-                        `Goals database unavailable: ${dbInitError ?? "unknown error"}`,
-                        "error",
-                    );
-                }
-                return;
-            }
-            const sessionId = getSessionId(ctx);
             const { sub, rest } = parseCommand(args);
 
             switch (sub) {
                 case "":
                 case "status": {
-                    const goal = dbi.getGoal(sessionId);
+                    const goal = store.getGoal();
                     if (!goal) {
                         if (ctx.hasUI) ctx.ui.notify("No active goal.", "info");
                         return;
@@ -937,12 +908,7 @@ export default function goalsExtension(pi: ExtensionAPI) {
                         }
                         return;
                     }
-                    const created = dbi.createGoal(
-                        sessionId,
-                        objective,
-                        budget,
-                        true,
-                    );
+                    const created = store.createGoal(objective, budget, true);
                     if (!created) return;
                     usageUnavailableWarned = false;
                     // Reset the empty-progress counter: a fresh goal starts
@@ -953,11 +919,11 @@ export default function goalsExtension(pi: ExtensionAPI) {
                     if (ctx.hasUI) {
                         ctx.ui.notify(`Goal created: ${objective}`, "info");
                     }
-                    scheduleContinuation(ctx, sessionId);
+                    scheduleContinuation(ctx);
                     return;
                 }
                 case "pause": {
-                    const goal = dbi.getGoal(sessionId);
+                    const goal = store.getGoal();
                     if (!goal) {
                         if (ctx.hasUI) ctx.ui.notify("No active goal.", "info");
                         return;
@@ -972,7 +938,7 @@ export default function goalsExtension(pi: ExtensionAPI) {
                         return;
                     }
                     const previousStatus = goal.status;
-                    const updated = dbi.updateStatus(sessionId, null, "paused");
+                    const updated = store.updateStatus("paused");
                     if (updated) {
                         emit(EVT_GOAL_UPDATED, {
                             goal: updated,
@@ -984,7 +950,7 @@ export default function goalsExtension(pi: ExtensionAPI) {
                     return;
                 }
                 case "resume": {
-                    const goal = dbi.getGoal(sessionId);
+                    const goal = store.getGoal();
                     if (!goal) {
                         if (ctx.hasUI) ctx.ui.notify("No active goal.", "info");
                         return;
@@ -1018,7 +984,7 @@ export default function goalsExtension(pi: ExtensionAPI) {
                         }
                         return;
                     }
-                    const updated = dbi.updateStatus(sessionId, null, "active");
+                    const updated = store.updateStatus("active");
                     if (!updated) return;
                     // Reset the empty-progress counter: an explicit user
                     // resume starts a fresh autonomous loop. Without this,
@@ -1031,11 +997,11 @@ export default function goalsExtension(pi: ExtensionAPI) {
                     });
                     refreshStatus(ctx, updated);
                     if (ctx.hasUI) ctx.ui.notify("Goal resumed.", "info");
-                    scheduleContinuation(ctx, sessionId);
+                    scheduleContinuation(ctx);
                     return;
                 }
                 case "edit": {
-                    const goal = dbi.getGoal(sessionId);
+                    const goal = store.getGoal();
                     if (!goal) {
                         if (ctx.hasUI) ctx.ui.notify("No active goal.", "info");
                         return;
@@ -1059,11 +1025,7 @@ export default function goalsExtension(pi: ExtensionAPI) {
                         }
                         return;
                     }
-                    const updated = dbi.updateObjective(
-                        sessionId,
-                        null,
-                        trimmedObjective,
-                    );
+                    const updated = store.updateObjective(trimmedObjective);
                     if (!updated) return;
                     emit(EVT_GOAL_UPDATED, {
                         goal: updated,
@@ -1074,7 +1036,8 @@ export default function goalsExtension(pi: ExtensionAPI) {
                         ctx.ui.notify(`Goal objective updated.`, "info");
                     }
                     // If the goal is active and a turn is in flight, send
-                    // an objective-updated steering prompt as a hidden message.
+                    // an objective-updated steering prompt as a hidden
+                    // message.
                     if (updated.status === "active") {
                         const prompt = renderObjectiveUpdatedPrompt(updated);
                         try {
@@ -1089,7 +1052,7 @@ export default function goalsExtension(pi: ExtensionAPI) {
                         } catch {
                             if (ctx.hasUI) {
                                 ctx.ui.notify(
-                                    "Warning: objective updated in DB but steering prompt could not be delivered to the model.",
+                                    "Warning: objective updated but steering prompt could not be delivered to the model.",
                                     "warning",
                                 );
                             }
@@ -1098,7 +1061,7 @@ export default function goalsExtension(pi: ExtensionAPI) {
                     return;
                 }
                 case "budget": {
-                    const goal = dbi.getGoal(sessionId);
+                    const goal = store.getGoal();
                     if (!goal) {
                         if (ctx.hasUI) ctx.ui.notify("No active goal.", "info");
                         return;
@@ -1113,7 +1076,7 @@ export default function goalsExtension(pi: ExtensionAPI) {
                         }
                         return;
                     }
-                    const updated = dbi.updateBudget(sessionId, null, n);
+                    const updated = store.updateBudget(n);
                     if (!updated) return;
                     emit(EVT_GOAL_UPDATED, {
                         goal: updated,
@@ -1126,7 +1089,7 @@ export default function goalsExtension(pi: ExtensionAPI) {
                     return;
                 }
                 case "complete": {
-                    const goal = dbi.getGoal(sessionId);
+                    const goal = store.getGoal();
                     if (!goal) {
                         if (ctx.hasUI) ctx.ui.notify("No active goal.", "info");
                         return;
@@ -1141,7 +1104,7 @@ export default function goalsExtension(pi: ExtensionAPI) {
                         return;
                     }
                     const previousStatus = goal.status;
-                    const updated = dbi.updateStatus(sessionId, null, "complete");
+                    const updated = store.updateStatus("complete");
                     if (!updated) return;
                     emit(EVT_GOAL_UPDATED, {
                         goal: updated,
@@ -1154,16 +1117,13 @@ export default function goalsExtension(pi: ExtensionAPI) {
                     return;
                 }
                 case "clear": {
-                    const goal = dbi.getGoal(sessionId);
+                    const goal = store.getGoal();
                     if (!goal) {
                         if (ctx.hasUI) ctx.ui.notify("No active goal.", "info");
                         return;
                     }
-                    dbi.deleteGoal(sessionId);
-                    emit(EVT_GOAL_CLEARED, {
-                        session_id: sessionId,
-                        goal_id: goal.goal_id,
-                    });
+                    store.deleteGoal();
+                    emit(EVT_GOAL_CLEARED, {});
                     refreshStatus(ctx, null);
                     if (ctx.hasUI) ctx.ui.notify("Goal cleared.", "info");
                     return;
@@ -1179,15 +1139,5 @@ export default function goalsExtension(pi: ExtensionAPI) {
                 }
             }
         },
-    });
-
-    // Cleanly close DB on shutdown so SQLite flushes.
-    pi.on("session_shutdown", async () => {
-        if (db) {
-            try {
-                db.close();
-            } catch {}
-            db = null;
-        }
     });
 }
