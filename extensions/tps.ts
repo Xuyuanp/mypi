@@ -7,6 +7,16 @@ function isAssistantMessage(message: unknown): message is AssistantMessage {
     return role === "assistant";
 }
 
+function getSubagentCost(message: unknown): number {
+    if (!message || typeof message !== "object") return 0;
+    const msg = message as { role?: string; toolName?: string; details?: unknown };
+    if (msg.role !== "toolResult" || msg.toolName !== "subagent") return 0;
+    const details = msg.details as
+        | { result?: { usage?: { cost?: { total?: number } } } }
+        | undefined;
+    return details?.result?.usage?.cost?.total ?? 0;
+}
+
 /**
  * Reports tokens-per-second based on generation time only.
  *
@@ -45,16 +55,20 @@ export default function (pi: ExtensionAPI) {
         let cacheRead = 0;
         let cacheWrite = 0;
         let totalTokens = 0;
-        let costTotal = 0;
+        let parentCost = 0;
+        let subagentCost = 0;
 
         for (const message of event.messages) {
-            if (!isAssistantMessage(message)) continue;
-            input += message.usage.input;
-            output += message.usage.output;
-            cacheRead += message.usage.cacheRead;
-            cacheWrite += message.usage.cacheWrite;
-            totalTokens += message.usage.totalTokens;
-            costTotal += message.usage.cost.total;
+            if (isAssistantMessage(message)) {
+                input += message.usage.input;
+                output += message.usage.output;
+                cacheRead += message.usage.cacheRead;
+                cacheWrite += message.usage.cacheWrite;
+                totalTokens += message.usage.totalTokens;
+                parentCost += message.usage.cost.total;
+                continue;
+            }
+            subagentCost += getSubagentCost(message);
         }
 
         if (output <= 0) return;
@@ -67,7 +81,13 @@ export default function (pi: ExtensionAPI) {
             hasCacheActivity && promptTokens > 0
                 ? `, ${((cacheRead / promptTokens) * 100).toFixed(1)}%`
                 : "";
-        const costSegment = costTotal > 0 ? ` | $${costTotal.toFixed(4)}` : "";
+        let costSegment = "";
+        if (parentCost > 0 || subagentCost > 0) {
+            costSegment = ` | $${parentCost.toFixed(4)}`;
+            if (subagentCost > 0) {
+                costSegment += `(+$${subagentCost.toFixed(4)})`;
+            }
+        }
         const message = `TPS ${tokensPerSecond.toFixed(1)} tok/s | out ${output.toLocaleString()}, in ${input.toLocaleString()}, cache r/w ${cacheRead.toLocaleString()}/${cacheWrite.toLocaleString()}, total ${totalTokens.toLocaleString()}${hitRateSegment}${costSegment} | ${elapsedSeconds.toFixed(1)}s`;
         ctx.ui.notify(message, "info");
     });

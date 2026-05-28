@@ -100,15 +100,7 @@ function formatDuration(ms: number): string {
 }
 
 function formatUsageStats(
-    usage: {
-        input: number;
-        output: number;
-        cacheRead: number;
-        cacheWrite: number;
-        cost: number;
-        contextTokens?: number;
-        turns?: number;
-    },
+    usage: UsageStats,
     model?: string,
     durationMs?: number,
 ): string {
@@ -118,10 +110,7 @@ function formatUsageStats(
     if (usage.output) parts.push(`↓${formatTokens(usage.output)}`);
     if (usage.cacheRead) parts.push(`R${formatTokens(usage.cacheRead)}`);
     if (usage.cacheWrite) parts.push(`W${formatTokens(usage.cacheWrite)}`);
-    if (usage.cost) parts.push(`$${usage.cost.toFixed(4)}`);
-    if (usage.contextTokens && usage.contextTokens > 0) {
-        parts.push(`ctx:${formatTokens(usage.contextTokens)}`);
-    }
+    if (usage.cost.total) parts.push(`$${usage.cost.total.toFixed(4)}`);
     if (durationMs !== undefined) parts.push(formatDuration(durationMs));
     if (model) parts.push(model);
     return parts.join(" ");
@@ -246,9 +235,59 @@ interface UsageStats {
     output: number;
     cacheRead: number;
     cacheWrite: number;
-    cost: number;
-    contextTokens: number;
+    totalTokens: number;
+    cost: {
+        input: number;
+        output: number;
+        cacheRead: number;
+        cacheWrite: number;
+        total: number;
+    };
     turns: number;
+}
+
+function createZeroUsage(): UsageStats {
+    return {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        turns: 0,
+    };
+}
+
+function accumulateUsage(
+    target: UsageStats,
+    source: {
+        input?: number;
+        output?: number;
+        cacheRead?: number;
+        cacheWrite?: number;
+        totalTokens?: number;
+        cost?: {
+            input?: number;
+            output?: number;
+            cacheRead?: number;
+            cacheWrite?: number;
+            total?: number;
+        };
+    },
+): void {
+    target.input += source.input || 0;
+    target.output += source.output || 0;
+    target.cacheRead += source.cacheRead || 0;
+    target.cacheWrite += source.cacheWrite || 0;
+    target.totalTokens += source.totalTokens || 0;
+    const cost = source.cost;
+    if (cost) {
+        target.cost.input += cost.input || 0;
+        target.cost.output += cost.output || 0;
+        target.cost.cacheRead += cost.cacheRead || 0;
+        target.cost.cacheWrite += cost.cacheWrite || 0;
+        target.cost.total += cost.total || 0;
+    }
 }
 
 const ZERO_USAGE: Readonly<UsageStats> = Object.freeze({
@@ -256,8 +295,14 @@ const ZERO_USAGE: Readonly<UsageStats> = Object.freeze({
     output: 0,
     cacheRead: 0,
     cacheWrite: 0,
-    cost: 0,
-    contextTokens: 0,
+    totalTokens: 0,
+    cost: Object.freeze({
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        total: 0,
+    }),
     turns: 0,
 });
 
@@ -416,7 +461,7 @@ async function runSubagent(
         exitCode: -1,
         messages: [],
         stderr: "",
-        usage: { ...ZERO_USAGE },
+        usage: createZeroUsage(),
         model: modelArg,
     };
 
@@ -489,15 +534,8 @@ async function runSubagent(
 
                     if (msg.role === "assistant") {
                         currentResult.usage.turns++;
-                        const usage = msg.usage;
-                        if (usage) {
-                            currentResult.usage.input += usage.input || 0;
-                            currentResult.usage.output += usage.output || 0;
-                            currentResult.usage.cacheRead += usage.cacheRead || 0;
-                            currentResult.usage.cacheWrite += usage.cacheWrite || 0;
-                            currentResult.usage.cost += usage.cost?.total || 0;
-                            currentResult.usage.contextTokens =
-                                usage.totalTokens || 0;
+                        if (msg.usage) {
+                            accumulateUsage(currentResult.usage, msg.usage);
                         }
                         if (!currentResult.model && msg.model)
                             currentResult.model = msg.model;
