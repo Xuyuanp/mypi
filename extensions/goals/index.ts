@@ -80,7 +80,15 @@ function formatStatus(goal: SessionGoal): string {
         goal.token_budget === null
             ? "unlimited"
             : goal.token_budget.toLocaleString();
-    return `[Goal: ${goal.status} | ${tokens}/${budget} tokens | iter ${goal.iters_used}/${MAX_AUTONOMOUS_ITERS}]`;
+    const isTerminal =
+        goal.status === "complete" || goal.status === "budget_limited";
+    const runsLabel =
+        isTerminal && goal.iters_used === 0
+            ? ""
+            : isTerminal
+              ? ` | runs: ${goal.iters_used}`
+              : ` | runs: ${goal.iters_used}/${MAX_AUTONOMOUS_ITERS}`;
+    return `[Goal: ${goal.status} | ${tokens}/${budget} tokens${runsLabel}]`;
 }
 
 function timeAgo(epochSeconds: number): string {
