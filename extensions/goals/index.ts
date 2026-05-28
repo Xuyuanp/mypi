@@ -525,17 +525,16 @@ export default function goalsExtension(pi: ExtensionAPI) {
     // ── Event: turn_end ─────────────────────────────────────────────
 
     pi.on("turn_end", async (event: TurnEndEvent, ctx) => {
-        // Only accumulate tokens if the goal was active when this run
-        // started. This covers the normal active case AND the
-        // transitioning run (active at start, flipped mid-run by
-        // update_goal). Runs that start with an already-paused/complete
-        // goal do not consume budget.
+        // Accumulate unconditionally; agent_end gates the budget
+        // flush on goalActiveAtRunStart.
+        const delta = tokenDelta(event);
+        currentRunTokens += delta;
+
+        // Goal-specific checks (budget warning, budget exceeded) require
+        // an active goal context.
         if (!goalActiveAtRunStart) return;
         const goal = store.getGoal();
         if (!goal) return;
-
-        const delta = tokenDelta(event);
-        currentRunTokens += delta;
 
         // Warn once per goal when the provider does not report usage but
         // a budget is configured -- budget enforcement is non-functional.
@@ -555,11 +554,19 @@ export default function goalsExtension(pi: ExtensionAPI) {
         }
 
         if (
+            !budgetExceededDuringRun &&
             goal.token_budget !== null &&
             goal.tokens_used + currentRunTokens >= goal.token_budget
         ) {
             budgetExceededDuringRun = true;
         }
+
+        // Live status update: show the running total (persisted +
+        // in-flight) so the user sees token usage tick up each turn.
+        refreshStatus(ctx, {
+            ...goal,
+            tokens_used: goal.tokens_used + currentRunTokens,
+        });
     });
 
     // ── Event: agent_end ────────────────────────────────────────────
@@ -609,8 +616,9 @@ export default function goalsExtension(pi: ExtensionAPI) {
         if (!goalAfterAccounting) return;
 
         // After accounting, the rest of the loop logic only applies to
-        // active goals.
+        // active goals. Refresh status with final totals before exiting.
         if (goalAfterAccounting.status !== "active") {
+            refreshStatus(ctx, goalAfterAccounting);
             return;
         }
         let goal = goalAfterAccounting;
