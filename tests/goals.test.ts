@@ -524,9 +524,9 @@ describe("goals extension", () => {
         expect(sentinelConsumed).toBe(false);
     });
 
-    it("test_goal_create_command: /goal create sets up the goal", async () => {
+    it("test_goal_create_command: /goal <objective> sets up the goal", async () => {
         h.faux.setResponses([
-            // After /goal create runs, the continuation prompt fires; model
+            // After /goal <objective> runs, the continuation prompt fires; model
             // immediately completes.
             fauxAssistantMessage(
                 fauxToolCall("update_goal", { status: "complete" }),
@@ -536,7 +536,7 @@ describe("goals extension", () => {
         ]);
         const result = await runScenario(
             h,
-            "/goal create Refactor auth --budget 5000",
+            "/goal Refactor auth --budget 5000",
         );
 
         const goal = getGoalFromSession(result.sessionManager);
@@ -558,7 +558,7 @@ describe("goals extension", () => {
             fauxAssistantMessage(fauxText("ack")),
             fauxAssistantMessage(fauxText("ack")),
         ]);
-        const result = await runScenario(h, "/goal create Pausable");
+        const result = await runScenario(h, "/goal Pausable");
         const goal = getGoalFromSession(result.sessionManager);
         expect(goal).not.toBeNull();
         // Status may already be paused due to empty progress; for the
@@ -577,7 +577,7 @@ describe("goals extension", () => {
             fauxAssistantMessage(fauxText("ack 3")),
             fauxAssistantMessage(fauxText("ack 4")),
         ]);
-        await session.prompt("/goal create FromCommand");
+        await session.prompt("/goal FromCommand");
         // Allow the continuation loop to settle.
         await new Promise((r) => setTimeout(r, 300));
         await session.prompt("/goal complete");
@@ -827,10 +827,10 @@ describe("goals extension", () => {
         expect(getGoalFromSession(result.sessionManager)).toBeNull();
     });
 
-    it("test_command_create_overlong_objective_rejected: /goal create with >4000 chars rejected", async () => {
+    it("test_command_create_overlong_objective_rejected: /goal with >4000 chars rejected", async () => {
         const longObjective = "x".repeat(4001);
         h.faux.setResponses([fauxAssistantMessage(fauxText("noop"))]);
-        const result = await runScenario(h, `/goal create ${longObjective}`);
+        const result = await runScenario(h, `/goal ${longObjective}`);
 
         expect(getGoalFromSession(result.sessionManager)).toBeNull();
     });
@@ -844,7 +844,7 @@ describe("goals extension", () => {
             fauxAssistantMessage(fauxText("ack")),
             fauxAssistantMessage(fauxText("ack")),
         ]);
-        await session.prompt("/goal create Valid objective");
+        await session.prompt("/goal Valid objective");
         await new Promise((r) => setTimeout(r, 300));
 
         const before = getGoalFromSession(sessionManager);
@@ -970,23 +970,23 @@ describe("goals extension", () => {
         expect(sentinelConsumed).toBe(false);
     });
 
-    it("test_budget_negative_rejected: /goal create with --budget -5 returns error, no goal created", async () => {
+    it("test_budget_negative_rejected: /goal with --budget -5 returns error, no goal created", async () => {
         h.faux.setResponses([fauxAssistantMessage(fauxText("noop"))]);
-        const result = await runScenario(h, "/goal create task --budget -5");
+        const result = await runScenario(h, "/goal task --budget -5");
 
         expect(getGoalFromSession(result.sessionManager)).toBeNull();
     });
 
-    it("test_budget_trailing_chars_rejected: /goal create with --budget 10abc returns error, no goal created", async () => {
+    it("test_budget_trailing_chars_rejected: /goal with --budget 10abc returns error, no goal created", async () => {
         h.faux.setResponses([fauxAssistantMessage(fauxText("noop"))]);
-        const result = await runScenario(h, "/goal create task --budget 10abc");
+        const result = await runScenario(h, "/goal task --budget 10abc");
 
         expect(getGoalFromSession(result.sessionManager)).toBeNull();
     });
 
-    it("test_budget_zero_rejected: /goal create with --budget 0 returns error, no goal created", async () => {
+    it("test_budget_zero_rejected: /goal with --budget 0 returns error, no goal created", async () => {
         h.faux.setResponses([fauxAssistantMessage(fauxText("noop"))]);
-        const result = await runScenario(h, "/goal create task --budget 0");
+        const result = await runScenario(h, "/goal task --budget 0");
 
         expect(getGoalFromSession(result.sessionManager)).toBeNull();
     });

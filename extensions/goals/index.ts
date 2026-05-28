@@ -863,7 +863,7 @@ export default function goalsExtension(pi: ExtensionAPI) {
 
     pi.registerCommand("goal", {
         description:
-            "Manage the session goal: /goal create|status|pause|resume|edit|budget|complete|clear",
+            "Manage the session goal: /goal status|pause|resume|edit|budget|complete|clear or /goal <objective> to create",
         handler: async (args, ctx) => {
             const { sub, rest } = parseCommand(args);
 
@@ -888,36 +888,7 @@ export default function goalsExtension(pi: ExtensionAPI) {
                     }
                     return;
                 }
-                case "create": {
-                    const { objective, budget, error } =
-                        parseObjectiveAndBudget(rest);
-                    if (error) {
-                        if (ctx.hasUI) ctx.ui.notify(error, "error");
-                        return;
-                    }
-                    if (!objective) {
-                        if (ctx.hasUI) {
-                            ctx.ui.notify(
-                                "Usage: /goal create <objective> [--budget <n>]",
-                                "error",
-                            );
-                        }
-                        return;
-                    }
-                    const created = store.createGoal(objective, budget, true);
-                    if (!created) return;
-                    usageUnavailableWarned = false;
-                    // Reset the empty-progress counter: a fresh goal starts
-                    // a new autonomous loop with a clean slate.
-                    emptyProgressCount = 0;
-                    emit(EVT_GOAL_CREATED, { goal: created });
-                    refreshStatus(ctx, created);
-                    if (ctx.hasUI) {
-                        ctx.ui.notify(`Goal created: ${objective}`, "info");
-                    }
-                    scheduleContinuation(ctx);
-                    return;
-                }
+
                 case "pause": {
                     const goal = store.getGoal();
                     if (!goal) {
@@ -1125,12 +1096,36 @@ export default function goalsExtension(pi: ExtensionAPI) {
                     return;
                 }
                 default: {
-                    if (ctx.hasUI) {
-                        ctx.ui.notify(
-                            `Unknown subcommand: ${sub}. Try /goal create|status|pause|resume|edit|budget|complete|clear.`,
-                            "error",
-                        );
+                    // No known subcommand matched; treat entire args as
+                    // a goal creation request.
+                    const rawObjective = args.trim();
+                    const { objective, budget, error } =
+                        parseObjectiveAndBudget(rawObjective);
+                    if (error) {
+                        if (ctx.hasUI) ctx.ui.notify(error, "error");
+                        return;
                     }
+                    if (!objective) {
+                        if (ctx.hasUI) {
+                            ctx.ui.notify(
+                                "Usage: /goal <objective> [--budget <n>]",
+                                "error",
+                            );
+                        }
+                        return;
+                    }
+                    const created = store.createGoal(objective, budget, true);
+                    if (!created) return;
+                    usageUnavailableWarned = false;
+                    // Reset the empty-progress counter: a fresh goal starts
+                    // a new autonomous loop with a clean slate.
+                    emptyProgressCount = 0;
+                    emit(EVT_GOAL_CREATED, { goal: created });
+                    refreshStatus(ctx, created);
+                    if (ctx.hasUI) {
+                        ctx.ui.notify(`Goal created: ${objective}`, "info");
+                    }
+                    scheduleContinuation(ctx);
                     return;
                 }
             }
