@@ -1,3 +1,14 @@
+/**
+ * Auto-generates a short session title from the first user/assistant exchange.
+ *
+ * Triggers on `turn_end` after the first complete turn. Uses a lightweight
+ * model (claude-haiku) to produce a 4-word-or-less title. Falls back to a
+ * truncated snippet of the user message if all LLM attempts fail.
+ *
+ * Exports pure helpers (`buildFallbackTitle`, `postProcessTitle`) and the
+ * async `generateTitle` / `generateAndSetTitle` for testability.
+ */
+
 import process from "node:process";
 import {
     type AssistantMessage,
@@ -22,7 +33,6 @@ const TITLE_MODEL = {
 const MAX_TITLE_LENGTH = 50;
 const MAX_RETRIES = 2;
 const FALLBACK_LENGTH = 50;
-const TITLE_ENTRY_TYPE = "ad:session-title";
 
 const TITLE_PROMPT = `Generate a short title (four words or less) that describes the topic of the user's messages.
 Reply with only the title, nothing else. Do not show your reasoning.
@@ -95,32 +105,19 @@ export async function generateTitle(
     }
 
     // TODO: set temperature to 0.3 when pi-ai exposes it
-    // Pack both user and assistant text into user messages to avoid constructing
-    // a full AssistantMessage (which requires api, provider, model, usage, etc).
+    const contextParts = [`User message:\n${userText}`];
+    if (assistantText) {
+        contextParts.push(`Assistant response:\n${assistantText}`);
+    }
+
     const messages: Message[] = [
         {
             role: "user",
-            content: [{ type: "text", text: `User message:\n${userText}` }],
-            timestamp: Date.now(),
-        },
-        ...(assistantText
-            ? [
-                  {
-                      role: "user" as const,
-                      content: [
-                          {
-                              type: "text" as const,
-                              text: `Assistant response:\n${assistantText}`,
-                          },
-                      ],
-                      timestamp: Date.now(),
-                  },
-              ]
-            : []),
-        {
-            role: "user",
             content: [
-                { type: "text", text: "Generate a title for this conversation." },
+                {
+                    type: "text",
+                    text: `${contextParts.join("\n\n")}\n\nGenerate a title for this conversation.`,
+                },
             ],
             timestamp: Date.now(),
         },
@@ -192,17 +189,19 @@ export async function generateAndSetTitle(
         try {
             const title = await generateTitle(userText, assistantText, ctx);
             if (!isActive()) return;
-            if (title) {
-                pi.setSessionName(title);
-                pi.appendEntry(TITLE_ENTRY_TYPE, {
-                    title,
-                    rawUserText: userText,
-                    rawAssistantText: assistantText,
-                    attempt,
-                });
-                ctx.ui.notify(`Session: ${title}`, "info");
-                return;
+            if (!title) {
+                lastError = new Error("Model returned empty title");
+                if (attempt < MAX_RETRIES) {
+                    ctx.ui.notify(
+                        `Title generation returned empty (attempt ${attempt}/${MAX_RETRIES}), retrying...`,
+                        "warning",
+                    );
+                }
+                continue;
             }
+            pi.setSessionName(title);
+            ctx.ui.notify(`Session: ${title}`, "info");
+            return;
         } catch (error) {
             if (!isActive()) return;
             lastError = error instanceof Error ? error : new Error(String(error));
@@ -220,13 +219,6 @@ export async function generateAndSetTitle(
     // All retries exhausted -- fallback
     const fallback = buildFallbackTitle(userText);
     pi.setSessionName(fallback);
-    pi.appendEntry(TITLE_ENTRY_TYPE, {
-        title: fallback,
-        fallback: true,
-        error: lastError?.message ?? "Unknown error",
-        rawUserText: userText,
-        rawAssistantText: assistantText,
-    });
     ctx.ui.notify(`Title generation failed, using fallback: ${fallback}`, "error");
 }
 
@@ -259,6 +251,8 @@ export default function sessionNameExtension(pi: ExtensionAPI) {
         }
 
         await generateAndSetTitle(pi, ctx, () => state.sessionActive);
+        // Always mark as named: if session became inactive mid-call,
+        // this is harmless -- state resets on next session_start.
         state.hasAutoNamed = true;
     });
 }
