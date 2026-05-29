@@ -327,12 +327,6 @@ export default function (pi: ExtensionAPI) {
             const sctx = buildSessionContext(branch);
             const agentMessages = sctx.messages;
             const llmMessages = convertToLlm(agentMessages);
-            while (
-                llmMessages.length > 0 &&
-                llmMessages[llmMessages.length - 1].role !== "user"
-            ) {
-                llmMessages.pop();
-            }
 
             // Keep system prompt identical to parent conversation
             // so the provider-level KV cache prefix is reused
