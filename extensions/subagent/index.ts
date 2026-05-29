@@ -901,21 +901,17 @@ export default function (pi: ExtensionAPI) {
                     }
                 }
                 const usageStr = formatUsageStats(r.usage, r.model, r.durationMs);
+                const toolCallCount = toolCallItems.length;
+                const countStr = toolCallCount > 0 ? `${toolCallCount} tools` : "";
+                const lastLine = [countStr, usageStr].filter(Boolean).join(" ");
                 container.addChild(new Spacer(1));
-                container.addChild(new Text(theme.fg("dim", usageStr), 0, 0));
+                container.addChild(new Text(theme.fg("dim", lastLine), 0, 0));
                 return container;
             }
 
             // Collapsed view — last 3 tool calls
-            const hiddenCount = toolCallItems.length - 3;
             const recentToolCalls = toolCallItems.slice(-3);
             let text = "";
-            if (hiddenCount > 0) {
-                text += theme.fg(
-                    "dim",
-                    ` ... ${hiddenCount} more tool call${hiddenCount > 1 ? "s" : ""}`,
-                );
-            }
             for (const item of recentToolCalls) {
                 if (text) text += "\n";
                 const icon = toolStatusIcon(item.status, theme);
@@ -923,16 +919,20 @@ export default function (pi: ExtensionAPI) {
                     ` ${icon} ` +
                     formatToolCall(item.name, item.args, theme.fg.bind(theme));
             }
+            const toolCallCount = toolCallItems.length;
+            const countStr = toolCallCount > 0 ? `${toolCallCount} tools` : "";
             if (isError) {
                 const errorMsg = r.errorMessage || r.stopReason || "failed";
                 if (text) text += "\n";
                 text += theme.fg("error", errorMsg);
                 const usageStr = formatUsageStats(r.usage, r.model, r.durationMs);
-                if (usageStr) text += `\n${theme.fg("dim", usageStr)}`;
+                const lastLine = [countStr, usageStr].filter(Boolean).join(" ");
+                if (lastLine) text += `\n${theme.fg("dim", lastLine)}`;
             } else {
                 const usageStr = formatUsageStats(r.usage, r.model, r.durationMs);
+                const lastLine = [countStr, usageStr].filter(Boolean).join(" ");
                 if (text) text += "\n";
-                text += theme.fg("dim", usageStr);
+                text += theme.fg("dim", lastLine);
             }
             return new Text(text, 0, 0);
         },
