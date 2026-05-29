@@ -14,7 +14,12 @@
  * or Escape to dismiss. Works while the agent is processing.
  */
 
-import { streamSimple, type Usage } from "@earendil-works/pi-ai";
+import {
+    type Api,
+    type Model,
+    streamSimple,
+    type Usage,
+} from "@earendil-works/pi-ai";
 import type { ExtensionAPI, Theme } from "@earendil-works/pi-coding-agent";
 import {
     buildSessionContext,
@@ -51,6 +56,87 @@ Simply answer the question with the information you have.`;
 
 const TITLE = "/btw";
 const MD_THEME = getMarkdownTheme();
+
+/** Provider API id that uses Anthropic-style `cache_control` markers. */
+const ANTHROPIC_API = "anthropic-messages";
+
+/**
+ * Anthropic block kinds that can carry a `cache_control` marker. Other kinds
+ * (e.g. `tool_use`, `thinking`) cannot, so the relocated marker is only ever
+ * placed on a block of one of these kinds.
+ */
+const CACHEABLE_BLOCK_TYPES = new Set(["text", "image", "tool_result"]);
+
+interface AnthropicContentBlock {
+    // text | image | tool_use | tool_result | thinking | redacted_thinking
+    type: string;
+    text?: string;
+    cache_control?: unknown;
+}
+
+interface AnthropicMessage {
+    role: string;
+    content: string | AnthropicContentBlock[];
+}
+
+interface AnthropicPayload {
+    messages?: AnthropicMessage[];
+}
+
+/** Remove and return the `cache_control` marker from a message's last block. */
+function takeCacheControl(message: AnthropicMessage): unknown {
+    if (!Array.isArray(message.content)) return undefined;
+    const lastBlock = message.content[message.content.length - 1];
+    if (!lastBlock || lastBlock.cache_control === undefined) return undefined;
+    const cacheControl = lastBlock.cache_control;
+    lastBlock.cache_control = undefined;
+    return cacheControl;
+}
+
+/**
+ * Attach a `cache_control` marker to a message's last content block,
+ * normalizing string content into a text block. Returns false (without
+ * mutating) when the last block cannot carry a marker.
+ */
+function setCacheControl(message: AnthropicMessage, cacheControl: unknown): boolean {
+    if (typeof message.content === "string") {
+        message.content = [
+            { type: "text", text: message.content, cache_control: cacheControl },
+        ];
+        return true;
+    }
+    const lastBlock = message.content[message.content.length - 1];
+    if (!lastBlock || !CACHEABLE_BLOCK_TYPES.has(lastBlock.type)) return false;
+    lastBlock.cache_control = cacheControl;
+    return true;
+}
+
+/**
+ * For Anthropic models, move the single `cache_control` marker off the newest
+ * (side-question) message and onto the second-to-last (N-2) message -- the
+ * last prefix point shared with the parent conversation. This keeps the
+ * fire-and-forget side question from writing its ephemeral tail into the
+ * shared KV cache (see docs/KV_CACHE.md sections 4 and 6).
+ *
+ * Returns the mutated payload, or undefined to leave it unchanged.
+ */
+export function moveCacheMarkerToSharedPrefix(
+    payload: unknown,
+    model: Model<Api>,
+): unknown {
+    if (model.api !== ANTHROPIC_API) return undefined;
+    const { messages } = payload as AnthropicPayload;
+    if (!messages || messages.length < 2) return undefined;
+    const cacheControl = takeCacheControl(messages[messages.length - 1]);
+    if (cacheControl === undefined) return undefined;
+    // If the shared-prefix message cannot carry the marker, restore it on the
+    // newest message so the request keeps the provider's default single marker.
+    if (!setCacheControl(messages[messages.length - 2], cacheControl)) {
+        setCacheControl(messages[messages.length - 1], cacheControl);
+        return undefined;
+    }
+    return payload;
+}
 
 function renderMarkdownLines(text: string, width: number): string[] {
     if (!text) return [];
@@ -392,6 +478,7 @@ export default function (pi: ExtensionAPI) {
                             headers: auth.headers,
                             signal: overlay.signal,
                             reasoning,
+                            onPayload: moveCacheMarkerToSharedPrefix,
                         },
                     );
 
