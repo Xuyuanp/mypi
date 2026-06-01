@@ -118,20 +118,27 @@ const DEFAULT_MAX_PINGS = 8;
 const DEFAULT_MAX_TOTAL_COST = 1.0;
 const STATUS_KEY = "keepalive";
 
-function getMaxPings(): number {
+export function getMaxPings(): number {
     const val = process.env.PI_KEEPALIVE_MAX_PINGS;
     if (val) {
-        const n = Number(val);
-        if (!Number.isNaN(n) && n > 0) return Math.floor(n);
+        // Floor first, then require >= 1. A fractional value in (0, 1) floors
+        // to 0, and a 0 limit would let one ping slip past the post-ping budget
+        // gate (and break the "active => not exhausted" invariant), so treat it
+        // as invalid and fall back to the default.
+        const n = Math.floor(Number(val));
+        if (Number.isFinite(n) && n >= 1) return n;
     }
     return DEFAULT_MAX_PINGS;
 }
 
-function getMaxTotalCost(): number {
+export function getMaxTotalCost(): number {
     const val = process.env.PI_KEEPALIVE_MAX_COST;
     if (val) {
+        // Cost is continuous, so (unlike getMaxPings) we keep the fractional
+        // value. Number.isFinite rejects NaN and Infinity -- the latter would
+        // otherwise produce an unbounded cost cap.
         const n = Number(val);
-        if (!Number.isNaN(n) && n > 0) return n;
+        if (Number.isFinite(n) && n > 0) return n;
     }
     return DEFAULT_MAX_TOTAL_COST;
 }
@@ -181,8 +188,21 @@ export default function (pi: ExtensionAPI) {
         ctx.ui.setStatus(STATUS_KEY, undefined);
     }
 
-    function budgetExhausted(): boolean {
-        return pingCount >= getMaxPings() || totalCost >= getMaxTotalCost();
+    /**
+     * Returns the reason the ping budget is exhausted, or null if budget
+     * remains. The truthy/null result doubles as the exhausted/not-exhausted
+     * signal, so callers get both the verdict and the message in one check.
+     */
+    function budgetExhausted(): string | null {
+        const maxPings = getMaxPings();
+        if (pingCount >= maxPings) {
+            return `Ping limit reached (${pingCount}/${maxPings})`;
+        }
+        const maxCost = getMaxTotalCost();
+        if (totalCost >= maxCost) {
+            return `Budget exhausted ($${totalCost.toFixed(2)}/$${maxCost.toFixed(2)})`;
+        }
+        return null;
     }
 
     async function ghostPing(ctx: ExtensionContext): Promise<Usage | null> {
@@ -314,19 +334,6 @@ export default function (pi: ExtensionAPI) {
         const ctx = lastCtx;
         if (!ctx || !active || !sessionActive) return;
 
-        if (pingCount >= getMaxPings()) {
-            stopKeepalive(ctx, `Ping limit reached (${pingCount}/${getMaxPings()})`);
-            return;
-        }
-
-        if (totalCost >= getMaxTotalCost()) {
-            stopKeepalive(
-                ctx,
-                `Budget exhausted ($${totalCost.toFixed(2)}/$${getMaxTotalCost().toFixed(2)})`,
-            );
-            return;
-        }
-
         const usage = await ghostPing(ctx);
 
         if (!active || !sessionActive) return;
@@ -338,17 +345,37 @@ export default function (pi: ExtensionAPI) {
 
         totalCost += usage.cost.total;
         pingCount++;
+        // Ghost pings call completeSimple directly and bypass
+        // after_provider_response, so the anchor must be set here. A maxTokens:1
+        // ping streams in well under a second, so ~now ~= its response-begin.
+        lastCacheRefreshTime = Date.now();
         renderStatus(ctx);
 
-        if (budgetExhausted()) {
-            const reason =
-                pingCount >= getMaxPings()
-                    ? `Ping limit reached (${pingCount}/${getMaxPings()})`
-                    : `Budget exhausted ($${totalCost.toFixed(2)}/$${getMaxTotalCost().toFixed(2)})`;
+        // A scheduled ping should always read the cached prefix. cacheRead === 0
+        // WITH a non-zero cacheWrite means the prefix was evicted before the ping
+        // landed and the ping just rewrote it (keepalive keeps working, but the
+        // warm window was lost -- a sign the interval/anchor is off or the TTL is
+        // shorter than assumed). When cacheWrite is also 0 there was simply no
+        // cache activity (e.g. prefix below the cacheable threshold), a different
+        // condition, so stay silent rather than claim a false eviction.
+        if (ctx.hasUI && usage.cacheRead === 0 && usage.cacheWrite > 0) {
+            ctx.ui.notify(
+                "Keepalive ping missed cache (prefix evicted, cache rewritten)",
+                "warning",
+            );
+        }
+
+        // Single budget gate: counters only grow here, and stopKeepalive clears
+        // `active`, so no other site needs to re-check. Relies on limits being
+        // positive so a fresh run (zeroed counters) is never already exhausted.
+        const reason = budgetExhausted();
+        if (reason) {
             stopKeepalive(ctx, reason);
             return;
         }
 
+        // The ping refreshed the cache at ~now (see above), so the next ping is
+        // simply one full interval out.
         schedulePing(ctx);
     }
 
@@ -483,6 +510,17 @@ export default function (pi: ExtensionAPI) {
 
     // ── Event handlers ─────────────────────────────────────────────
 
+    pi.on("after_provider_response", async (event, ctx) => {
+        // Anchor the cache-TTL clock to response-begin: this fires once the HTTP
+        // response is received, before its body streams -- the closest signal pi
+        // exposes to when the cache is actually written/refreshed. Record even
+        // while inactive so `/keepalive on` can compute an accurate first delay.
+        // Skip non-2xx: no successful response means no cache write/refresh.
+        if (event.status < 200 || event.status >= 300) return;
+        if (!isAnthropic(ctx)) return;
+        lastCacheRefreshTime = Date.now();
+    });
+
     pi.on("agent_start", async () => {
         if (!active) return;
         clearTimer();
@@ -490,18 +528,13 @@ export default function (pi: ExtensionAPI) {
     });
 
     pi.on("agent_end", async (_event, ctx) => {
-        lastCacheRefreshTime = Date.now();
+        // No budget check here: exhausting the budget always flips `active` to
+        // false (via stopKeepalive in executePing), so reaching this point
+        // already implies budget remains.
         if (!active) return;
         if (!isAnthropic(ctx)) return;
-        if (budgetExhausted()) {
-            const reason =
-                pingCount >= getMaxPings()
-                    ? `Ping limit reached (${pingCount}/${getMaxPings()})`
-                    : `Budget exhausted ($${totalCost.toFixed(2)}/$${getMaxTotalCost().toFixed(2)})`;
-            stopKeepalive(ctx, reason);
-            return;
-        }
-        schedulePing(ctx);
+        // Schedule from the response-begin anchor recorded above, not from now.
+        schedulePing(ctx, computeFirstDelay(ctx));
     });
 
     pi.on("model_select", async (event, ctx) => {

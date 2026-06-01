@@ -31,7 +31,10 @@ import {
     it,
     vi,
 } from "vitest";
-import keepalive from "../extensions/keepalive.js";
+import keepalive, {
+    getMaxPings,
+    getMaxTotalCost,
+} from "../extensions/keepalive.js";
 
 // ── Helpers ────────────────────────────────────────────────────────────
 
@@ -282,5 +285,121 @@ describe("keepalive extension", () => {
         expect(faux.state.callCount).toBe(3);
 
         vi.unstubAllEnvs();
+    });
+
+    // The cache TTL clock is anchored to when the response BEGINS (recorded via
+    // after_provider_response), not when keepalive is activated. These tests use
+    // the faux provider, which streams instantly, so the sub-second begin-vs-end
+    // difference is not numerically observable here; they instead lock the
+    // contract that scheduling is anchored to the last provider response and
+    // that the anchor advances on every agent turn.
+    it("schedules first ping relative to last response, not activation", async () => {
+        faux.setResponses([
+            fauxAssistantMessage(fauxText("hello")),
+            fauxAssistantMessage(fauxText("p")),
+        ]);
+
+        session = await createSession(tmpDir, faux);
+
+        // Real agent turn establishes the cache-refresh anchor.
+        await session.prompt("hello");
+        expect(faux.state.callCount).toBe(1);
+
+        // Idle for 50 minutes before activating keepalive (anchor stays put:
+        // a slash command is not an agent turn, so no after_provider_response).
+        await vi.advanceTimersByTimeAsync(50 * 60 * 1000);
+        await session.prompt("/keepalive on");
+
+        // Anchor is ~50min old, so the first ping is due in ~5min -- NOT a full
+        // interval from activation. At 4min past activation it must not fire.
+        await vi.advanceTimersByTimeAsync(4 * 60 * 1000);
+        expect(faux.state.callCount).toBe(1);
+
+        // Crossing the ~5min remainder triggers the ping.
+        await vi.advanceTimersByTimeAsync(2 * 60 * 1000);
+        expect(faux.state.callCount).toBe(2);
+    });
+
+    it("advances the cache-refresh anchor with each agent turn", async () => {
+        faux.setResponses([
+            fauxAssistantMessage(fauxText("first")),
+            fauxAssistantMessage(fauxText("second")),
+            fauxAssistantMessage(fauxText("p")),
+        ]);
+
+        session = await createSession(tmpDir, faux);
+
+        await session.prompt("first"); // anchor = t0
+        await vi.advanceTimersByTimeAsync(10 * 60 * 1000);
+        await session.prompt("second"); // anchor advances to t0 + 10min
+        expect(faux.state.callCount).toBe(2);
+
+        // Idle 40 more minutes (40min since the latest response).
+        await vi.advanceTimersByTimeAsync(40 * 60 * 1000);
+        await session.prompt("/keepalive on");
+
+        // The latest anchor is 40min old, so the first ping is due in ~15min.
+        // If the anchor had NOT advanced past the first turn it would be 50min
+        // old and the ping would already be overdue -- so 14min must not fire.
+        await vi.advanceTimersByTimeAsync(14 * 60 * 1000);
+        expect(faux.state.callCount).toBe(2);
+
+        // Crossing the ~15min remainder fires the ping.
+        await vi.advanceTimersByTimeAsync(2 * 60 * 1000);
+        expect(faux.state.callCount).toBe(3);
+    });
+});
+
+describe("getMaxPings", () => {
+    afterEach(() => {
+        vi.unstubAllEnvs();
+    });
+
+    it("returns the default when unset", () => {
+        vi.stubEnv("PI_KEEPALIVE_MAX_PINGS", "");
+        expect(getMaxPings()).toBe(8);
+    });
+
+    it("floors positive values to an integer", () => {
+        vi.stubEnv("PI_KEEPALIVE_MAX_PINGS", "2.9");
+        expect(getMaxPings()).toBe(2);
+    });
+
+    it("falls back to default for values that floor below 1", () => {
+        // 0.5 floors to 0; a 0 budget would let one ping slip past the
+        // post-ping-only budget gate, so it must fall back to the default.
+        vi.stubEnv("PI_KEEPALIVE_MAX_PINGS", "0.5");
+        expect(getMaxPings()).toBe(8);
+    });
+
+    it("falls back to default for zero, negative, and non-numeric input", () => {
+        for (const v of ["0", "-3", "abc"]) {
+            vi.stubEnv("PI_KEEPALIVE_MAX_PINGS", v);
+            expect(getMaxPings()).toBe(8);
+        }
+    });
+});
+
+describe("getMaxTotalCost", () => {
+    afterEach(() => {
+        vi.unstubAllEnvs();
+    });
+
+    it("returns the default when unset", () => {
+        vi.stubEnv("PI_KEEPALIVE_MAX_COST", "");
+        expect(getMaxTotalCost()).toBe(1.0);
+    });
+
+    it("keeps fractional positive values (cost is continuous)", () => {
+        vi.stubEnv("PI_KEEPALIVE_MAX_COST", "2.5");
+        expect(getMaxTotalCost()).toBe(2.5);
+    });
+
+    it("falls back to default for Infinity, zero, negative, and non-numeric", () => {
+        // Infinity must be rejected: it would otherwise be an unbounded cap.
+        for (const v of ["Infinity", "0", "-1", "abc"]) {
+            vi.stubEnv("PI_KEEPALIVE_MAX_COST", v);
+            expect(getMaxTotalCost()).toBe(1.0);
+        }
     });
 });
