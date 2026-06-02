@@ -37,6 +37,7 @@ import {
 import { Container, Markdown, Spacer, Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { type AgentConfig, discoverAgents } from "./agents.js";
+import { registerSubagentCommand } from "./command.js";
 
 const ICON_RUNNING = "○";
 const ICON_SUCCESS = "●";
@@ -678,6 +679,8 @@ export default function (pi: ExtensionAPI) {
     // Pre-load agents at registration time so the LLM
     // knows which agents are available from the tool description.
     const knownAgents = discoverAgents().agents;
+
+    registerSubagentCommand(pi);
 
     // Cache loaded skills from the parent session so we can resolve
     // skill names to filesystem paths for --skill flags.
