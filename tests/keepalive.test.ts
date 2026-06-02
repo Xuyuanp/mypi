@@ -320,6 +320,70 @@ describe("keepalive extension", () => {
         expect(faux.state.callCount).toBe(2);
     });
 
+    it("refreshes the cache-refresh anchor on a manual /keepalive ping", async () => {
+        faux.setResponses([
+            fauxAssistantMessage(fauxText("hello")), // real turn -> anchor t0
+            fauxAssistantMessage(fauxText("p")), // manual ghost ping
+            fauxAssistantMessage(fauxText("p")), // first scheduled ping
+        ]);
+
+        session = await createSession(tmpDir, faux);
+
+        // Real agent turn establishes the cache-refresh anchor at t0.
+        await session.prompt("hello");
+        expect(faux.state.callCount).toBe(1);
+
+        // Idle 50 minutes, then fire a manual ping. The ping warms the cache, so
+        // it must advance the anchor to ~now (t0 + 50min).
+        await vi.advanceTimersByTimeAsync(50 * 60 * 1000);
+        await session.prompt("/keepalive ping");
+        expect(faux.state.callCount).toBe(2);
+
+        // Activate keepalive immediately after the manual ping. Because the
+        // anchor was refreshed, the first scheduled ping is a FULL interval out.
+        // If the manual ping had NOT refreshed the anchor, it would still read
+        // t0 (now 50min old) and the first ping would be due in ~5min.
+        await session.prompt("/keepalive on");
+
+        // 54min after the manual ping: under a full interval, so no ping yet.
+        await vi.advanceTimersByTimeAsync(54 * 60 * 1000);
+        expect(faux.state.callCount).toBe(2);
+
+        // Crossing the ~55min interval fires the first scheduled ping.
+        await vi.advanceTimersByTimeAsync(2 * 60 * 1000);
+        expect(faux.state.callCount).toBe(3);
+    });
+
+    it("reschedules the active loop when a manual /keepalive ping fires", async () => {
+        faux.setResponses([
+            fauxAssistantMessage(fauxText("hello")), // real turn -> anchor t0
+            fauxAssistantMessage(fauxText("p")), // manual ghost ping
+            fauxAssistantMessage(fauxText("p")), // rescheduled scheduled ping
+        ]);
+
+        session = await createSession(tmpDir, faux);
+
+        // Real turn anchors at t0, then activate: first ping due at ~t0 + 55min.
+        await session.prompt("hello");
+        await session.prompt("/keepalive on");
+        expect(faux.state.callCount).toBe(1);
+
+        // Manual ping 30min in. It warms the cache and must REPLACE the pending
+        // t0+55min timer with one a full interval out (t0+30 + 55 = t0+85min).
+        await vi.advanceTimersByTimeAsync(30 * 60 * 1000);
+        await session.prompt("/keepalive ping");
+        expect(faux.state.callCount).toBe(2);
+
+        // Cross the ORIGINAL t0+55min deadline (now t0+56min). If the manual
+        // ping had not rescheduled, the stale timer would fire here (-> 3).
+        await vi.advanceTimersByTimeAsync(26 * 60 * 1000);
+        expect(faux.state.callCount).toBe(2);
+
+        // Cross the rescheduled t0+85min deadline -> the scheduled ping fires.
+        await vi.advanceTimersByTimeAsync(30 * 60 * 1000);
+        expect(faux.state.callCount).toBe(3);
+    });
+
     it("advances the cache-refresh anchor with each agent turn", async () => {
         faux.setResponses([
             fauxAssistantMessage(fauxText("first")),

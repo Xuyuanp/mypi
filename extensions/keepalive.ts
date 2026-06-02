@@ -117,6 +117,10 @@ const PING_INTERVAL_MS = 55 * 60 * 1000;
 const DEFAULT_MAX_PINGS = 8;
 const DEFAULT_MAX_TOTAL_COST = 1.0;
 const STATUS_KEY = "keepalive";
+/** Nerd Font nf-fa-heartbeat (U+F21E); stands in for the "Keepalive" label. */
+const STATUS_GLYPH = "\uf21e";
+/** Separator between status segments (count / cost / next-ping time). */
+const STATUS_SEP = " \u2502 ";
 
 export function getMaxPings(): number {
     const val = process.env.PI_KEEPALIVE_MAX_PINGS;
@@ -147,6 +151,14 @@ function isAnthropic(ctx: ExtensionContext): boolean {
     return ctx.model?.provider === "anthropic";
 }
 
+/** Format a timestamp as a local HH:MM clock string for the status line. */
+function formatClock(ts: number): string {
+    const d = new Date(ts);
+    const hh = String(d.getHours()).padStart(2, "0");
+    const mm = String(d.getMinutes()).padStart(2, "0");
+    return `${hh}:${mm}`;
+}
+
 export default function (pi: ExtensionAPI) {
     let timer: ReturnType<typeof setTimeout> | null = null;
     let pingCount = 0;
@@ -156,12 +168,14 @@ export default function (pi: ExtensionAPI) {
     let abortController: AbortController | null = null;
     let sessionActive = true;
     let lastCacheRefreshTime: number | null = null;
+    let nextPingTime: number | null = null;
 
     function clearTimer(): void {
         if (timer !== null) {
             clearTimeout(timer);
             timer = null;
         }
+        nextPingTime = null;
     }
 
     function abortInFlight(): void {
@@ -174,13 +188,25 @@ export default function (pi: ExtensionAPI) {
     function renderStatus(ctx: ExtensionContext): void {
         if (!ctx.hasUI) return;
         const max = getMaxPings();
-        const costStr = totalCost > 0 ? ` $${totalCost.toFixed(2)}` : "";
         const th = ctx.ui.theme;
         const color: ThemeColor = active ? "success" : "dim";
-        const label = th.fg("dim", "Keepalive:");
-        const count = th.fg(color, `${pingCount}/${max}`);
-        const cost = costStr ? th.fg("dim", costStr) : "";
-        ctx.ui.setStatus(STATUS_KEY, `${label}${count}${cost}`);
+        // The glyph reuses the liveness color: green when pinging, dim when idle.
+        const label = th.fg(color, `${STATUS_GLYPH} `);
+        // The status is set once (not a live countdown), so an absolute clock
+        // time stays accurate where a relative "in Nm" would go stale.
+        const segments = [th.fg(color, `${pingCount}/${max}`)];
+        if (totalCost > 0) {
+            segments.push(th.fg("dim", `$${totalCost.toFixed(2)}`));
+        }
+        if (active && nextPingTime !== null) {
+            segments.push(th.fg("dim", `at ${formatClock(nextPingTime)}`));
+        }
+        const sep = th.fg("dim", STATUS_SEP);
+        const body = `${label}${segments.join(sep)}`;
+        ctx.ui.setStatus(
+            STATUS_KEY,
+            `${th.fg("dim", "[")}${body}${th.fg("dim", "]")}`,
+        );
     }
 
     function hideStatus(ctx: ExtensionContext): void {
@@ -292,10 +318,14 @@ export default function (pi: ExtensionAPI) {
         clearTimer();
         lastCtx = ctx;
         const delay = delayMs ?? PING_INTERVAL_MS;
+        nextPingTime = Date.now() + delay;
         timer = setTimeout(() => {
             timer = null;
             executePing();
         }, delay);
+        // schedulePing is the single source of "next ping scheduled", so refresh
+        // the status here to surface the freshly computed next-ping time.
+        renderStatus(ctx);
     }
 
     /**
@@ -349,7 +379,6 @@ export default function (pi: ExtensionAPI) {
         // after_provider_response, so the anchor must be set here. A maxTokens:1
         // ping streams in well under a second, so ~now ~= its response-begin.
         lastCacheRefreshTime = Date.now();
-        renderStatus(ctx);
 
         // A scheduled ping should always read the cached prefix. cacheRead === 0
         // WITH a non-zero cacheWrite means the prefix was evicted before the ping
@@ -383,8 +412,8 @@ export default function (pi: ExtensionAPI) {
         active = true;
         pingCount = 0;
         totalCost = 0;
-        renderStatus(ctx);
         const delay = computeFirstDelay(ctx);
+        // schedulePing renders the status (with the computed next-ping time).
         schedulePing(ctx, delay);
         if (ctx.hasUI) {
             ctx.ui.notify("Keepalive started", "info");
@@ -438,11 +467,14 @@ export default function (pi: ExtensionAPI) {
 
             if (sub === "ping") {
                 // Debug helper: fire one ghost ping immediately, regardless of
-                // whether the scheduler is active. Does not touch the ping/cost
-                // counters so it never interferes with the active loop's
-                // budgeting. Reports usage so cache behavior is observable --
-                // a high cacheRead (R) with near-zero cacheWrite (W) means the
-                // ping hit the main agent's cached prefix.
+                // whether the scheduler is active. Leaves the ping/cost counters
+                // untouched (budgeting is unaffected), but the ping really warms
+                // the cache, so it refreshes the cache-TTL anchor below -- and,
+                // when active, reschedules the next ping off it so the loop does
+                // not fire a redundant ping from the stale anchor.
+                // Reports usage so cache behavior is observable --
+                // a high cache read with near-zero cache write means the ping
+                // hit the main agent's cached prefix.
                 if (!ctx.model) {
                     ctx.ui.notify("No model selected", "error");
                     return;
@@ -457,14 +489,28 @@ export default function (pi: ExtensionAPI) {
                     ctx.ui.notify("Ghost ping failed", "error");
                     return;
                 }
-                const msg = [
-                    "Ghost ping ok",
-                    `↑${usage.input}`,
-                    `↓${usage.output}`,
-                    `R${usage.cacheRead}`,
-                    `W${usage.cacheWrite}`,
-                    `$${usage.cost.total.toFixed(4)}`,
-                ].join(" | ");
+                // See the handler comment above: anchor off this ping. A
+                // maxTokens:1 ping streams in well under a second, so ~now ~=
+                // its response-begin (same reasoning as executePing).
+                lastCacheRefreshTime = Date.now();
+                // The freshly warmed cache buys a full interval, so replace any
+                // pending scheduled ping (clearTimer runs inside schedulePing)
+                // with one anchored to now. Guarded by `active`: when inactive
+                // there is no loop to reschedule and we must not start a timer.
+                if (active) {
+                    schedulePing(ctx);
+                }
+                // Format mirrors extensions/tps.ts: ` | `-separated groups,
+                // comma-separated `label value` pairs, thousands separators,
+                // and a cache hit-rate percentage when there is cache activity.
+                const promptTokens =
+                    usage.input + usage.cacheRead + usage.cacheWrite;
+                const hasCacheActivity = usage.cacheRead > 0 || usage.cacheWrite > 0;
+                const hitRateSegment =
+                    hasCacheActivity && promptTokens > 0
+                        ? `, ${((usage.cacheRead / promptTokens) * 100).toFixed(1)}%`
+                        : "";
+                const msg = `Ghost ping ok | out ${usage.output.toLocaleString()}, in ${usage.input.toLocaleString()}, cache r/w ${usage.cacheRead.toLocaleString()}/${usage.cacheWrite.toLocaleString()}, total ${usage.totalTokens.toLocaleString()}${hitRateSegment} | $${usage.cost.total.toFixed(4)}`;
                 ctx.ui.notify(msg, "info");
                 return;
             }
