@@ -20,6 +20,7 @@
  */
 
 import { spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -385,17 +386,19 @@ function getDisplayItems(
 async function writePromptToTempFile(
     agentName: string,
     prompt: string,
-): Promise<{ dir: string; filePath: string }> {
-    const tmpDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "pi-subagent-"));
+): Promise<string> {
     const safeName = agentName.replace(/[^\w.-]+/g, "_");
-    const filePath = path.join(tmpDir, `prompt-${safeName}.md`);
+    const filePath = path.join(
+        os.tmpdir(),
+        `pi-subagent-${safeName}-${randomUUID()}.md`,
+    );
     await withFileMutationQueue(filePath, async () => {
         await fs.promises.writeFile(filePath, prompt, {
             encoding: "utf-8",
             mode: 0o600,
         });
     });
-    return { dir: tmpDir, filePath };
+    return filePath;
 }
 
 function getPiInvocation(args: string[]): { command: string; args: string[] } {
@@ -451,7 +454,6 @@ async function runSubagent(
     if (agent.tools && agent.tools.length > 0)
         args.push("--tools", agent.tools.join(","));
 
-    let tmpPromptDir: string | null = null;
     let tmpPromptPath: string | null = null;
 
     const currentResult: AgentRunResult = {
@@ -497,9 +499,7 @@ async function runSubagent(
         const fullSystemPrompt = agent.systemPrompt.trim()
             ? `${SUBAGENT_PREAMBLE}\n${agent.systemPrompt}`
             : SUBAGENT_PREAMBLE.trim();
-        const tmp = await writePromptToTempFile(agent.name, fullSystemPrompt);
-        tmpPromptDir = tmp.dir;
-        tmpPromptPath = tmp.filePath;
+        tmpPromptPath = await writePromptToTempFile(agent.name, fullSystemPrompt);
         args.push("--append-system-prompt", tmpPromptPath);
 
         args.push(`Task: ${task}`);
@@ -606,12 +606,6 @@ async function runSubagent(
             } catch {
                 /* ignore */
             }
-        if (tmpPromptDir)
-            try {
-                fs.rmdirSync(tmpPromptDir);
-            } catch {
-                /* ignore */
-            }
     }
 }
 
@@ -628,7 +622,7 @@ const SubagentParams = Type.Object({
     model: Type.Optional(
         Type.String({
             description:
-                'Override the model for this invocation (e.g. "anthropic/claude-sonnet:high")',
+                'Override the model for this invocation (e.g. "anthropic/claude-sonnet:high"). Only set this when the user explicitly requests a specific model; otherwise omit it to use the agent default.',
         }),
     ),
     cwd: Type.Optional(
@@ -670,24 +664,8 @@ ${agentList}
 - Always provide a short \`description\` (3-5 words) summarizing the task.
 - Provide a clear, self-contained \`task\`. The subagent has no access to your conversation history.
 - Be explicit about whether the subagent should write code or only do research.
-- Use \`model\` to override the agent's default model (e.g. for a harder task that needs a stronger model).
+- Only set \`model\` when the user explicitly requests a specific model; otherwise omit it to use the agent default.
 - Use \`cwd\` to override the working directory when the task targets a different project root.
-
-**Scout Agent -- Preferred for Codebase Research**
-
-When you need to understand the codebase before making changes, fixing bugs, or planning features,
-prefer the \`scout\` agent over doing the search yourself. It is optimized for fast, read-only
-codebase investigation. Use it when:
-
-- Your task will clearly require more than 3 search queries
-- You need to understand how a module, feature, or code path works
-- You want to investigate multiple independent questions -- launch multiple scout agents concurrently
-
-When calling scout, specify the desired thoroughness in the task:
-
-- "quick": targeted lookups -- find a specific file, function, or config value
-- "medium": understand a module -- how does auth work, what calls this API
-- "thorough": cross-cutting analysis -- architecture overview, dependency mapping, multi-module investigation
 
 **When NOT to Use Subagent**
 

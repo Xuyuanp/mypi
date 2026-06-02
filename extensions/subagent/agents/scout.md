@@ -1,6 +1,20 @@
 ---
 name: scout
-description: Fast agent specialized for exploring codebases. Use this when you need to quickly find files by patterns (eg. "src/components/**/*.tsx"), search code for keywords (eg. "API endpoints"), or answer questions about the codebase (eg. "how do API endpoints work?"). When calling this agent, specify the desired thoroughness level -- "quick" for basic searches, "medium" for moderate exploration, or "very thorough" for comprehensive analysis across multiple locations and naming conventions.
+description: >-
+  Fast agent specialized for exploring codebases. PREFERRED for codebase
+  research -- when you need to understand the codebase before making changes,
+  fixing bugs, or planning features, prefer this agent over searching yourself.
+  Use it when your task will clearly require more than 3 search queries, when
+  you need to understand how a module/feature/code path works, or to
+  investigate multiple independent questions (launch several scout agents
+  concurrently). It is optimized for fast, read-only investigation: finding
+  files by patterns (eg. "src/components/**/*.tsx"), searching code for
+  keywords (eg. "API endpoints"), or answering questions about the codebase
+  (eg. "how do API endpoints work?"). Always specify the desired thoroughness
+  in the task -- "quick" for targeted lookups (find a specific file, function,
+  or config value), "medium" to understand a module (how does auth work, what
+  calls this API), or "thorough" for cross-cutting analysis (architecture
+  overview, dependency mapping, multi-module investigation).
 tools: read, grep, find, ls, bash
 model: anthropic/claude-haiku-4-5
 ---
