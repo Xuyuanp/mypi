@@ -5,10 +5,10 @@
  * while the user is idle. Activated via /keepalive slash command.
  *
  * The ghost ping sends the full conversation prefix (system prompt +
- * tools + messages) with maxTokens: 1, no reasoning. The response is
- * discarded — nothing is appended to session history. The API sees
- * the same prefix, cache-reads it (refreshing the 1h TTL), and
- * returns 1 token.
+ * tools + messages) with a tiny prompt-bounded reply (the model is
+ * asked to answer with the single word "Pong"). Nothing is appended to
+ * session history. The API sees the same prefix, cache-reads it
+ * (refreshing the TTL), and returns only a handful of tokens.
  *
  * Configurable via environment variables:
  * - PI_KEEPALIVE_MAX_PINGS: max ping count (default 8)
@@ -253,7 +253,9 @@ export default function (pi: ExtensionAPI) {
         if (pingAppended) {
             llmMessages.push({
                 role: "user",
-                content: [{ type: "text", text: "ping" }],
+                content: [
+                    { type: "text", text: "ping. Reply with single word Pong" },
+                ],
                 timestamp: Date.now(),
             });
         }
@@ -287,7 +289,6 @@ export default function (pi: ExtensionAPI) {
                 {
                     apiKey: auth.apiKey,
                     headers: auth.headers,
-                    maxTokens: 1,
                     reasoning,
                     signal: abortController.signal,
                     // Only relocate the marker when we appended a synthetic ping
@@ -376,8 +377,9 @@ export default function (pi: ExtensionAPI) {
         totalCost += usage.cost.total;
         pingCount++;
         // Ghost pings call completeSimple directly and bypass
-        // after_provider_response, so the anchor must be set here. A maxTokens:1
-        // ping streams in well under a second, so ~now ~= its response-begin.
+        // after_provider_response, so the anchor must be set here. The
+        // prompt-bounded ping streams in well under a second, so ~now ~= its
+        // response-begin.
         lastCacheRefreshTime = Date.now();
 
         // A scheduled ping should always read the cached prefix. cacheRead === 0
@@ -489,8 +491,8 @@ export default function (pi: ExtensionAPI) {
                     ctx.ui.notify("Ghost ping failed", "error");
                     return;
                 }
-                // See the handler comment above: anchor off this ping. A
-                // maxTokens:1 ping streams in well under a second, so ~now ~=
+                // See the handler comment above: anchor off this ping. The
+                // prompt-bounded ping streams in well under a second, so ~now ~=
                 // its response-begin (same reasoning as executePing).
                 lastCacheRefreshTime = Date.now();
                 // The freshly warmed cache buys a full interval, so replace any
