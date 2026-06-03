@@ -14,10 +14,10 @@ production at scale.
 1. [Mental model](#1-mental-model)
 2. [System prompt: the static/dynamic split](#2-system-prompt-the-staticdynamic-split)
 3. [Tool schemas: freeze early, move dynamic content out](#3-tool-schemas-freeze-early-move-dynamic-content-out)
-4. [Messages: the single-marker rule](#4-messages-the-single-marker-rule)
+4. [Messages: cache marker placement](#4-messages-cache-marker-placement)
 5. [Beta headers and API params: latch once, never flip](#5-beta-headers-and-api-params-latch-once-never-flip)
 6. [Fork/subagent cache sharing](#6-forksubagent-cache-sharing)
-7. [Microcompact: surgical cache editing](#7-microcompact-surgical-cache-editing)
+7. [Long conversations: compaction and context editing](#7-long-conversations-compaction-and-context-editing)
 8. [Dates and volatile values](#8-dates-and-volatile-values)
 9. [Cache break detection](#9-cache-break-detection)
 10. [Checklist](#10-checklist)
@@ -30,8 +30,13 @@ The Anthropic API caches KV attention states at prefix boundaries you mark with
 `cache_control: { type: 'ephemeral' }`. The cache key is composed of:
 
 ```
-hash(system_prompt_blocks + tool_schemas + beta_headers + model + messages_prefix)
+hash(beta_headers + model + tool_schemas + system_prompt_blocks + messages_prefix)
 ```
+
+**Render order is `tools` -> `system` -> `messages`.** Tools render first, so a
+breakpoint on the last system block caches tools + system together. This is why
+any per-turn content in the tool array invalidates the system prompt's cache
+too: tools physically precede system in the rendered prefix (Section 3).
 
 **Any byte-level change to any component before the cache breakpoint invalidates
 the entire cached prefix.** There is no partial invalidation. A single character
@@ -40,18 +45,59 @@ change in one tool description can bust 50,000+ tokens of cached context.
 The server-side cache has two TTL tiers:
 
 - **5 minutes** -- default `ephemeral`
-- **1 hour** -- `ephemeral` with `ttl: '1h'`, requires eligibility
-
-And three scope levels:
-
-- **`global`** -- shared across all users (for static, universal content)
-- **`org`** -- shared within an organization
-- **`null`/unset** -- per-conversation only
+- **1 hour** -- `ephemeral` with `ttl: '1h'`
 
 ### The golden rule
 
 > If it does not change between API calls, do not let it change between API
 > calls. Memoize, latch, freeze, pin -- whatever it takes.
+
+### Invalidation is tiered, not all-or-nothing
+
+"Any byte change invalidates everything downstream" is the rule to design
+around, but the API has three cache tiers. A change only invalidates its own
+tier and everything after it -- not the tiers before it:
+
+| Change                                          | Tools | System | Messages |
+| ----------------------------------------------- | :---: | :----: | :------: |
+| Tool definitions (add/remove/reorder)           |  bust |  bust  |   bust   |
+| Model switch                                    |  bust |  bust  |   bust   |
+| Beta headers                                    |  bust |  bust  |   bust   |
+| `speed`, web-search, citations toggle           |  keep |  bust  |   bust   |
+| System prompt content                           |  keep |  bust  |   bust   |
+| `tool_choice`, images, `thinking` enable/disable|  keep |  keep  |   bust   |
+| Message content                                 |  keep |  keep  |   bust   |
+
+Implication: you can flip `tool_choice` per request or toggle `thinking`
+without losing the tools + system cache. Don't over-engineer latches for those
+(Section 5). Only tool-definition, model, and beta-header changes force a full
+rebuild.
+
+### Minimum cacheable prefix (model-dependent)
+
+A prefix shorter than the model's minimum **silently will not cache** -- no
+error, just `cache_creation_input_tokens: 0`. The same 3K-token prompt caches
+on Sonnet 4.5 but not on Opus:
+
+| Model                                              | Minimum |
+| -------------------------------------------------- | ------: |
+| Opus 4.8, Opus 4.7, Opus 4.6, Opus 4.5, Haiku 4.5  |   4096  |
+| Sonnet 4.6, Haiku 3.5, Haiku 3                      |   2048  |
+| Sonnet 4.5, Sonnet 4.1, Sonnet 4, Sonnet 3.7        |   1024  |
+
+There is also a hard cap of **4 `cache_control` breakpoints per request**
+(Section 4 covers where to place the message-side markers).
+
+### Economics: when caching pays off
+
+- **Cache read:** ~0.1x base input price.
+- **Cache write:** 1.25x for the 5-minute TTL, 2x for the 1-hour TTL.
+
+Break-even depends on TTL. With the 5-minute TTL, two requests already pay for
+themselves (1.25x write + 0.1x read = 1.35x, vs 2x uncached). With the 1-hour
+TTL you need at least three requests (2x + 0.2x = 2.2x, vs 3x uncached). The
+1-hour TTL keeps entries alive across gaps in bursty traffic, but the doubled
+write cost means it must earn more reads to break even.
 
 ---
 
@@ -59,9 +105,10 @@ And three scope levels:
 
 ### Problem
 
-A naive system prompt that mixes universal instructions with user-specific
-content (env info, memory, connected MCP servers) makes the entire prompt
-uncacheable at the global scope.
+A naive system prompt that interleaves stable instructions with user- or
+session-specific content (env info, memory, connected MCP servers) drops the
+volatile bytes inside the cached prefix. Every session-specific change then
+busts the whole system prompt instead of just the part that actually changed.
 
 ### Solution: boundary marker
 
@@ -71,26 +118,28 @@ Split your system prompt array into two zones using a sentinel string:
 [static_block_1, static_block_2, "__BOUNDARY__", dynamic_block_1, dynamic_block_2]
 ```
 
-When building `TextBlockParam[]` for the API, find the sentinel and assign cache
-scopes by position:
+When building `TextBlockParam[]` for the API, find the sentinel and place the
+breakpoint at the boundary so the stable prefix caches and the volatile tail
+sits outside it:
 
 ```typescript
-// Build up to 4 system prompt blocks with different cache scopes
+// Split the system prompt at the static/dynamic boundary; the breakpoint goes
+// on the static block so the stable prefix is reused across turns and sessions.
 function buildSystemBlocks(promptParts: string[]): TextBlockParam[] {
   const boundaryIndex = promptParts.indexOf("__BOUNDARY__");
   const blocks: TextBlockParam[] = [];
 
-  // Block 1: static content before boundary -- globally cacheable
+  // Static content before boundary -- byte-stable, carries the cache marker
   const staticText = promptParts.slice(0, boundaryIndex).join("\n\n");
   if (staticText) {
     blocks.push({
       type: "text",
       text: staticText,
-      cache_control: { type: "ephemeral", scope: "global" },
+      cache_control: { type: "ephemeral" },
     });
   }
 
-  // Block 2: dynamic content after boundary -- per-session, no global cache
+  // Dynamic content after boundary -- volatile, no marker
   const dynamicText = promptParts.slice(boundaryIndex + 1).join("\n\n");
   if (dynamicText) {
     blocks.push({ type: "text", text: dynamicText });
@@ -102,14 +151,14 @@ function buildSystemBlocks(promptParts: string[]): TextBlockParam[] {
 
 ### What goes where
 
-**Before boundary (static, globally cacheable):**
+**Before boundary (static, byte-stable prefix):**
 
 - Agent identity and role description
 - System instructions (tool usage rules, security reminders)
 - Coding best practices
 - Tone, style, and output efficiency guidelines
 
-**After boundary (dynamic, per-session):**
+**After boundary (dynamic, volatile):**
 
 - User memory files
 - Environment info (cwd, git status, OS)
@@ -138,7 +187,7 @@ function memoizedSection(
   return value;
 }
 
-// Recomputed every turn -- WILL break the org-level cache when value changes.
+// Recomputed every turn -- WILL break the cached prefix when the value changes.
 // Only use when genuinely unavoidable.
 function volatileSection(compute: () => string | null): string | null {
   return compute();
@@ -152,13 +201,6 @@ function clearSectionCache() {
 
 **Rule: prefer moving volatile content to user-role messages in the conversation
 (see Section 3) over recomputing system prompt sections.**
-
-### Fallback when global scope is unavailable
-
-When per-user content (e.g., non-deferred MCP tools) is present in the tool
-array, the system prompt cannot use `scope: 'global'` because the tool block
-(which precedes system blocks in the cache key) already contains per-user data.
-Fall back to `'org'` scoping or omit the scope entirely.
 
 ---
 
@@ -251,20 +293,19 @@ needed.
 
 ---
 
-## 4. Messages: the single-marker rule
+## 4. Messages: cache marker placement
 
-### The rule
+### Where the marker goes
 
-Place exactly ONE `cache_control` marker per API request, on the last message
-(or the second-to-last for fire-and-forget forks).
+Place a `cache_control` marker on the last content block of the most recently
+appended turn. Each subsequent request reuses the entire prior-conversation
+prefix, and cache hits accrue incrementally as the conversation grows.
 
-### Why not multiple markers?
-
-The API's KV page manager frees local-attention KV pages at cached prefix
-positions NOT in the token boundary set. With two markers, the second-to-last
-position is protected and its locals survive an extra turn even though no future
-request will ever resume from there. With one marker, those pages are freed
-immediately.
+Combined with the system-prompt breakpoint (Section 2), a typical request uses 2
+of the 4 allowed breakpoints. The remaining budget can go to earlier stability
+boundaries in long conversations -- but read the 20-block lookback caveat below
+before adding more, and remember each extra breakpoint is an extra cache-write
+position the server keeps alive.
 
 ### Implementation
 
@@ -276,7 +317,8 @@ function addCacheMarkers(
 ): MessageParam[] {
   if (!enableCaching) return messages;
 
-  // One marker only. For fire-and-forget forks, mark the shared prefix point.
+  // Mark the newest turn. For fire-and-forget forks, mark the shared prefix
+  // point instead (see skipCacheWrite below).
   const markerIndex = skipCacheWrite
     ? messages.length - 2
     : messages.length - 1;
@@ -297,6 +339,18 @@ function addCacheMarkers(
   });
 }
 ```
+
+### Caveat: the 20-block lookback window
+
+Each `cache_control` breakpoint walks backward **at most 20 content blocks** to
+find a prior cache entry to resume from. In an agentic loop, a single turn can
+append more than 20 blocks (many `tool_use` / `tool_result` pairs). When that
+happens, the trailing marker cannot reach the previous turn's cached block, and
+the request silently misses despite a byte-identical prefix.
+
+Fix it by placing an intermediate breakpoint roughly every ~15 blocks inside an
+oversized turn, so each marker stays within 20 blocks of the previous cached
+position. This is the main reason to spend more than the one trailing marker.
 
 ### `skipCacheWrite` for fire-and-forget forks
 
@@ -334,16 +388,14 @@ function ensureHeaderLatched(name: string, shouldEnable: boolean): boolean {
 function buildBetaHeaders(state: SessionState): string[] {
   const headers: string[] = [...BASE_HEADERS];
 
-  // The HEADER is latched (always sent once activated).
-  // The BEHAVIOR (e.g., speed: 'fast') stays dynamic per-call.
-  if (ensureHeaderLatched("fast-mode", state.fastModeRequested)) {
-    headers.push("fast-mode-2025-01-01");
+  // Each header is latched: once a session activates the feature, the header
+  // keeps being sent for the rest of the session even if the feature goes idle.
+  // Use the real, current beta header strings -- they are part of the cache key.
+  if (ensureHeaderLatched("compaction", state.compactionEnabled)) {
+    headers.push("compact-2026-01-12");
   }
-  if (ensureHeaderLatched("auto-mode", state.autoModeActive)) {
-    headers.push("auto-mode-2025-01-01");
-  }
-  if (ensureHeaderLatched("cache-editing", state.cacheEditingEnabled)) {
-    headers.push("cache-editing-2025-01-01");
+  if (ensureHeaderLatched("task-budgets", state.taskBudgetsEnabled)) {
+    headers.push("task-budgets-2026-03-13");
   }
 
   return headers;
@@ -361,17 +413,20 @@ function clearLatches() {
 
 **Latch (affects cache key):**
 
-- Beta headers
+- Beta headers (the exact header set is hashed into the key)
+- Model ID
 - 1h TTL eligibility (evaluate once at session start, store the result)
 - TTL allowlist (which query sources get 1h -- evaluate once, store)
-- Cache editing feature toggle
 
-**Keep dynamic (does NOT affect cache key):**
+**Keep dynamic (does NOT bust the tools + system prefix):**
 
-- `speed` body param (fast-mode cooldown can suppress without header change)
-- `context_management.edits` (server-side clearing, separate from cache key)
+- `tool_choice` (changes per request; tools + system cache survives)
+- `thinking` enable/disable and images (system cache survives)
 - `max_tokens` (does not affect cache)
-- `temperature` (does not affect cache)
+
+Note: `speed`, web-search, and citations toggles **do** invalidate the system
+cache (see the invalidation table in Section 1) -- they are not free to flip
+mid-session. Only `tool_choice` and the message-tier params above are safe.
 
 ### When to clear latches
 
@@ -463,88 +518,63 @@ function getLastCacheSafeParams(): CacheSafeParams {
 }
 ```
 
+### Sequence the fan-out -- a cache entry is not readable until it is written
+
+A cache entry becomes readable only **after the first request's response begins
+streaming**. If you fire N forks with an identical prefix in parallel, none can
+read what the others are still writing -- every one pays the full cache-creation
+cost.
+
+For fan-out (parallel subagents, speculative branches sharing the parent
+prefix): send one request first, await its **first streamed token** (not the
+full response), then fire the remaining N-1. They will read the cache the first
+request just wrote.
+
+```typescript
+async function fanOut(prefixRequests: RequestParams[]) {
+  const [first, ...rest] = prefixRequests;
+
+  // Prime the cache: await the first streamed token, not the full message.
+  const firstStream = client.messages.stream(first);
+  await firstStream.once("streamEvent"); // cache entry is now readable
+
+  // Now the rest hit the cache the first request wrote.
+  const restResults = await Promise.all(rest.map((r) => runRequest(r)));
+  const firstResult = await firstStream.finalMessage();
+  return [firstResult, ...restResults];
+}
+```
+
 ---
 
-## 7. Microcompact: surgical cache editing
+## 7. Long conversations: compaction and context editing
 
 ### Problem
 
 As conversations grow, old tool results (file reads, command output) consume
-context but are no longer useful. Blanking out old content client-side changes the
-message bytes, which changes the wire prefix, which busts the cache.
+context but are no longer useful. Blanking them out client-side changes the
+message bytes, which changes the wire prefix, which busts the cache. You need a
+way to shrink context without rewriting the cached prefix yourself.
 
-### Solution: `cache_edits` API feature
+### Use the documented server-side features
 
-Instead of modifying message content, instruct the API to delete specific blocks
-from the server-side KV cache:
+There is no client-side "delete a block from the KV cache" primitive. Use the
+two features the API actually exposes:
 
-```typescript
-// Step 1: Tag tool_result blocks with a stable cache_reference
-// (only within the cached prefix, strictly before the last cache_control marker)
-for (const msg of messagesBeforeCacheMarker) {
-  for (const block of msg.content) {
-    if (block.type === "tool_result") {
-      block.cache_reference = block.tool_use_id;
-    }
-  }
-}
+- **Compaction** (beta header `compact-2026-01-12`; Opus 4.6+/Sonnet 4.6). The
+  API summarizes earlier context automatically as the prompt approaches the
+  trigger threshold (default ~150K tokens). Critical: append the full
+  `response.content` -- including any compaction blocks -- back into `messages`
+  every turn. The API uses those blocks to replace the compacted history on the
+  next request; extracting only the text silently loses the compaction state.
 
-// Step 2: In subsequent requests, include deletion instructions
-const requestBody = {
-  // ... normal params ...
-  cache_edits: {
-    type: "cache_edits",
-    edits: [
-      { type: "delete", cache_reference: "toolu_abc123" },
-      { type: "delete", cache_reference: "toolu_def456" },
-    ],
-  },
-};
-```
+- **Context editing / `context_management`** for server-side clearing of stale
+  tool results. This is a documented request param, not a client-side prefix
+  rewrite.
 
-### Pinning: consume once, re-send forever
-
-Once a `cache_edits` block is inserted at a specific user message index, it must
-be re-sent at that same position in every subsequent request. The server needs to
-see the deletions consistently.
-
-```typescript
-interface PinnedEdit {
-  messageIndex: number;
-  edits: { type: "delete"; cache_reference: string }[];
-}
-
-const pinnedEdits: PinnedEdit[] = [];
-let pendingEdits: PinnedEdit | null = null;
-
-// Called by the compaction system when it decides to evict old tool results
-function scheduleCacheEdits(messageIndex: number, toolUseIds: string[]) {
-  pendingEdits = {
-    messageIndex,
-    edits: toolUseIds.map((id) => ({ type: "delete", cache_reference: id })),
-  };
-}
-
-// Called once during request construction
-function applyAndPinEdits(messages: MessageParam[]) {
-  // Re-insert all previously-pinned edits at their original positions
-  for (const pinned of pinnedEdits) {
-    insertIntoMessage(messages[pinned.messageIndex], pinned.edits);
-  }
-
-  // Insert new edits and pin them
-  if (pendingEdits) {
-    insertIntoMessage(messages[pendingEdits.messageIndex], pendingEdits.edits);
-    pinnedEdits.push(pendingEdits);
-    pendingEdits = null;
-  }
-}
-```
-
-### Notify your cache break detection
-
-After sending `cache_edits` deletions, flag the expected drop so the break
-detection system does not fire a false positive (see Section 9).
+Both rebuild the cached prefix once when they fire, then resume caching from the
+new, smaller prefix. Expect a one-time cache-creation cost at the boundary --
+flag it so break detection does not treat it as a regression (see Section 9).
 
 ---
 
@@ -594,6 +624,25 @@ in a hook.
 Build observability into your cache layer. Without it, you will silently waste
 thousands of dollars on cache-creation tokens from unintended prefix changes.
 
+### Read the right `usage` fields
+
+The response `usage` object reports three separate token counts:
+
+| Field                         | Meaning                                              |
+| ----------------------------- | ---------------------------------------------------- |
+| `cache_creation_input_tokens` | Written to cache this request (paid the ~1.25x write)|
+| `cache_read_input_tokens`     | Served from cache this request (paid ~0.1x)          |
+| `input_tokens`                | The **uncached remainder only**, billed at full price|
+
+`input_tokens` is not the total prompt size. Total prompt size is
+`input_tokens + cache_creation_input_tokens + cache_read_input_tokens`. An agent
+that ran for hours can show `input_tokens: 4000` while the rest was served from
+cache -- always sum the three fields, never read `input_tokens` alone.
+
+If `cache_read_input_tokens` is zero across repeated requests that should share
+a prefix, a silent invalidator is at work -- diff the rendered prefix bytes
+between two requests (see the diff output below) to find the offending byte.
+
 ### Two-phase detection
 
 **Phase 1 -- pre-call: record what you are about to send.**
@@ -608,7 +657,7 @@ interface PromptStateSnapshot {
   perToolHashes: Record<string, number>; // drill-down for which tool changed
   model: string;
   betaHeaders: string[];
-  cacheControlHash: number; // scope + TTL settings
+  cacheControlHash: number; // TTL settings
   extraBodyHash: number;
 }
 
@@ -681,7 +730,7 @@ function checkForCacheBreak(
 | Situation                        | Action                                            |
 | -------------------------------- | ------------------------------------------------- |
 | After compaction                 | Reset baseline (set `prevCacheReadTokens = null`) |
-| After `cache_edits` deletion     | Flag as expected drop, skip detection for 1 call  |
+| After context editing            | Flag as expected drop, skip detection for 1 call  |
 | Gap >5min with no client changes | Label "possible 5min TTL expiry"                  |
 | Gap >1h with no client changes   | Label "possible 1h TTL expiry"                    |
 | No client changes, <5min gap     | Label "likely server-side eviction"               |
@@ -706,8 +755,9 @@ Before shipping any change that touches the API call path:
       messages, not tool prompts.
 - [ ] **Tool schemas are frozen per session.** A schema cache is consulted before
       rendering. Mid-session flag flips do not affect the serialized bytes.
-- [ ] **Exactly one cache marker per request.** The marker is on the last message
-      (or second-to-last for `skipCacheWrite` forks).
+- [ ] **A cache marker is on the newest turn** (or the second-to-last message
+      for `skipCacheWrite` forks), within the 4-breakpoint limit. Extra markers
+      are added only to bridge the 20-block lookback window in long turns.
 - [ ] **Beta headers are latched, not toggled.** Once sent, a header stays in
       every subsequent request until explicit session reset.
 - [ ] **TTL eligibility is evaluated once at session start.** The result is stored
@@ -718,5 +768,13 @@ Before shipping any change that touches the API call path:
       value that changes more often than once per session uses a tail-position message.
 - [ ] **Cache break detection covers the change.** Any new API param or header is
       hashed in the pre-call phase so breaks are correctly attributed.
-- [ ] **`cache_edits` deletions notify the detection system.** Expected token
-      drops are flagged to prevent false alarms.
+- [ ] **Compaction / context-editing boundaries notify the detection system.**
+      The one-time cache-creation cost is flagged to prevent false alarms.
+- [ ] **The cacheable prefix clears the model's minimum.** Prefixes below the
+      per-model threshold (4096 tokens on Opus/Haiku 4.5, 2048 on Sonnet 4.6,
+      1024 on older Sonnet) silently never cache.
+- [ ] **Cache metrics sum all three `usage` fields.** Reporting reads
+      `input_tokens + cache_creation_input_tokens + cache_read_input_tokens`,
+      never `input_tokens` alone.
+- [ ] **Fan-out is sequenced.** Parallel requests sharing a prefix prime the
+      cache with one request (await its first token) before firing the rest.
