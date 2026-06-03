@@ -352,9 +352,34 @@ append more than 20 blocks (many `tool_use` / `tool_result` pairs). When that
 happens, the trailing marker cannot reach the previous turn's cached block, and
 the request silently misses despite a byte-identical prefix.
 
-Fix it by placing an intermediate breakpoint roughly every ~15 blocks inside an
-oversized turn, so each marker stays within 20 blocks of the previous cached
-position. This is the main reason to spend more than the one trailing marker.
+The generic fix is to place an intermediate breakpoint roughly every ~15 blocks
+inside an oversized turn, so each marker stays within 20 blocks of the previous
+cached position. This is the main reason a hand-rolled client spends more than
+the one trailing marker.
+
+### What this means in pi
+
+pi does **not** add bridging breakpoints. `convertMessages` in pi-ai
+(`@earendil-works/pi-ai/dist/providers/anthropic.js`) emits exactly **one**
+message-tier marker, on the last block of the **last user message** of each
+request. Instead of bridging, pi relies on that marker re-anchoring every
+round: tool results are user-role messages, so the marker moves to the new tail
+after **every LLM round-trip**, not just every human turn.
+
+That keeps the lookback gap small in normal use. Between two consecutive pi
+requests the marker advances by only one round's blocks --
+`thinking + text + (tool_use x K)` on the assistant, then `(tool_result x K)`,
+with the new marker on the last `tool_result` -- roughly `2K + 1` blocks. The
+gap exceeds 20 only when a **single turn fires ~10+ tool calls in parallel**
+(`K >= 10`).
+
+When it does overshoot, only the **conversation-history tier** misses for that
+one request (re-written at the 1.25x write cost). The tools and system tiers
+are a stable front prefix and still hit, and the next (smaller) round
+re-anchors against the freshly written entry -- so it is a one-request penalty,
+not a cascade. Because pi exposes no way to hand-place an intermediate marker,
+the only practical mitigation is to avoid very wide parallel-tool turns; the
+"~15 blocks" fix above is not reachable through pi's public path.
 
 ### `skipCacheWrite` for fire-and-forget forks
 
@@ -760,8 +785,10 @@ Before shipping any change that touches the API call path:
 - [ ] **Tool schemas are frozen per session.** A schema cache is consulted before
       rendering. Mid-session flag flips do not affect the serialized bytes.
 - [ ] **A cache marker is on the newest turn** (or the second-to-last message
-      for `skipCacheWrite` forks), within the 4-breakpoint limit. Extra markers
-      are added only to bridge the 20-block lookback window in long turns.
+      for `skipCacheWrite` forks), within the 4-breakpoint limit. pi emits a
+      single message-tier marker that re-anchors every round; it does not add
+      bridging markers, so very wide parallel-tool turns (~10+ calls) can take a
+      one-request conversation-tier miss (see the 20-block lookback caveat).
 - [ ] **Beta headers are latched, not toggled.** Once sent, a header stays in
       every subsequent request until explicit session reset.
 - [ ] **TTL eligibility is evaluated once at session start.** The result is stored
