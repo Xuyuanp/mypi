@@ -7,6 +7,10 @@ Derived from reverse-engineering the Claude Code source code. Every rule below i
 backed by a real bug, a real metric, or a real architectural decision observed in
 production at scale.
 
+For pi-specific, live-measured evidence of marker placement and session-tree
+prefix reuse, see [CACHE_PREFIX_REUSE.md](./CACHE_PREFIX_REUSE.md) (the empirical
+companion to this runbook).
+
 ---
 
 ## Table of contents
