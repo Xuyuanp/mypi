@@ -29,6 +29,7 @@ import type { Message } from "@earendil-works/pi-ai";
 
 import {
     type ExtensionAPI,
+    type ExtensionContext,
     getMarkdownTheme,
     type Skill,
     type ThemeColor,
@@ -101,21 +102,71 @@ function formatDuration(ms: number): string {
     return `${minutes}m${remainingSec}s`;
 }
 
-function formatUsageStats(
-    usage: UsageStats,
-    model?: string,
-    durationMs?: number,
-): string {
+interface FormatUsageOpts {
+    model?: string;
+    durationMs?: number;
+    contextWindow?: number;
+}
+
+function formatUsageStats(usage: UsageStats, opts?: FormatUsageOpts): string {
+    const { model, durationMs, contextWindow } = opts ?? {};
     const parts: string[] = [];
     if (usage.turns) parts.push(`${usage.turns} turn${usage.turns > 1 ? "s" : ""}`);
     if (usage.input) parts.push(`↑${formatTokens(usage.input)}`);
     if (usage.output) parts.push(`↓${formatTokens(usage.output)}`);
     if (usage.cacheRead) parts.push(`R${formatTokens(usage.cacheRead)}`);
     if (usage.cacheWrite) parts.push(`W${formatTokens(usage.cacheWrite)}`);
+    if (contextWindow && usage.contextTokens) {
+        const pct = Math.round((usage.contextTokens / contextWindow) * 100);
+        parts.push(`ctx ${pct}%`);
+    }
     if (usage.cost.total) parts.push(`$${usage.cost.total.toFixed(4)}`);
     if (durationMs !== undefined) parts.push(formatDuration(durationMs));
     if (model) parts.push(model);
     return parts.join(" ");
+}
+
+function buildLastLine(r: AgentRunResult, toolCallCount: number): string {
+    const countStr = toolCallCount > 0 ? `${toolCallCount} tools` : "";
+    const usageStr = formatUsageStats(r.usage, {
+        model: r.model,
+        durationMs: r.durationMs,
+        contextWindow: r.contextWindow,
+    });
+    return [countStr, usageStr].filter(Boolean).join(" ");
+}
+
+/**
+ * Parse a model string in `provider/id` or `provider/id:thinkingLevel` form.
+ * Returns null if the string doesn't contain a provider/id separator.
+ */
+function parseModelStr(
+    modelStr: string,
+): { provider: string; id: string; thinkingLevel?: string } | null {
+    const slash = modelStr.indexOf("/");
+    if (slash === -1) return null;
+    const provider = modelStr.slice(0, slash);
+    const rest = modelStr.slice(slash + 1);
+    const match = rest.match(/^(.+):([a-z]+)$/);
+    if (match) return { provider, id: match[1], thinkingLevel: match[2] };
+    return { provider, id: rest };
+}
+
+/**
+ * Resolve the context window (in tokens) for the subagent's model.
+ *
+ * Falls back to the parent model's context window when the subagent inherits
+ * the parent model or the model cannot be resolved.
+ */
+function resolveContextWindow(
+    modelStr: string | undefined,
+    ctx: ExtensionContext,
+): number | undefined {
+    if (!modelStr) return ctx.model?.contextWindow;
+    const parsed = parseModelStr(modelStr);
+    if (!parsed) return ctx.model?.contextWindow;
+    const model = ctx.modelRegistry.find(parsed.provider, parsed.id);
+    return model?.contextWindow ?? ctx.model?.contextWindow;
 }
 
 function formatToolCall(
@@ -238,6 +289,8 @@ interface UsageStats {
     cacheRead: number;
     cacheWrite: number;
     totalTokens: number;
+    /** Prompt size of the most recent assistant turn (input + cache read + cache write). */
+    contextTokens: number;
     cost: {
         input: number;
         output: number;
@@ -255,6 +308,7 @@ function createZeroUsage(): UsageStats {
         cacheRead: 0,
         cacheWrite: 0,
         totalTokens: 0,
+        contextTokens: 0,
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
         turns: 0,
     };
@@ -293,19 +347,8 @@ function accumulateUsage(
 }
 
 const ZERO_USAGE: Readonly<UsageStats> = Object.freeze({
-    input: 0,
-    output: 0,
-    cacheRead: 0,
-    cacheWrite: 0,
-    totalTokens: 0,
-    cost: Object.freeze({
-        input: 0,
-        output: 0,
-        cacheRead: 0,
-        cacheWrite: 0,
-        total: 0,
-    }),
-    turns: 0,
+    ...createZeroUsage(),
+    cost: Object.freeze(createZeroUsage().cost),
 });
 
 interface AgentRunResult {
@@ -317,6 +360,7 @@ interface AgentRunResult {
     stderr: string;
     usage: UsageStats;
     model?: string;
+    contextWindow?: number;
     stopReason?: string;
     errorMessage?: string;
     durationMs?: number;
@@ -428,6 +472,8 @@ async function runSubagent(
     onUpdate: OnUpdateCallback | undefined,
     makeDetails: (result: AgentRunResult) => SubagentDetails,
     execStatusMap: Map<string, boolean>,
+    contextWindow: number | undefined,
+    ctx: ExtensionContext,
 ): Promise<AgentRunResult> {
     const args: string[] = [
         "--mode",
@@ -450,7 +496,7 @@ async function runSubagent(
     if (modelArg) args.push("--model", modelArg);
     // Disable thinking unless the model name includes a thinking level
     // (e.g., "anthropic/claude-sonnet:high")
-    const hasThinkingLevel = modelArg && /:[a-z]+$/.test(modelArg);
+    const hasThinkingLevel = modelArg && parseModelStr(modelArg)?.thinkingLevel;
     if (!hasThinkingLevel) args.push("--thinking", "off");
     if (agent.tools && agent.tools.length > 0)
         args.push("--tools", agent.tools.join(","));
@@ -466,6 +512,7 @@ async function runSubagent(
         stderr: "",
         usage: createZeroUsage(),
         model: modelArg,
+        contextWindow,
     };
 
     const emitUpdate = () => {
@@ -480,7 +527,10 @@ async function runSubagent(
             ? `${toolStatusIconPlain(lastToolCall.status)} ${formatToolCallPlain(lastToolCall.name, lastToolCall.args)}`
             : "(running...)";
 
-        const usageStr = formatUsageStats(currentResult.usage, currentResult.model);
+        const usageStr = formatUsageStats(currentResult.usage, {
+            model: currentResult.model,
+            contextWindow: currentResult.contextWindow,
+        });
         const statusLine = usageStr ? `${ICON_RUNNING} ${usageStr}` : ICON_RUNNING;
 
         onUpdate({
@@ -537,9 +587,20 @@ async function runSubagent(
                         currentResult.usage.turns++;
                         if (msg.usage) {
                             accumulateUsage(currentResult.usage, msg.usage);
+                            // Context size is the latest turn's prompt, not a
+                            // running total, so overwrite rather than accumulate.
+                            currentResult.usage.contextTokens =
+                                (msg.usage.input || 0) +
+                                (msg.usage.cacheRead || 0) +
+                                (msg.usage.cacheWrite || 0);
                         }
-                        if (!currentResult.model && msg.model)
+                        if (!currentResult.model && msg.model) {
                             currentResult.model = msg.model;
+                            currentResult.contextWindow = resolveContextWindow(
+                                msg.model,
+                                ctx,
+                            );
+                        }
                         if (msg.stopReason)
                             currentResult.stopReason = msg.stopReason;
                         if (msg.errorMessage)
@@ -764,6 +825,8 @@ export default function (pi: ExtensionAPI) {
                 skills: resolvedSkillPaths?.length ? resolvedSkillPaths : undefined,
             };
 
+            const contextWindow = resolveContextWindow(resolvedAgent.model, ctx);
+
             const result = await runSubagent(
                 resolvedAgent,
                 params.task,
@@ -772,6 +835,8 @@ export default function (pi: ExtensionAPI) {
                 onUpdate,
                 makeDetails,
                 execStatusMap,
+                contextWindow,
+                ctx,
             );
 
             const isError =
@@ -881,10 +946,7 @@ export default function (pi: ExtensionAPI) {
                         );
                     }
                 }
-                const usageStr = formatUsageStats(r.usage, r.model, r.durationMs);
-                const toolCallCount = toolCallItems.length;
-                const countStr = toolCallCount > 0 ? `${toolCallCount} tools` : "";
-                const lastLine = [countStr, usageStr].filter(Boolean).join(" ");
+                const lastLine = buildLastLine(r, toolCallItems.length);
                 container.addChild(new Spacer(1));
                 container.addChild(new Text(theme.fg("dim", lastLine), 0, 0));
                 return container;
@@ -900,18 +962,13 @@ export default function (pi: ExtensionAPI) {
                     ` ${icon} ` +
                     formatToolCall(item.name, item.args, theme.fg.bind(theme));
             }
-            const toolCallCount = toolCallItems.length;
-            const countStr = toolCallCount > 0 ? `${toolCallCount} tools` : "";
+            const lastLine = buildLastLine(r, toolCallItems.length);
             if (isError) {
                 const errorMsg = r.errorMessage || r.stopReason || "failed";
                 if (text) text += "\n";
                 text += theme.fg("error", errorMsg);
-                const usageStr = formatUsageStats(r.usage, r.model, r.durationMs);
-                const lastLine = [countStr, usageStr].filter(Boolean).join(" ");
                 if (lastLine) text += `\n${theme.fg("dim", lastLine)}`;
             } else {
-                const usageStr = formatUsageStats(r.usage, r.model, r.durationMs);
-                const lastLine = [countStr, usageStr].filter(Boolean).join(" ");
                 if (text) text += "\n";
                 text += theme.fg("dim", lastLine);
             }
