@@ -42,16 +42,19 @@ export default function (pi: ExtensionAPI) {
             const customInstructions =
                 trimmed.slice(firstWord.length).trim() || undefined;
             const entries = ctx.sessionManager.getBranch();
-            const userMessages = entries.filter(
-                (e) => e.type === "message" && e.message.role === "user",
-            );
+            let target: (typeof entries)[number] | undefined;
+            for (let i = entries.length - 1; i >= 0; i--) {
+                const e = entries[i];
+                if (e.type === "message" && e.message.role === "user") {
+                    target = e;
+                    break;
+                }
+            }
 
-            if (userMessages.length === 0) {
+            if (!target) {
                 ctx.ui.notify("No previous user message to navigate to", "warning");
                 return;
             }
-
-            const target = userMessages[userMessages.length - 1];
             await ctx.navigateTree(target.id, { summarize, customInstructions });
         },
     });
