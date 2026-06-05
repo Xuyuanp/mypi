@@ -63,7 +63,9 @@ function buildSkillIndex(pi: ExtensionAPI, cwd: string): SkillIndexEntry[] {
         .getCommands()
         .filter((c) => c.source === "skill")
         .map((c) => {
-            const p = c.path ? normalizeReadPath(c.path, cwd) : "";
+            const p = c.sourceInfo?.path
+                ? normalizeReadPath(c.sourceInfo.path, cwd)
+                : "";
             return {
                 name: normalizeSkillName(c.name),
                 skillFilePath: p,
@@ -162,10 +164,12 @@ function renderUsageBar(
     const w = Math.max(10, width);
     if (total <= 0) return "";
 
-    const toCols = (n: number) => Math.round((n / total) * w);
-    const sys = toCols(parts.system);
-    const tools = toCols(parts.tools);
-    const con = toCols(parts.convo);
+    // Ensure each non-zero segment gets at least 1 column.
+    const atLeast1 = (n: number) =>
+        n > 0 ? Math.max(1, Math.round((n / total) * w)) : 0;
+    const sys = atLeast1(parts.system);
+    const tools = atLeast1(parts.tools);
+    const con = atLeast1(parts.convo);
     let rem = w - sys - tools - con;
     if (rem < 0) rem = 0;
     // adjust rounding drift
@@ -221,8 +225,7 @@ class ContextView implements Component {
     private body: Text;
     private cachedWidth?: number;
 
-    constructor(tui: TUI, theme: any, data: ContextViewData, onDone: () => void) {
-        this.tui = tui;
+    constructor(_tui: TUI, theme: any, data: ContextViewData, onDone: () => void) {
         this.theme = theme;
         this.data = data;
         this.onDone = onDone;
@@ -271,32 +274,33 @@ class ContextView implements Component {
             // bar width tries to fit within the viewport
             const barWidth = Math.max(10, Math.min(36, width - 10));
 
-            // Prorate system prompt into current message context estimate, then add tools estimate.
-            const sysInMessages = Math.min(u.systemPromptTokens, u.messageTokens);
-            const convoInMessages = Math.max(0, u.messageTokens - sysInMessages);
+            const convoTokens = Math.max(
+                0,
+                u.messageTokens - u.systemPromptTokens - u.toolsTokens,
+            );
             const bar =
                 renderUsageBar(
                     this.theme,
                     {
-                        system: sysInMessages,
+                        system: u.systemPromptTokens,
                         tools: u.toolsTokens,
-                        convo: convoInMessages,
+                        convo: convoTokens,
                         remaining: u.remainingTokens,
                     },
                     u.contextWindow,
                     barWidth,
                 ) +
                 " " +
-                dim("sys") +
+                dim("sys ") +
                 this.theme.fg("accent", "█") +
                 " " +
-                dim("tools") +
+                dim("tools ") +
                 this.theme.fg("warning", "█") +
                 " " +
-                dim("convo") +
+                dim("convo ") +
                 this.theme.fg("success", "█") +
                 " " +
-                dim("free") +
+                dim("free ") +
                 this.theme.fg("dim", "█");
             lines.push(bar);
         }
@@ -447,14 +451,20 @@ export default function contextExtension(pi: ExtensionAPI) {
 
             const extensionsByPath = new Map<string, string[]>();
             for (const c of extensionCmds) {
-                const p = c.path ?? "<unknown>";
+                const p = c.sourceInfo?.path ?? "<unknown>";
                 const arr = extensionsByPath.get(p) ?? [];
                 arr.push(c.name);
                 extensionsByPath.set(p, arr);
             }
-            const extensionFiles = [...extensionsByPath.keys()]
-                .map((p) => (p === "<unknown>" ? p : path.basename(p)))
-                .sort((a, b) => a.localeCompare(b));
+            const extensionFiles: string[] = [];
+            for (const [p, names] of extensionsByPath) {
+                if (p === "<unknown>") {
+                    extensionFiles.push(...names);
+                } else {
+                    extensionFiles.push(path.basename(p));
+                }
+            }
+            extensionFiles.sort((a, b) => a.localeCompare(b));
 
             const skills = skillCmds
                 .map((c) => normalizeSkillName(c.name))
@@ -495,7 +505,13 @@ export default function contextExtension(pi: ExtensionAPI) {
             }
             toolsTokens = Math.round(toolsTokens * TOOL_FUDGE);
 
-            const effectiveTokens = messageTokens + toolsTokens;
+            // getContextUsage().tokens includes system + tools + conversation
+            // (from API input token count). Before any API call it's 0, so
+            // fall back to the estimate as a floor.
+            const effectiveTokens = Math.max(
+                messageTokens,
+                systemPromptTokens + toolsTokens,
+            );
             const percent = ctxWindow > 0 ? (effectiveTokens / ctxWindow) * 100 : 0;
             const remainingTokens =
                 ctxWindow > 0 ? Math.max(0, ctxWindow - effectiveTokens) : 0;
