@@ -390,8 +390,7 @@ export default function (pi: ExtensionAPI) {
     pi.registerCommand("btw", {
         description: "Ask a side question without adding to conversation history",
         handler: async (args, ctx) => {
-            if (!ctx.hasUI) {
-                ctx.ui.notify("/btw requires interactive mode", "error");
+            if (ctx.mode !== "tui") {
                 return;
             }
 

@@ -24,6 +24,7 @@ export default function (pi: ExtensionAPI) {
                 : null;
         },
         handler: async (args, ctx) => {
+            if (!ctx.hasUI) return;
             if (!ctx.isIdle()) {
                 ctx.ui.notify("Cannot navigate while agent is running", "warning");
                 return;

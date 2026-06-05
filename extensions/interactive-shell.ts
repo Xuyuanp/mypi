@@ -211,7 +211,7 @@ export default function (pi: ExtensionAPI) {
     pi.registerCommand("edit", {
         description: "Open editor",
         handler: async (path, ctx) => {
-            if (!ctx.hasUI) {
+            if (ctx.mode !== "tui") {
                 return;
             }
 
@@ -228,7 +228,7 @@ export default function (pi: ExtensionAPI) {
     pi.registerCommand("shell", {
         description: "Open interactive shell",
         handler: async (args, ctx) => {
-            if (!ctx.hasUI) {
+            if (ctx.mode !== "tui") {
                 return;
             }
 
@@ -240,7 +240,7 @@ export default function (pi: ExtensionAPI) {
     pi.registerCommand("view", {
         description: "View last assistant message in editor",
         handler: async (_args, ctx) => {
-            if (!ctx.hasUI || !ctx.isIdle()) return;
+            if (ctx.mode !== "tui" || !ctx.isIdle()) return;
             await viewLastAssistantMessage(ctx.ui, ctx.sessionManager);
         },
     });
@@ -248,7 +248,7 @@ export default function (pi: ExtensionAPI) {
     pi.registerShortcut("ctrl+shift+v", {
         description: "View last assistant message in editor",
         handler: async (ctx) => {
-            if (!ctx.hasUI || !ctx.isIdle()) return;
+            if (ctx.mode !== "tui" || !ctx.isIdle()) return;
             await viewLastAssistantMessage(ctx.ui, ctx.sessionManager);
         },
     });
@@ -256,10 +256,7 @@ export default function (pi: ExtensionAPI) {
     pi.registerCommand("nvim-review", {
         description: "Open files in Neovim review mode",
         handler: async (args, ctx) => {
-            if (!ctx.hasUI) {
-                ctx.ui.notify("/nvim-review requires interactive mode", "error");
-                return;
-            }
+            if (ctx.mode !== "tui") return;
 
             let files = args
                 .trim()
@@ -306,10 +303,7 @@ export default function (pi: ExtensionAPI) {
     pi.registerCommand("system-prompt", {
         description: "View the current system prompt in nvim",
         handler: async (_args, ctx) => {
-            if (!ctx.hasUI) {
-                ctx.ui.notify("/system-prompt requires interactive mode", "error");
-                return;
-            }
+            if (ctx.mode !== "tui") return;
 
             const prompt = ctx.getSystemPrompt();
             const tmpFile = join(tmpdir(), `pi-system-prompt-${process.pid}.md`);

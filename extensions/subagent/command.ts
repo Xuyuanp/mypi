@@ -475,8 +475,8 @@ export function registerSubagentCommand(pi: ExtensionAPI): void {
     pi.registerCommand("subagent", {
         description: "List all discovered agents",
         handler: async (_args, ctx: ExtensionCommandContext) => {
-            // Interactive-only: nothing to render without a UI.
-            if (!ctx.hasUI) return;
+            // TUI-only: custom() returns undefined in RPC mode.
+            if (ctx.mode !== "tui") return;
 
             const rows = buildAgentRows(discoverAgents().agents);
             await ctx.ui.custom<void>((tui, theme, _kb, done) => {

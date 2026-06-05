@@ -871,9 +871,9 @@ export default function questionnaire(pi: ExtensionAPI) {
         parameters: QuestionnaireParams,
 
         async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-            if (!ctx.hasUI) {
+            if (ctx.mode !== "tui") {
                 return errorResult(
-                    "Error: UI not available (running in non-interactive mode)",
+                    "Error: Questionnaire requires TUI mode (not available in RPC/JSON/print)",
                 );
             }
             if (params.questions.length === 0) {
@@ -966,8 +966,7 @@ export default function questionnaire(pi: ExtensionAPI) {
         description:
             "Parse questions from the last assistant message and answer them interactively",
         handler: async (_args, ctx) => {
-            if (!ctx.hasUI) {
-                ctx.ui.notify("/answer requires interactive mode", "error");
+            if (ctx.mode !== "tui") {
                 return;
             }
 

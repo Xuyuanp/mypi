@@ -8,8 +8,6 @@
  * - current context window usage + session totals (tokens/cost)
  */
 
-import { existsSync } from "node:fs";
-import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type {
@@ -48,89 +46,6 @@ function normalizeReadPath(inputPath: string, cwd: string): string {
     else if (p.startsWith("~/")) p = path.join(os.homedir(), p.slice(2));
     if (!path.isAbsolute(p)) p = path.resolve(cwd, p);
     return path.resolve(p);
-}
-
-function getAgentDir(): string {
-    // Mirrors pi's behavior reasonably well.
-    const envCandidates = ["PI_CODING_AGENT_DIR", "TAU_CODING_AGENT_DIR"];
-    let envDir: string | undefined;
-    for (const k of envCandidates) {
-        if (process.env[k]) {
-            envDir = process.env[k];
-            break;
-        }
-    }
-    if (!envDir) {
-        for (const [k, v] of Object.entries(process.env)) {
-            if (k.endsWith("_CODING_AGENT_DIR") && v) {
-                envDir = v;
-                break;
-            }
-        }
-    }
-
-    if (envDir) {
-        if (envDir === "~") return os.homedir();
-        if (envDir.startsWith("~/")) return path.join(os.homedir(), envDir.slice(2));
-        return envDir;
-    }
-    return path.join(os.homedir(), ".pi", "agent");
-}
-
-async function readFileIfExists(
-    filePath: string,
-): Promise<{ path: string; content: string; bytes: number } | null> {
-    if (!existsSync(filePath)) return null;
-    try {
-        const buf = await fs.readFile(filePath);
-        return {
-            path: filePath,
-            content: buf.toString("utf8"),
-            bytes: buf.byteLength,
-        };
-    } catch {
-        return null;
-    }
-}
-
-async function loadProjectContextFiles(
-    cwd: string,
-): Promise<Array<{ path: string; tokens: number; bytes: number }>> {
-    const out: Array<{ path: string; tokens: number; bytes: number }> = [];
-    const seen = new Set<string>();
-
-    const loadFromDir = async (dir: string) => {
-        for (const name of ["AGENTS.md", "CLAUDE.md"]) {
-            const p = path.join(dir, name);
-            const f = await readFileIfExists(p);
-            if (f && !seen.has(f.path)) {
-                seen.add(f.path);
-                out.push({
-                    path: f.path,
-                    tokens: estimateTokens(f.content),
-                    bytes: f.bytes,
-                });
-                // pi loads at most one of those per dir
-                return;
-            }
-        }
-    };
-
-    await loadFromDir(getAgentDir());
-
-    // Ancestors: root → cwd (same order as pi)
-    const stack: string[] = [];
-    let current = path.resolve(cwd);
-    while (true) {
-        stack.push(current);
-        const parent = path.resolve(current, "..");
-        if (parent === current) break;
-        current = parent;
-    }
-    stack.reverse();
-    for (const dir of stack) await loadFromDir(dir);
-
-    return out;
 }
 
 function normalizeSkillName(name: string): string {
@@ -545,11 +460,15 @@ export default function contextExtension(pi: ExtensionAPI) {
                 .map((c) => normalizeSkillName(c.name))
                 .sort((a, b) => a.localeCompare(b));
 
-            const agentFiles = await loadProjectContextFiles(ctx.cwd);
-            const agentFilePaths = agentFiles.map((f) =>
+            const promptOptions = ctx.getSystemPromptOptions();
+            const contextFiles = promptOptions.contextFiles ?? [];
+            const agentFilePaths = contextFiles.map((f) =>
                 shortenPath(f.path, ctx.cwd),
             );
-            const agentTokens = agentFiles.reduce((a, f) => a + f.tokens, 0);
+            const agentTokens = contextFiles.reduce(
+                (a, f) => a + estimateTokens(f.content),
+                0,
+            );
 
             const systemPrompt = ctx.getSystemPrompt();
             const systemPromptTokens = systemPrompt
@@ -614,7 +533,7 @@ export default function contextExtension(pi: ExtensionAPI) {
                 return lines.join("\n");
             };
 
-            if (!ctx.hasUI) {
+            if (ctx.mode !== "tui") {
                 pi.sendMessage(
                     {
                         customType: "context",

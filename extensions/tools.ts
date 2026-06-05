@@ -270,8 +270,8 @@ export default function toolsExtension(pi: ExtensionAPI) {
     pi.registerCommand("tools", {
         description: "Show all tools (active first) in a table",
         handler: async (_args, ctx: ExtensionCommandContext) => {
-            // Interactive-only: nothing to render without a UI.
-            if (!ctx.hasUI) return;
+            // TUI-only: custom() returns undefined in RPC mode.
+            if (ctx.mode !== "tui") return;
 
             const rows = buildToolRows(pi.getAllTools(), pi.getActiveTools());
             await ctx.ui.custom<void>((tui, theme, _kb, done) => {

@@ -435,8 +435,7 @@ export default function (pi: ExtensionAPI) {
     pi.registerCommand("todos", {
         description: "Show all todos on the current branch",
         handler: async (_args, ctx) => {
-            if (!ctx.hasUI) {
-                ctx.ui.notify("/todos requires interactive mode", "error");
+            if (ctx.mode !== "tui") {
                 return;
             }
 

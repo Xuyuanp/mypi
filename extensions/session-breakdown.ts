@@ -1638,8 +1638,8 @@ export default function sessionBreakdownExtension(pi: ExtensionAPI) {
         description:
             "Interactive breakdown of last 7/30/90 days of ~/.pi session usage (sessions/messages/tokens + cost by model)",
         handler: async (_args, ctx: ExtensionContext) => {
-            if (!ctx.hasUI) {
-                // Non-interactive fallback: just notify.
+            if (ctx.mode !== "tui") {
+                // Non-TUI fallback: custom() only works in TUI mode.
                 const data = await computeBreakdown(undefined);
                 const range = data.ranges.get(30)!;
                 pi.sendMessage(
