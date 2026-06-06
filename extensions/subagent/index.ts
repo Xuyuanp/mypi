@@ -24,7 +24,6 @@ import { randomUUID } from "node:crypto";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import type { Message } from "@earendil-works/pi-ai";
 
 import {
@@ -462,28 +461,58 @@ function getPiInvocation(args: string[]): { command: string; args: string[] } {
     return { command: "pi", args };
 }
 
-type OnUpdateCallback = (partial: AgentToolResult<SubagentDetails>) => void;
+type SubagentProgressEvent =
+    | { type: "message" }
+    | { type: "tool_start"; toolCallId: string }
+    | { type: "tool_end"; toolCallId: string; isError: boolean }
+    | { type: "tool_result" };
+
+type SubagentProgressCallback = (
+    result: AgentRunResult,
+    event: SubagentProgressEvent,
+) => void;
 
 async function runSubagent(
     agent: AgentConfig,
     task: string,
     cwd: string,
     signal: AbortSignal | undefined,
-    onUpdate: OnUpdateCallback | undefined,
-    makeDetails: (result: AgentRunResult) => SubagentDetails,
-    execStatusMap: Map<string, boolean>,
-    contextWindow: number | undefined,
+    onProgress: SubagentProgressCallback | undefined,
     ctx: ExtensionContext,
 ): Promise<AgentRunResult> {
     const args: string[] = [
         "--mode",
         "json",
         "--no-extensions",
-        "--no-session",
         "--no-context-files",
         "--offline",
         "--print",
     ];
+
+    // Save subagent session alongside the parent session.
+    // Path: <parent-session-without-ext>/subagent/<agent>-<datetime>-<uuid>.jsonl
+    const parentSessionFile = ctx.sessionManager.getSessionFile();
+    if (parentSessionFile) {
+        // Strip .jsonl to create a sibling directory. If no .jsonl
+        // extension, append ".d" to avoid colliding with the parent file.
+        const parentBase = parentSessionFile.endsWith(".jsonl")
+            ? parentSessionFile.slice(0, -6)
+            : `${parentSessionFile}.d`;
+        const subagentSessionDir = path.resolve(parentBase, "subagent");
+        const safeName =
+            agent.name
+                .replace(/[^\w.-]+/g, "_")
+                .replace(/^[^A-Za-z0-9]+|[^A-Za-z0-9]+$/g, "") || "agent";
+        const datetime = new Date()
+            .toISOString()
+            .replace(/[:.]/g, "-")
+            .replace("T", "_")
+            .replace("Z", "");
+        const sessionId = `${safeName}-${datetime}-${randomUUID().slice(0, 8)}`;
+        args.push("--session-dir", subagentSessionDir, "--session-id", sessionId);
+    } else {
+        args.push("--no-session");
+    }
     // --no-skills disables auto-discovered skills;
     // --skill re-adds specific ones (resolved file paths).
     args.push("--no-skills");
@@ -503,6 +532,8 @@ async function runSubagent(
 
     let tmpPromptPath: string | null = null;
 
+    const contextWindow = resolveContextWindow(agent.model, ctx);
+
     const currentResult: AgentRunResult = {
         agent: agent.name,
         agentSource: agent.source,
@@ -513,35 +544,6 @@ async function runSubagent(
         usage: createZeroUsage(),
         model: modelArg,
         contextWindow,
-    };
-
-    const emitUpdate = () => {
-        if (!onUpdate) return;
-
-        const items = getDisplayItems(currentResult.messages, execStatusMap);
-        const toolCalls = items.filter((i) => i.type === "toolCall");
-        const lastToolCall =
-            toolCalls.length > 0 ? toolCalls[toolCalls.length - 1] : null;
-
-        const lastToolLine = lastToolCall
-            ? `${toolStatusIconPlain(lastToolCall.status)} ${formatToolCallPlain(lastToolCall.name, lastToolCall.args)}`
-            : "(running...)";
-
-        const usageStr = formatUsageStats(currentResult.usage, {
-            model: currentResult.model,
-            contextWindow: currentResult.contextWindow,
-        });
-        const statusLine = usageStr ? `${ICON_RUNNING} ${usageStr}` : ICON_RUNNING;
-
-        onUpdate({
-            content: [
-                {
-                    type: "text",
-                    text: `${lastToolLine}\n${statusLine}`,
-                },
-            ],
-            details: makeDetails(currentResult),
-        });
     };
 
     const startTime = Date.now();
@@ -606,21 +608,27 @@ async function runSubagent(
                         if (msg.errorMessage)
                             currentResult.errorMessage = msg.errorMessage;
                     }
-                    emitUpdate();
+                    onProgress?.(currentResult, { type: "message" });
                 }
 
                 if (event.type === "tool_execution_start" && event.toolCallId) {
-                    emitUpdate();
+                    onProgress?.(currentResult, {
+                        type: "tool_start",
+                        toolCallId: event.toolCallId,
+                    });
                 }
 
                 if (event.type === "tool_execution_end" && event.toolCallId) {
-                    execStatusMap.set(event.toolCallId, !!event.isError);
-                    emitUpdate();
+                    onProgress?.(currentResult, {
+                        type: "tool_end",
+                        toolCallId: event.toolCallId,
+                        isError: !!event.isError,
+                    });
                 }
 
                 if (event.type === "tool_result_end" && event.message) {
                     currentResult.messages.push(event.message as Message);
-                    emitUpdate();
+                    onProgress?.(currentResult, { type: "tool_result" });
                 }
             };
 
@@ -761,14 +769,53 @@ export default function (pi: ExtensionAPI) {
         async execute(_toolCallId, params, signal, onUpdate, ctx) {
             const agents = discoverAgents().agents;
 
-            // Tracks per-tool-call completion from tool_execution_end events.
-            // Shared with runSubagent so makeDetails can snapshot it.
             const execStatusMap = new Map<string, boolean>();
 
             const makeDetails = (result: AgentRunResult): SubagentDetails => ({
                 result,
                 execStatuses: Object.fromEntries(execStatusMap),
             });
+
+            const onProgress: SubagentProgressCallback | undefined = onUpdate
+                ? (result, event) => {
+                      if (event.type === "tool_end") {
+                          execStatusMap.set(event.toolCallId, event.isError);
+                      }
+
+                      const items = getDisplayItems(result.messages, execStatusMap);
+                      let lastToolCall: (DisplayItem & { type: "toolCall" }) | null =
+                          null;
+                      for (let i = items.length - 1; i >= 0; i--) {
+                          const item = items[i];
+                          if (item.type === "toolCall") {
+                              lastToolCall = item;
+                              break;
+                          }
+                      }
+
+                      const lastToolLine = lastToolCall
+                          ? `${toolStatusIconPlain(lastToolCall.status)} ${formatToolCallPlain(lastToolCall.name, lastToolCall.args)}`
+                          : "(running...)";
+
+                      const usageStr = formatUsageStats(result.usage, {
+                          model: result.model,
+                          contextWindow: result.contextWindow,
+                      });
+                      const statusLine = usageStr
+                          ? `${ICON_RUNNING} ${usageStr}`
+                          : ICON_RUNNING;
+
+                      onUpdate({
+                          content: [
+                              {
+                                  type: "text",
+                                  text: `${lastToolLine}\n${statusLine}`,
+                              },
+                          ],
+                          details: makeDetails(result),
+                      });
+                  }
+                : undefined;
 
             const earlyError = (
                 msg: string,
@@ -825,17 +872,12 @@ export default function (pi: ExtensionAPI) {
                 skills: resolvedSkillPaths?.length ? resolvedSkillPaths : undefined,
             };
 
-            const contextWindow = resolveContextWindow(resolvedAgent.model, ctx);
-
             const result = await runSubagent(
                 resolvedAgent,
                 params.task,
                 params.cwd ?? ctx.cwd,
                 signal,
-                onUpdate,
-                makeDetails,
-                execStatusMap,
-                contextWindow,
+                onProgress,
                 ctx,
             );
 
