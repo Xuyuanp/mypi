@@ -43,6 +43,7 @@ import {
     visibleWidth,
 } from "@earendil-works/pi-tui";
 import { type AgentConfig, discoverAgents } from "./agents.js";
+import type { BackgroundAgent } from "./index.js";
 
 interface AgentRow {
     name: string;
@@ -471,11 +472,45 @@ class AgentsListView implements Component {
     }
 }
 
-export function registerSubagentCommand(pi: ExtensionAPI): void {
+export function registerSubagentCommand(
+    pi: ExtensionAPI,
+    backgroundAgents: Map<string, BackgroundAgent>,
+): void {
     pi.registerCommand("subagent", {
-        description: "List all discovered agents",
-        handler: async (_args, ctx: ExtensionCommandContext) => {
-            // TUI-only: custom() returns undefined in RPC mode.
+        description: "List agents or cancel a background agent",
+        getArgumentCompletions(prefix) {
+            if (prefix.startsWith("cancel ")) {
+                const partial = prefix.slice("cancel ".length);
+                return [...backgroundAgents.keys()]
+                    .filter((id) => id.startsWith(partial))
+                    .map((id) => ({
+                        label: id,
+                        value: `cancel ${id}`,
+                    }));
+            }
+            if ("cancel".startsWith(prefix)) {
+                return [{ label: "cancel", value: "cancel " }];
+            }
+            return null;
+        },
+        handler: async (args, ctx: ExtensionCommandContext) => {
+            const trimmed = args.trim();
+
+            // /subagent cancel <id>
+            if (trimmed.startsWith("cancel ")) {
+                const id = trimmed.slice("cancel ".length).trim();
+                const entry = backgroundAgents.get(id);
+                if (!entry) {
+                    ctx.ui.notify(`No background agent with id: ${id}`);
+                    return;
+                }
+                backgroundAgents.delete(id);
+                entry.kill();
+                ctx.ui.notify(`Cancelled background agent: ${id}`);
+                return;
+            }
+
+            // Default: show agent list (TUI-only)
             if (ctx.mode !== "tui") return;
 
             const rows = buildAgentRows(discoverAgents().agents);

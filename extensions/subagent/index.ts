@@ -34,14 +34,29 @@ import {
     type ThemeColor,
     withFileMutationQueue,
 } from "@earendil-works/pi-coding-agent";
-import { Container, Markdown, Spacer, Text } from "@earendil-works/pi-tui";
+import { Box, Container, Markdown, Spacer, Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { type AgentConfig, discoverAgents } from "./agents.js";
 import { registerSubagentCommand } from "./command.js";
 
+export interface BackgroundAgent {
+    id: string;
+    description: string;
+    agent: AgentConfig;
+    task: string;
+    kill: () => void;
+    promise: Promise<AgentRunResult>;
+}
+
 const ICON_RUNNING = "○";
 const ICON_SUCCESS = "●";
 const ICON_ERROR = "●";
+
+function isSubagentError(r: AgentRunResult): boolean {
+    return (
+        r.exitCode !== 0 || r.stopReason === "error" || r.stopReason === "aborted"
+    );
+}
 type ToolCallStatus = "success" | "error" | "pending";
 
 function toolStatusIconPlain(status: ToolCallStatus): string {
@@ -368,6 +383,7 @@ interface AgentRunResult {
 interface SubagentDetails {
     result: AgentRunResult;
     execStatuses?: Record<string, boolean>;
+    description?: string;
 }
 
 function getFinalOutput(messages: Message[]): string {
@@ -647,11 +663,15 @@ async function runSubagent(
             });
 
             if (signal) {
+                let exited = false;
+                proc.on("close", () => {
+                    exited = true;
+                });
                 const killProc = () => {
                     wasAborted = true;
                     proc.kill("SIGTERM");
                     setTimeout(() => {
-                        if (!proc.killed) proc.kill("SIGKILL");
+                        if (!exited) proc.kill("SIGKILL");
                     }, 5000);
                 };
                 if (signal.aborted) killProc();
@@ -700,6 +720,12 @@ const SubagentParams = Type.Object({
                 "Override skills for this invocation. Replaces agent default skills.",
         }),
     ),
+    background: Type.Optional(
+        Type.Boolean({
+            description:
+                "Run in background -- returns immediately with an agent ID. Result is delivered later as a follow-up message. Use when you can continue other work without waiting for this agent's output.",
+        }),
+    ),
 });
 
 function buildToolDescription(agents: AgentConfig[]): string {
@@ -738,21 +764,204 @@ ${agentList}
 - Tasks that can be completed in one or two direct tool calls`;
 }
 
+const BACKGROUND_RESULT_TYPE = "subagent_background_result";
+
+/**
+ * Render a completed subagent result into a Component (shared between
+ * foreground renderResult and background message renderer).
+ */
+function renderSubagentResult(
+    details: SubagentDetails,
+    expanded: boolean,
+    theme: {
+        fg: (color: ThemeColor, text: string) => string;
+        bold: (text: string) => string;
+    },
+): Container | Text {
+    const r = details.result;
+    const mdTheme = getMarkdownTheme();
+    const isError = isSubagentError(r);
+    const execStatusMap = details.execStatuses
+        ? new Map(Object.entries(details.execStatuses))
+        : undefined;
+    const displayItems = getDisplayItems(r.messages, execStatusMap);
+    const toolCallItems = displayItems.filter(
+        (i) => i.type === "toolCall",
+    ) as (DisplayItem & { type: "toolCall" })[];
+    const finalOutput = getFinalOutput(r.messages);
+
+    if (expanded) {
+        const container = new Container();
+        container.addChild(
+            new Text(
+                theme.fg("muted", "\u2500\u2500\u2500 Task \u2500\u2500\u2500"),
+                0,
+                0,
+            ),
+        );
+        container.addChild(new Text(theme.fg("dim", r.task), 0, 0));
+        container.addChild(new Spacer(1));
+        container.addChild(
+            new Text(
+                theme.fg("muted", "\u2500\u2500\u2500 Output \u2500\u2500\u2500"),
+                0,
+                0,
+            ),
+        );
+        if (toolCallItems.length === 0 && !finalOutput) {
+            container.addChild(new Text(theme.fg("muted", "(no output)"), 0, 0));
+        } else {
+            for (const item of toolCallItems) {
+                const icon = toolStatusIcon(item.status, theme);
+                container.addChild(
+                    new Text(
+                        ` ${icon} ` +
+                            formatToolCall(
+                                item.name,
+                                item.args,
+                                theme.fg.bind(theme),
+                            ),
+                        0,
+                        0,
+                    ),
+                );
+            }
+            if (finalOutput) {
+                container.addChild(new Spacer(1));
+                container.addChild(new Markdown(finalOutput.trim(), 0, 0, mdTheme));
+            }
+        }
+        const lastLine = buildLastLine(r, toolCallItems.length);
+        container.addChild(new Spacer(1));
+        container.addChild(new Text(theme.fg("dim", lastLine), 0, 0));
+        return container;
+    }
+
+    // Collapsed view -- last 3 tool calls
+    const recentToolCalls = toolCallItems.slice(-3);
+    let text = "";
+    for (const item of recentToolCalls) {
+        if (text) text += "\n";
+        const icon = toolStatusIcon(item.status, theme);
+        text += ` ${icon} ${formatToolCall(item.name, item.args, theme.fg.bind(theme))}`;
+    }
+    const lastLine = buildLastLine(r, toolCallItems.length);
+    if (isError) {
+        const errorMsg = r.errorMessage || r.stopReason || "failed";
+        if (text) text += "\n";
+        text += theme.fg("error", errorMsg);
+        if (lastLine) text += `\n${theme.fg("dim", lastLine)}`;
+    } else {
+        if (text) text += "\n";
+        text += theme.fg("dim", lastLine);
+    }
+    return new Text(text, 0, 0);
+}
+
 export default function (pi: ExtensionAPI) {
     // Pre-load agents at registration time so the LLM
     // knows which agents are available from the tool description.
     const knownAgents = discoverAgents().agents;
 
-    registerSubagentCommand(pi);
+    // Background agent tracking
+    const backgroundAgents = new Map<string, BackgroundAgent>();
+    let sessionActive = true;
+
+    registerSubagentCommand(pi, backgroundAgents);
 
     // Cache loaded skills from the parent session so we can resolve
     // skill names to filesystem paths for --skill flags.
     let skillCache = new Map<string, Skill>();
 
+    pi.on("session_start", () => {
+        sessionActive = true;
+    });
+
+    pi.on("session_shutdown", async () => {
+        sessionActive = false;
+        const entries = [...backgroundAgents.values()];
+        if (entries.length === 0) return;
+        for (const entry of entries) {
+            entry.kill();
+        }
+        await Promise.allSettled(entries.map((e) => e.promise));
+        backgroundAgents.clear();
+    });
+
     pi.on("before_agent_start", (event) => {
         const skills = event.systemPromptOptions.skills;
         skillCache = skills ? new Map(skills.map((s) => [s.name, s])) : new Map();
     });
+
+    // Register custom message renderer for background agent results
+    pi.registerMessageRenderer<SubagentDetails>(
+        BACKGROUND_RESULT_TYPE,
+        (message, { expanded }, theme) => {
+            const details = message.details;
+            if (!details) {
+                const content =
+                    typeof message.content === "string"
+                        ? message.content
+                        : message.content
+                              .map((p) => (p.type === "text" ? p.text : ""))
+                              .join("");
+                return new Text(content || "(no output)", 0, 0);
+            }
+
+            const r = details.result;
+            const isError = isSubagentError(r);
+            const bgFn = isError
+                ? (t: string) => theme.bg("toolErrorBg", t)
+                : (t: string) => theme.bg("toolSuccessBg", t);
+
+            const agentName = r.agent || "...";
+            const desc = details.description || "...";
+            const status = isError ? "error" : "completed";
+            const statusColor = isError ? "error" : "success";
+            const headerText =
+                theme.fg("toolTitle", theme.bold("subagent ")) +
+                theme.fg("text", agentName) +
+                theme.fg("muted", " (bg)") +
+                theme.fg(statusColor, ` [${status}]`) +
+                theme.fg("dim", ` ${desc}`);
+
+            const output = getFinalOutput(r.messages) || "(no output)";
+            const mdTheme = getMarkdownTheme();
+
+            const execStatusMap = details.execStatuses
+                ? new Map(Object.entries(details.execStatuses))
+                : undefined;
+            const displayItems = getDisplayItems(r.messages, execStatusMap);
+            const toolCallCount = displayItems.filter(
+                (i) => i.type === "toolCall",
+            ).length;
+            const usageLine = buildLastLine(r, toolCallCount);
+
+            const box = new Box(1, 1, bgFn);
+            box.addChild(new Text(headerText, 0, 0));
+            box.addChild(new Spacer(1));
+
+            if (expanded) {
+                box.addChild(new Markdown(output.trim(), 0, 0, mdTheme));
+            } else {
+                const lines = output.trim().split("\n");
+                const truncated = lines.length > 3;
+                const preview = lines.slice(0, 3).join("\n");
+                box.addChild(new Text(preview, 0, 0));
+                if (truncated) {
+                    box.addChild(
+                        new Text(theme.fg("muted", "... ctrl-o to expand"), 0, 0),
+                    );
+                }
+            }
+
+            if (usageLine) {
+                box.addChild(new Spacer(1));
+                box.addChild(new Text(theme.fg("dim", usageLine), 0, 0));
+            }
+            return box;
+        },
+    );
 
     pi.registerTool({
         name: "subagent",
@@ -881,6 +1090,112 @@ export default function (pi: ExtensionAPI) {
                 session = { dir, id };
             }
 
+            // ── Background mode ──────────────────────────────────────
+            if (params.background) {
+                const id =
+                    session?.id ??
+                    `${sanitizeAgentName(resolvedAgent.name)}-${randomUUID().slice(0, 8)}`;
+
+                const controller = new AbortController();
+
+                const promise = runSubagent(
+                    resolvedAgent,
+                    params.task,
+                    params.cwd ?? ctx.cwd,
+                    controller.signal,
+                    undefined, // no onProgress for background agents
+                    session,
+                    ctx,
+                );
+
+                const entry: BackgroundAgent = {
+                    id,
+                    description: params.description,
+                    agent: resolvedAgent,
+                    task: params.task,
+                    kill: () => controller.abort(),
+                    promise,
+                };
+                backgroundAgents.set(id, entry);
+
+                // When done, inject result and clean up
+                const injectResult = (
+                    status: "completed" | "failed",
+                    output: string,
+                    result: AgentRunResult,
+                ) => {
+                    const content = `[Background subagent result — this is NOT a user message. A fire-and-forget background agent "${id}" has ${status}. Acknowledge briefly or act on the result only if relevant to the current task.]
+
+${output}`;
+                    pi.sendMessage<SubagentDetails>(
+                        {
+                            customType: BACKGROUND_RESULT_TYPE,
+                            content,
+                            display: true,
+                            details: { result, description: params.description },
+                        },
+                        { deliverAs: "followUp", triggerTurn: true },
+                    );
+                };
+
+                promise
+                    .then((result) => {
+                        // delete returns false if already removed (e.g. by cancel)
+                        if (!backgroundAgents.delete(id)) return;
+                        if (!sessionActive) return;
+
+                        const isError = isSubagentError(result);
+                        const output = isError
+                            ? result.errorMessage ||
+                              result.stderr ||
+                              getFinalOutput(result.messages) ||
+                              "(no output)"
+                            : getFinalOutput(result.messages) || "(no output)";
+                        injectResult(
+                            isError ? "failed" : "completed",
+                            output,
+                            result,
+                        );
+                    })
+                    .catch((err: unknown) => {
+                        backgroundAgents.delete(id);
+                        // If it was an intentional abort (cancel/shutdown), do nothing.
+                        if (!sessionActive || controller.signal.aborted) return;
+
+                        // Pre-spawn or unexpected failure — notify the LLM.
+                        const errMsg =
+                            err instanceof Error ? err.message : "unknown error";
+                        injectResult("failed", `Failed to start: ${errMsg}`, {
+                            agent: params.agent,
+                            agentSource: resolvedAgent.source,
+                            task: params.task,
+                            exitCode: 1,
+                            messages: [],
+                            stderr: errMsg,
+                            usage: ZERO_USAGE,
+                        });
+                    });
+
+                return {
+                    content: [
+                        {
+                            type: "text",
+                            text: `Background agent started: ${id}`,
+                        },
+                    ],
+                    details: makeDetails({
+                        agent: params.agent,
+                        agentSource: agent.source,
+                        task: params.task,
+                        exitCode: -1,
+                        messages: [],
+                        stderr: "",
+                        usage: ZERO_USAGE,
+                    }),
+                };
+            }
+
+            // ── Foreground mode (default) ────────────────────────────
             const result = await runSubagent(
                 resolvedAgent,
                 params.task,
@@ -891,10 +1206,7 @@ export default function (pi: ExtensionAPI) {
                 ctx,
             );
 
-            const isError =
-                result.exitCode !== 0 ||
-                result.stopReason === "error" ||
-                result.stopReason === "aborted";
+            const isError = isSubagentError(result);
 
             if (isError) {
                 const errorMsg =
@@ -928,103 +1240,28 @@ export default function (pi: ExtensionAPI) {
         renderCall(args, theme, _context) {
             const agentName = args.agent || "...";
             const desc = args.description || "...";
+            const bgIndicator = args.background ? theme.fg("muted", " (bg)") : "";
             const text =
                 theme.fg("toolTitle", theme.bold("subagent ")) +
                 theme.fg("text", agentName) +
+                bgIndicator +
                 theme.fg("dim", ` ${desc}`);
             return new Text(text, 0, 0);
         },
 
         renderResult(result, { expanded }, theme, _context) {
             const details = result.details as SubagentDetails | undefined;
-            if (!details) {
+            if (!details || details.result.exitCode === -1) {
                 const text = result.content[0];
                 return new Text(
-                    text?.type === "text" ? text.text : "(no output)",
+                    text?.type === "text"
+                        ? theme.fg("dim", text.text)
+                        : "(no output)",
                     0,
                     0,
                 );
             }
-
-            const r = details.result;
-            const mdTheme = getMarkdownTheme();
-            const isRunning = r.exitCode === -1;
-            const isError =
-                !isRunning &&
-                (r.exitCode !== 0 ||
-                    r.stopReason === "error" ||
-                    r.stopReason === "aborted");
-            const execStatusMap = details.execStatuses
-                ? new Map(Object.entries(details.execStatuses))
-                : undefined;
-            const displayItems = getDisplayItems(r.messages, execStatusMap);
-            const toolCallItems = displayItems.filter((i) => i.type === "toolCall");
-            const finalOutput = getFinalOutput(r.messages);
-
-            if (expanded) {
-                const container = new Container();
-                container.addChild(
-                    new Text(theme.fg("muted", "─── Task ───"), 0, 0),
-                );
-                container.addChild(new Text(theme.fg("dim", r.task), 0, 0));
-                container.addChild(new Spacer(1));
-                container.addChild(
-                    new Text(theme.fg("muted", "─── Output ───"), 0, 0),
-                );
-                if (toolCallItems.length === 0 && !finalOutput) {
-                    container.addChild(
-                        new Text(theme.fg("muted", "(no output)"), 0, 0),
-                    );
-                } else {
-                    for (const item of toolCallItems) {
-                        const icon = toolStatusIcon(item.status, theme);
-                        container.addChild(
-                            new Text(
-                                ` ${icon} ` +
-                                    formatToolCall(
-                                        item.name,
-                                        item.args,
-                                        theme.fg.bind(theme),
-                                    ),
-                                0,
-                                0,
-                            ),
-                        );
-                    }
-                    if (finalOutput) {
-                        container.addChild(new Spacer(1));
-                        container.addChild(
-                            new Markdown(finalOutput.trim(), 0, 0, mdTheme),
-                        );
-                    }
-                }
-                const lastLine = buildLastLine(r, toolCallItems.length);
-                container.addChild(new Spacer(1));
-                container.addChild(new Text(theme.fg("dim", lastLine), 0, 0));
-                return container;
-            }
-
-            // Collapsed view — last 3 tool calls
-            const recentToolCalls = toolCallItems.slice(-3);
-            let text = "";
-            for (const item of recentToolCalls) {
-                if (text) text += "\n";
-                const icon = toolStatusIcon(item.status, theme);
-                text +=
-                    ` ${icon} ` +
-                    formatToolCall(item.name, item.args, theme.fg.bind(theme));
-            }
-            const lastLine = buildLastLine(r, toolCallItems.length);
-            if (isError) {
-                const errorMsg = r.errorMessage || r.stopReason || "failed";
-                if (text) text += "\n";
-                text += theme.fg("error", errorMsg);
-                if (lastLine) text += `\n${theme.fg("dim", lastLine)}`;
-            } else {
-                if (text) text += "\n";
-                text += theme.fg("dim", lastLine);
-            }
-            return new Text(text, 0, 0);
+            return renderSubagentResult(details, expanded, theme);
         },
     });
 }
