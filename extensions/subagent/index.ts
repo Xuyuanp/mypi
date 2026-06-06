@@ -427,11 +427,23 @@ function getDisplayItems(
     return items;
 }
 
+/**
+ * Sanitize an agent name for use in filesystem identifiers (session IDs, temp files).
+ * Replaces non-word chars with "_", trims non-alphanumeric edges, falls back to "agent".
+ */
+function sanitizeAgentName(name: string): string {
+    return (
+        name
+            .replace(/[^\w.-]+/g, "_")
+            .replace(/^[^A-Za-z0-9]+|[^A-Za-z0-9]+$/g, "") || "agent"
+    );
+}
+
 async function writePromptToTempFile(
     agentName: string,
     prompt: string,
 ): Promise<string> {
-    const safeName = agentName.replace(/[^\w.-]+/g, "_");
+    const safeName = sanitizeAgentName(agentName);
     const filePath = path.join(
         os.tmpdir(),
         `pi-subagent-${safeName}-${randomUUID()}.md`,
@@ -478,6 +490,7 @@ async function runSubagent(
     cwd: string,
     signal: AbortSignal | undefined,
     onProgress: SubagentProgressCallback | undefined,
+    session: { dir: string; id: string } | undefined,
     ctx: ExtensionContext,
 ): Promise<AgentRunResult> {
     const args: string[] = [
@@ -489,27 +502,8 @@ async function runSubagent(
         "--print",
     ];
 
-    // Save subagent session alongside the parent session.
-    // Path: <parent-session-without-ext>/subagent/<agent>-<datetime>-<uuid>.jsonl
-    const parentSessionFile = ctx.sessionManager.getSessionFile();
-    if (parentSessionFile) {
-        // Strip .jsonl to create a sibling directory. If no .jsonl
-        // extension, append ".d" to avoid colliding with the parent file.
-        const parentBase = parentSessionFile.endsWith(".jsonl")
-            ? parentSessionFile.slice(0, -6)
-            : `${parentSessionFile}.d`;
-        const subagentSessionDir = path.resolve(parentBase, "subagent");
-        const safeName =
-            agent.name
-                .replace(/[^\w.-]+/g, "_")
-                .replace(/^[^A-Za-z0-9]+|[^A-Za-z0-9]+$/g, "") || "agent";
-        const datetime = new Date()
-            .toISOString()
-            .replace(/[:.]/g, "-")
-            .replace("T", "_")
-            .replace("Z", "");
-        const sessionId = `${safeName}-${datetime}-${randomUUID().slice(0, 8)}`;
-        args.push("--session-dir", subagentSessionDir, "--session-id", sessionId);
+    if (session) {
+        args.push("--session-dir", session.dir, "--session-id", session.id);
     } else {
         args.push("--no-session");
     }
@@ -872,12 +866,28 @@ export default function (pi: ExtensionAPI) {
                 skills: resolvedSkillPaths?.length ? resolvedSkillPaths : undefined,
             };
 
+            // Persist subagent session alongside the parent session.
+            // Layout: <parent-session-without-ext>/subagent/<name>-<uuid8>.jsonl
+            // (Pi prepends its own timestamp to the filename.)
+            let session: { dir: string; id: string } | undefined;
+            const parentSessionFile = ctx.sessionManager.getSessionFile();
+            if (parentSessionFile) {
+                const dir = path.resolve(
+                    parentSessionFile.slice(0, -".jsonl".length),
+                    "subagent",
+                );
+                const safeName = sanitizeAgentName(resolvedAgent.name);
+                const id = `${safeName}-${randomUUID().slice(0, 8)}`;
+                session = { dir, id };
+            }
+
             const result = await runSubagent(
                 resolvedAgent,
                 params.task,
                 params.cwd ?? ctx.cwd,
                 signal,
                 onProgress,
+                session,
                 ctx,
             );
 
