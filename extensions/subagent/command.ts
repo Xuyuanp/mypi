@@ -475,6 +475,7 @@ class AgentsListView implements Component {
 export function registerSubagentCommand(
     pi: ExtensionAPI,
     backgroundAgents: Map<string, BackgroundAgent>,
+    onBackgroundChange: () => void,
 ): void {
     pi.registerCommand("subagent", {
         description: "List agents or cancel a background agent",
@@ -506,6 +507,7 @@ export function registerSubagentCommand(
                 }
                 backgroundAgents.delete(id);
                 entry.kill();
+                onBackgroundChange();
                 ctx.ui.notify(`Cancelled background agent: ${id}`);
                 return;
             }

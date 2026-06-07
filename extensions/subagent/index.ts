@@ -34,7 +34,14 @@ import {
     type ThemeColor,
     withFileMutationQueue,
 } from "@earendil-works/pi-coding-agent";
-import { Box, Container, Markdown, Spacer, Text } from "@earendil-works/pi-tui";
+import {
+    Box,
+    Container,
+    Markdown,
+    Spacer,
+    Text,
+    truncateToWidth,
+} from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { type AgentConfig, discoverAgents } from "./agents.js";
 import { registerSubagentCommand } from "./command.js";
@@ -46,9 +53,13 @@ export interface BackgroundAgent {
     task: string;
     kill: () => void;
     promise: Promise<AgentRunResult>;
+    startedAt: number;
+    latestResult: AgentRunResult;
+    toolCallCount: number;
 }
 
 const ICON_RUNNING = "○";
+const BG_WIDGET_KEY = "subagent-bg";
 const ICON_SUCCESS = "●";
 const ICON_ERROR = "●";
 
@@ -315,7 +326,7 @@ interface UsageStats {
     turns: number;
 }
 
-function createZeroUsage(): UsageStats {
+export function createZeroUsage(): UsageStats {
     return {
         input: 0,
         output: 0,
@@ -441,6 +452,19 @@ function getDisplayItems(
         }
     }
     return items;
+}
+
+/** Count tool calls in a message array (single pass, no allocation). */
+function countToolCalls(messages: Message[]): number {
+    let count = 0;
+    for (const msg of messages) {
+        if (msg.role === "assistant") {
+            for (const part of msg.content) {
+                if (part.type === "toolCall") count++;
+            }
+        }
+    }
+    return count;
 }
 
 /**
@@ -866,19 +890,124 @@ export default function (pi: ExtensionAPI) {
     // Background agent tracking
     const backgroundAgents = new Map<string, BackgroundAgent>();
     let sessionActive = true;
+    let currentCtx: ExtensionContext | null = null;
+    let widgetActive = false;
 
-    registerSubagentCommand(pi, backgroundAgents);
+    function updateWidget(): void {
+        const ctx = currentCtx;
+        if (!ctx) return;
+        const count = backgroundAgents.size;
+
+        if (count === 0) {
+            if (widgetActive) {
+                ctx.ui.setWidget(BG_WIDGET_KEY, undefined);
+                widgetActive = false;
+            }
+            ctx.ui.setStatus(BG_WIDGET_KEY, undefined);
+            return;
+        }
+
+        // Update status count
+        ctx.ui.setStatus(
+            BG_WIDGET_KEY,
+            ctx.ui.theme.fg("accent", `${ICON_RUNNING} ${count} bg`),
+        );
+
+        // Create widget only on first spawn (0 -> 1 transition)
+        if (!widgetActive) {
+            ctx.ui.setWidget(BG_WIDGET_KEY, (tui, theme) => {
+                const interval = setInterval(() => tui.requestRender(), 1000);
+                return {
+                    render(width: number): string[] {
+                        const lines: string[] = [];
+                        const MAX_ENTRIES = 5;
+                        const ICON_W = 2; // "X "
+                        const NAME_W = 10; // agent name + padding
+                        const ID_W = 10; // short uuid + spacing
+                        const FIXED_W = ICON_W + NAME_W + ID_W;
+                        const descAvail = Math.max(8, width - FIXED_W);
+
+                        let rendered = 0;
+                        for (const entry of backgroundAgents.values()) {
+                            if (rendered >= MAX_ENTRIES) {
+                                const remaining =
+                                    backgroundAgents.size - MAX_ENTRIES;
+                                lines.push(
+                                    truncateToWidth(
+                                        theme.fg("muted", `  +${remaining} more`),
+                                        width,
+                                    ),
+                                );
+                                break;
+                            }
+                            const r = entry.latestResult;
+                            const elapsed = Date.now() - entry.startedAt;
+
+                            // Line 1: icon + agent + id + description
+                            const agentName = entry.agent.name.padEnd(8).slice(0, 8);
+                            const shortId = entry.id.slice(
+                                entry.id.lastIndexOf("-") + 1,
+                            );
+                            const desc = truncateToWidth(
+                                entry.description,
+                                descAvail,
+                                "\u2026",
+                            );
+                            const line1 =
+                                `${theme.fg("accent", ICON_RUNNING)} ` +
+                                `${theme.fg("muted", agentName)}  ` +
+                                `${theme.fg("dim", shortId)}  ` +
+                                `${theme.fg("muted", desc)}`;
+                            lines.push(truncateToWidth(line1, width));
+
+                            // Line 2: usage (toolCallCount pre-computed in onProgress)
+                            const usageLine = buildLastLine(
+                                {
+                                    ...r,
+                                    durationMs: elapsed,
+                                    contextWindow: undefined,
+                                },
+                                entry.toolCallCount,
+                            );
+                            const line2 = `  ${theme.fg("dim", usageLine)}`;
+                            lines.push(truncateToWidth(line2, width));
+                            rendered++;
+                        }
+                        return lines;
+                    },
+                    invalidate(): void {
+                        /* no-op: render is stateless */
+                    },
+                    dispose(): void {
+                        clearInterval(interval);
+                    },
+                };
+            });
+            widgetActive = true;
+        }
+    }
+
+    registerSubagentCommand(pi, backgroundAgents, updateWidget);
 
     // Cache loaded skills from the parent session so we can resolve
     // skill names to filesystem paths for --skill flags.
     let skillCache = new Map<string, Skill>();
 
-    pi.on("session_start", () => {
+    pi.on("session_start", (_event, ctx) => {
         sessionActive = true;
+        currentCtx = ctx;
+        widgetActive = false;
     });
 
     pi.on("session_shutdown", async () => {
         sessionActive = false;
+        // Clear widget and status before killing (so UI is clean immediately)
+        if (currentCtx) {
+            currentCtx.ui.setWidget(BG_WIDGET_KEY, undefined);
+            currentCtx.ui.setStatus(BG_WIDGET_KEY, undefined);
+        }
+        widgetActive = false;
+        currentCtx = null;
         const entries = [...backgroundAgents.values()];
         if (entries.length === 0) return;
         for (const entry of entries) {
@@ -1098,25 +1227,50 @@ export default function (pi: ExtensionAPI) {
 
                 const controller = new AbortController();
 
+                let entry: BackgroundAgent | undefined;
+
+                const bgOnProgress: SubagentProgressCallback = (result) => {
+                    if (!entry) return;
+                    entry.latestResult = result;
+                    entry.toolCallCount = countToolCalls(result.messages);
+                };
+
                 const promise = runSubagent(
                     resolvedAgent,
                     params.task,
                     params.cwd ?? ctx.cwd,
                     controller.signal,
-                    undefined, // no onProgress for background agents
+                    bgOnProgress,
                     session,
                     ctx,
                 );
 
-                const entry: BackgroundAgent = {
+                entry = {
                     id,
                     description: params.description,
                     agent: resolvedAgent,
                     task: params.task,
                     kill: () => controller.abort(),
                     promise,
+                    startedAt: Date.now(),
+                    toolCallCount: 0,
+                    latestResult: {
+                        agent: resolvedAgent.name,
+                        agentSource: resolvedAgent.source,
+                        task: params.task,
+                        exitCode: -1,
+                        messages: [],
+                        stderr: "",
+                        usage: createZeroUsage(),
+                        model: resolvedAgent.model,
+                        contextWindow: resolveContextWindow(
+                            resolvedAgent.model,
+                            ctx,
+                        ),
+                    },
                 };
                 backgroundAgents.set(id, entry);
+                updateWidget();
 
                 // When done, inject result and clean up
                 const injectResult = (
@@ -1142,6 +1296,7 @@ ${output}`;
                     .then((result) => {
                         // delete returns false if already removed (e.g. by cancel)
                         if (!backgroundAgents.delete(id)) return;
+                        updateWidget();
                         if (!sessionActive) return;
 
                         const isError = isSubagentError(result);
@@ -1159,6 +1314,7 @@ ${output}`;
                     })
                     .catch((err: unknown) => {
                         backgroundAgents.delete(id);
+                        updateWidget();
                         // If it was an intentional abort (cancel/shutdown), do nothing.
                         if (!sessionActive || controller.signal.aborted) return;
 

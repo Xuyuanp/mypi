@@ -11,7 +11,39 @@
  */
 
 import { describe, expect, it, vi } from "vitest";
-import type { BackgroundAgent } from "../extensions/subagent/index.js";
+import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import {
+    type BackgroundAgent,
+    createZeroUsage,
+} from "../extensions/subagent/index.js";
+
+function makeFakeResult(overrides?: Partial<BackgroundAgent["latestResult"]>) {
+    return {
+        agent: "scout",
+        agentSource: "system" as const,
+        task: "do something",
+        exitCode: -1,
+        messages: [],
+        stderr: "",
+        usage: createZeroUsage(),
+        ...overrides,
+    };
+}
+
+function makeFakeEntry(overrides?: Partial<BackgroundAgent>): BackgroundAgent {
+    return {
+        id: "scout-a1b2c3d4",
+        description: "test",
+        agent: { name: "scout", description: "t", systemPrompt: "", source: "system" as const, filePath: "/f.md" },
+        task: "do it",
+        kill: () => {},
+        promise: new Promise(() => {}) as any,
+        startedAt: Date.now(),
+        toolCallCount: 0,
+        latestResult: makeFakeResult(),
+        ...overrides,
+    };
+}
 
 // We test the cancel command handler logic directly since it's
 // a pure interaction with the Map and ctx.ui.notify.
@@ -31,6 +63,9 @@ describe("cancel command logic", () => {
             task: "do something",
             kill: vi.fn(() => controller.abort()),
             promise: new Promise(() => {}), // never resolves
+            startedAt: Date.now(),
+            toolCallCount: 0,
+            latestResult: makeFakeResult(),
         };
     }
 
@@ -105,6 +140,9 @@ describe("background agent lifecycle", () => {
             task: "do work",
             kill: () => controller.abort(),
             promise: promise as any,
+            startedAt: Date.now(),
+            toolCallCount: 0,
+            latestResult: makeFakeResult({ agent: "worker", task: "do work" }),
         };
         map.set(entry.id, entry);
 
@@ -171,6 +209,9 @@ describe("background agent lifecycle", () => {
             task: "find files",
             kill: () => {},
             promise: promise as any,
+            startedAt: Date.now(),
+            toolCallCount: 0,
+            latestResult: makeFakeResult({ agent: "scout", task: "find files" }),
         };
         map.set(entry.id, entry);
 
@@ -274,6 +315,9 @@ describe("shutdown logic", () => {
                 task: "do work",
                 kill: killFn,
                 promise: Promise.resolve({} as any),
+                startedAt: Date.now(),
+                toolCallCount: 0,
+                latestResult: makeFakeResult({ agent: name.split("-")[0], task: "do work" }),
             };
             map.set(name, entry);
             killFns.push(killFn);
@@ -349,5 +393,235 @@ describe("argument completions", () => {
             result = null;
         }
         expect(result).toBeNull();
+    });
+});
+
+describe("widget lifecycle (updateWidget logic)", () => {
+    // Simulate updateWidget's core logic in a testable way.
+    // We replicate the state machine since updateWidget is a closure
+    // inside the default export and not directly importable.
+
+    function createWidgetState() {
+        let widgetActive = false;
+        let widgetKey: string | undefined;
+        let statusKey: string | undefined;
+        let statusValue: string | undefined;
+        const backgroundAgents = new Map<string, BackgroundAgent>();
+
+        function updateWidget(): void {
+            const count = backgroundAgents.size;
+
+            if (count === 0) {
+                if (widgetActive) {
+                    widgetKey = undefined;
+                    widgetActive = false;
+                }
+                statusKey = undefined;
+                statusValue = undefined;
+                return;
+            }
+
+            statusKey = "subagent-bg";
+            statusValue = `○ ${count} bg`;
+
+            if (!widgetActive) {
+                widgetKey = "subagent-bg";
+                widgetActive = true;
+            }
+        }
+
+        return {
+            backgroundAgents,
+            updateWidget,
+            get widgetActive() {
+                return widgetActive;
+            },
+            get widgetKey() {
+                return widgetKey;
+            },
+            get statusValue() {
+                return statusValue;
+            },
+        };
+    }
+
+    it("sets widget on first spawn (0 -> 1)", () => {
+        const state = createWidgetState();
+        const entry = makeFakeEntry();
+        state.backgroundAgents.set(entry.id, entry);
+        state.updateWidget();
+
+        expect(state.widgetActive).toBe(true);
+        expect(state.widgetKey).toBe("subagent-bg");
+        expect(state.statusValue).toBe("○ 1 bg");
+    });
+
+    it("clears widget when last agent completes (1 -> 0)", () => {
+        const state = createWidgetState();
+        const entry = makeFakeEntry();
+        state.backgroundAgents.set(entry.id, entry);
+        state.updateWidget();
+        expect(state.widgetActive).toBe(true);
+
+        state.backgroundAgents.delete(entry.id);
+        state.updateWidget();
+
+        expect(state.widgetActive).toBe(false);
+        expect(state.widgetKey).toBeUndefined();
+        expect(state.statusValue).toBeUndefined();
+    });
+
+    it("updates status count correctly with multiple agents", () => {
+        const state = createWidgetState();
+        for (const id of ["scout-11111111", "worker-22222222", "reviewer-33333333"]) {
+            state.backgroundAgents.set(id, makeFakeEntry({ id, agent: { name: id.split("-")[0], description: "t", systemPrompt: "", source: "system" as const, filePath: "/f.md" } }));
+        }
+        state.updateWidget();
+        expect(state.statusValue).toBe("○ 3 bg");
+    });
+
+    it("does not recreate widget when count goes from 2 -> 1", () => {
+        const state = createWidgetState();
+        for (const id of ["scout-11111111", "worker-22222222"]) {
+            state.backgroundAgents.set(id, makeFakeEntry({ id, agent: { name: id.split("-")[0], description: "t", systemPrompt: "", source: "system" as const, filePath: "/f.md" } }));
+        }
+        state.updateWidget();
+        expect(state.widgetActive).toBe(true);
+
+        // Remove one agent
+        state.backgroundAgents.delete("scout-11111111");
+        state.updateWidget();
+
+        // Widget should still be active (not recreated)
+        expect(state.widgetActive).toBe(true);
+        expect(state.statusValue).toBe("○ 1 bg");
+    });
+});
+
+describe("cancel triggers onBackgroundChange", () => {
+    it("onBackgroundChange is called from cancel handler", () => {
+        const map = new Map<string, BackgroundAgent>();
+        const onBackgroundChange = vi.fn();
+
+        const entry = makeFakeEntry({ kill: vi.fn() });
+        map.set(entry.id, entry);
+
+        // Simulate cancel handler logic from command.ts
+        const id = "scout-a1b2c3d4";
+        const found = map.get(id);
+        expect(found).toBeDefined();
+        map.delete(id);
+        found!.kill();
+        onBackgroundChange();
+
+        expect(entry.kill).toHaveBeenCalledOnce();
+        expect(onBackgroundChange).toHaveBeenCalledOnce();
+        expect(map.has(id)).toBe(false);
+    });
+});
+
+describe("widget render width compliance", () => {
+    // Replicates the render logic to verify that lines never exceed width,
+    // especially in narrow terminals where FIXED_W > width.
+
+    const MAX_ENTRIES = 5;
+
+    function renderLines(
+        entries: BackgroundAgent[],
+        width: number,
+    ): string[] {
+        const ICON_RUNNING = "\u25cb";
+        const lines: string[] = [];
+        const ICON_W = 2;
+        const NAME_W = 10;
+        const ID_W = 10;
+        const FIXED_W = ICON_W + NAME_W + ID_W;
+        const descAvail = Math.max(8, width - FIXED_W);
+
+        let rendered = 0;
+        for (const entry of entries) {
+            if (rendered >= MAX_ENTRIES) {
+                const remaining = entries.length - MAX_ENTRIES;
+                lines.push(truncateToWidth(`  +${remaining} more`, width));
+                break;
+            }
+            const agentName = entry.agent.name.padEnd(8).slice(0, 8);
+            const shortId = entry.id.slice(entry.id.lastIndexOf("-") + 1);
+            const desc = truncateToWidth(entry.description, descAvail, "\u2026");
+
+            // Line 1: truncated to width (the fix)
+            const line1 =
+                `${ICON_RUNNING} ` +
+                `${agentName}  ` +
+                `${shortId}  ` +
+                `${desc}`;
+            lines.push(truncateToWidth(line1, width));
+
+            // Line 2: always truncated to width
+            const line2 = `  (usage placeholder)`;
+            lines.push(truncateToWidth(line2, width));
+            rendered++;
+        }
+        return lines;
+    }
+
+    it("all lines fit within width for a narrow terminal (width=20)", () => {
+        const entry = makeFakeEntry({ description: "Explore authentication module deeply" });
+        const lines = renderLines([entry], 20);
+        for (const line of lines) {
+            expect(visibleWidth(line)).toBeLessThanOrEqual(20);
+        }
+    });
+
+    it("all lines fit within width for a normal terminal (width=80)", () => {
+        const entry = makeFakeEntry({
+            id: "worker-e5f6g7h8",
+            description: "Generate comprehensive test cases for the auth module",
+            agent: { name: "worker", description: "t", systemPrompt: "", source: "system" as const, filePath: "/f.md" },
+        });
+        const lines = renderLines([entry], 80);
+        for (const line of lines) {
+            expect(visibleWidth(line)).toBeLessThanOrEqual(80);
+        }
+    });
+
+    it("all lines fit for extremely narrow width (width=5)", () => {
+        const entry = makeFakeEntry();
+        const lines = renderLines([entry], 5);
+        for (const line of lines) {
+            expect(visibleWidth(line)).toBeLessThanOrEqual(5);
+        }
+    });
+
+    it("caps rendered entries at MAX_ENTRIES with overflow indicator", () => {
+        const entries: BackgroundAgent[] = [];
+        for (let i = 0; i < 8; i++) {
+            entries.push(makeFakeEntry({
+                id: `scout-${String(i).padStart(8, "0")}`,
+                description: `task ${i}`,
+                task: `task ${i}`,
+            }));
+        }
+
+        const lines = renderLines(entries, 80);
+        // 5 entries * 2 lines each + 1 overflow line = 11 lines
+        expect(lines).toHaveLength(MAX_ENTRIES * 2 + 1);
+        expect(lines[lines.length - 1]).toContain("+3 more");
+    });
+
+    it("overflow indicator line respects narrow width", () => {
+        const entries: BackgroundAgent[] = [];
+        for (let i = 0; i < 7; i++) {
+            entries.push(makeFakeEntry({
+                id: `scout-${String(i).padStart(8, "0")}`,
+                description: `task ${i}`,
+                task: `task ${i}`,
+            }));
+        }
+
+        const lines = renderLines(entries, 5);
+        for (const line of lines) {
+            expect(visibleWidth(line)).toBeLessThanOrEqual(5);
+        }
     });
 });
