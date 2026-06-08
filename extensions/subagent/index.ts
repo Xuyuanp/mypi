@@ -749,7 +749,7 @@ const SubagentParams = Type.Object({
     background: Type.Optional(
         Type.Boolean({
             description:
-                "Run in background -- returns immediately with an agent ID. Result is delivered later as a follow-up message. Use when you can continue other work without waiting for this agent's output.",
+                "Run in background -- returns immediately with an agent ID. Result is delivered later as a follow-up message. Note: multiple foreground subagents already run in parallel within a single turn. Use background mode only for fire-and-forget tasks where you do not need the result to continue.",
         }),
     ),
 });
