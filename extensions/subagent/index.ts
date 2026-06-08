@@ -395,6 +395,8 @@ interface SubagentDetails {
     result: AgentRunResult;
     execStatuses?: Record<string, boolean>;
     description?: string;
+    cancelled?: boolean;
+    background?: boolean;
 }
 
 function getFinalOutput(messages: Message[]): string {
@@ -804,7 +806,8 @@ function renderSubagentResult(
 ): Container | Text {
     const r = details.result;
     const mdTheme = getMarkdownTheme();
-    const isError = isSubagentError(r);
+    const isRunning = r.exitCode === -1;
+    const isError = !isRunning && isSubagentError(r);
     const execStatusMap = details.execStatuses
         ? new Map(Object.entries(details.execStatuses))
         : undefined;
@@ -1038,18 +1041,30 @@ export default function (pi: ExtensionAPI) {
             }
 
             const r = details.result;
-            const isError = isSubagentError(r);
-            const bgFn = isError
-                ? (t: string) => theme.bg("toolErrorBg", t)
-                : (t: string) => theme.bg("toolSuccessBg", t);
+            const isCancelled = details.cancelled === true;
+            const isError = !isCancelled && isSubagentError(r);
+            const bgFn =
+                isCancelled || isError
+                    ? (t: string) => theme.bg("toolErrorBg", t)
+                    : (t: string) => theme.bg("toolSuccessBg", t);
 
             const agentName = r.agent || "...";
             const desc = details.description || "...";
-            const status = isError ? "error" : "completed";
-            const statusColor = isError ? "error" : "success";
+            const status = isCancelled
+                ? "cancelled"
+                : isError
+                  ? "error"
+                  : "completed";
+            const statusColor = isCancelled
+                ? "warning"
+                : isError
+                  ? "error"
+                  : "success";
+            const modelSuffix = r.model ? theme.fg("muted", ` [${r.model}]`) : "";
             const headerText =
                 theme.fg("toolTitle", theme.bold("subagent ")) +
                 theme.fg("text", agentName) +
+                modelSuffix +
                 theme.fg("muted", " (bg)") +
                 theme.fg(statusColor, ` [${status}]`) +
                 theme.fg("dim", ` ${desc}`);
@@ -1274,11 +1289,11 @@ export default function (pi: ExtensionAPI) {
 
                 // When done, inject result and clean up
                 const injectResult = (
-                    status: "completed" | "failed",
+                    status: "completed" | "failed" | "cancelled",
                     output: string,
                     result: AgentRunResult,
                 ) => {
-                    const content = `[Background subagent result — this is NOT a user message. A fire-and-forget background agent "${id}" has ${status}. Acknowledge briefly or act on the result only if relevant to the current task.]
+                    const content = `[Background subagent result — this is NOT a user message. A fire-and-forget background agent "${id}" has been ${status}. ${status === "cancelled" ? "Do not wait for its result." : "Acknowledge briefly or act on the result only if relevant to the current task."}]
 
 ${output}`;
                     pi.sendMessage<SubagentDetails>(
@@ -1286,18 +1301,29 @@ ${output}`;
                             customType: BACKGROUND_RESULT_TYPE,
                             content,
                             display: true,
-                            details: { result, description: params.description },
+                            details: {
+                                result,
+                                description: params.description,
+                                cancelled: status === "cancelled",
+                            },
                         },
-                        { deliverAs: "followUp", triggerTurn: true },
+                        {
+                            deliverAs: "followUp",
+                            triggerTurn: status !== "cancelled",
+                        },
                     );
                 };
 
                 promise
                     .then((result) => {
-                        // delete returns false if already removed (e.g. by cancel)
-                        if (!backgroundAgents.delete(id)) return;
-                        updateWidget();
+                        const wasCancelled = controller.signal.aborted;
+                        if (backgroundAgents.delete(id)) updateWidget();
                         if (!sessionActive) return;
+
+                        if (wasCancelled) {
+                            injectResult("cancelled", "(cancelled by user)", result);
+                            return;
+                        }
 
                         const isError = isSubagentError(result);
                         const output = isError
@@ -1313,10 +1339,18 @@ ${output}`;
                         );
                     })
                     .catch((err: unknown) => {
-                        backgroundAgents.delete(id);
-                        updateWidget();
-                        // If it was an intentional abort (cancel/shutdown), do nothing.
-                        if (!sessionActive || controller.signal.aborted) return;
+                        const wasCancelled = controller.signal.aborted;
+                        if (backgroundAgents.delete(id)) updateWidget();
+                        if (!sessionActive) return;
+
+                        if (wasCancelled) {
+                            injectResult(
+                                "cancelled",
+                                "(cancelled by user)",
+                                entry!.latestResult,
+                            );
+                            return;
+                        }
 
                         // Pre-spawn or unexpected failure — notify the LLM.
                         const errMsg =
@@ -1339,15 +1373,10 @@ ${output}`;
                             text: `Background agent started: ${id}`,
                         },
                     ],
-                    details: makeDetails({
-                        agent: params.agent,
-                        agentSource: agent.source,
-                        task: params.task,
-                        exitCode: -1,
-                        messages: [],
-                        stderr: "",
-                        usage: ZERO_USAGE,
-                    }),
+                    details: {
+                        ...makeDetails(entry.latestResult),
+                        background: true,
+                    },
                 };
             }
 
@@ -1407,7 +1436,8 @@ ${output}`;
 
         renderResult(result, { expanded }, theme, _context) {
             const details = result.details as SubagentDetails | undefined;
-            if (!details || details.result.exitCode === -1) {
+
+            const fallbackText = () => {
                 const text = result.content[0];
                 return new Text(
                     text?.type === "text"
@@ -1416,7 +1446,38 @@ ${output}`;
                     0,
                     0,
                 );
+            };
+
+            if (!details) return fallbackText();
+
+            // Background agent — show model name, show task when expanded
+            if (details.background) {
+                const r = details.result;
+                const modelSuffix = r.model ? theme.fg("muted", ` ${r.model}`) : "";
+                const text = result.content[0];
+                const msg = text?.type === "text" ? text.text : "(started)";
+                if (expanded && r.task) {
+                    const container = new Container();
+                    container.addChild(
+                        new Text(theme.fg("dim", msg) + modelSuffix, 0, 0),
+                    );
+                    container.addChild(new Spacer(1));
+                    container.addChild(
+                        new Text(
+                            theme.fg(
+                                "muted",
+                                "\u2500\u2500\u2500 Task \u2500\u2500\u2500",
+                            ),
+                            0,
+                            0,
+                        ),
+                    );
+                    container.addChild(new Text(theme.fg("dim", r.task), 0, 0));
+                    return container;
+                }
+                return new Text(theme.fg("dim", msg) + modelSuffix, 0, 0);
             }
+
             return renderSubagentResult(details, expanded, theme);
         },
     });
