@@ -16,7 +16,7 @@ description: >-
   calls this API), or "thorough" for cross-cutting analysis (architecture
   overview, dependency mapping, multi-module investigation).
 tools: read, grep, find, ls, bash
-model: anthropic/claude-haiku-4-5
+model: deepseek/deepseek-v4-flash
 skills: parallel-web-search, parallel-web-extract
 ---
 
