@@ -1,54 +1,36 @@
 /**
- * Auto-generates a short session title from the first user/assistant exchange.
+ * Auto-generates a short session title from the first agent interaction.
  *
- * Triggers on `turn_end` after the first complete turn. Uses a lightweight
- * model (claude-haiku) to produce a 4-word-or-less title. Falls back to a
- * truncated snippet of the user message if all LLM attempts fail.
- *
- * Exports pure helpers (`buildFallbackTitle`, `postProcessTitle`) and the
- * async `generateTitle` / `generateAndSetTitle` for testability.
+ * Triggers on `agent_end` after the first complete agent run. Reuses the
+ * session model with the full conversation prefix (system prompt + tools +
+ * messages) to get a KV cache hit, appending a title-generation instruction
+ * as a trailing user message.
  */
 
-import process from "node:process";
 import {
-    type AssistantMessage,
     completeSimple,
     type Message,
     type TextContent,
-    type UserMessage,
 } from "@earendil-works/pi-ai";
 import type {
     ExtensionAPI,
     ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
-
-const TITLE_MODEL_PROVIDER = process.env.PI_TITLE_MODEL_PROVIDER ?? "anthropic";
-const TITLE_MODEL_NAME = process.env.PI_TITLE_MODEL_NAME ?? "claude-haiku-4-5";
-
-const TITLE_MODEL = {
-    provider: TITLE_MODEL_PROVIDER,
-    model: TITLE_MODEL_NAME,
-} as const;
+import {
+    BorderedLoader,
+    buildSessionContext,
+    convertToLlm,
+} from "@earendil-works/pi-coding-agent";
 
 const MAX_TITLE_LENGTH = 50;
-const MAX_RETRIES = 2;
-const FALLBACK_LENGTH = 50;
 
-const TITLE_PROMPT = `Generate a short title (four words or less) that describes the topic of the user's messages.
+const TITLE_INSTRUCTION = `Generate a short title (four words or less) that describes the topic of this conversation.
 Reply with only the title, nothing else. Do not show your reasoning.
 
 Examples:
 - "how do I reverse a list in python?" → Python list reversal
 - "what's the weather in Tokyo?" → Tokyo weather
 - "explain how transformers work in ML" → ML transformers explained`;
-
-export function buildFallbackTitle(userText: string): string {
-    const text = userText.trim();
-    if (text.length <= FALLBACK_LENGTH) return text;
-    const truncated = text.slice(0, FALLBACK_LENGTH - 3);
-    const lastSpace = truncated.lastIndexOf(" ");
-    return `${lastSpace > 0 ? truncated.slice(0, lastSpace) : truncated}...`;
-}
 
 export function postProcessTitle(raw: string): string {
     let title = raw;
@@ -88,45 +70,55 @@ export function postProcessTitle(raw: string): string {
 }
 
 export async function generateTitle(
-    userText: string,
-    assistantText: string,
+    pi: ExtensionAPI,
     ctx: ExtensionContext,
 ): Promise<string> {
-    const model = ctx.modelRegistry.find(TITLE_MODEL.provider, TITLE_MODEL.model);
+    const model = ctx.model;
     if (!model) {
-        throw new Error(
-            `Model not found: ${TITLE_MODEL.provider}/${TITLE_MODEL.model}`,
-        );
+        throw new Error("No model selected");
     }
 
     const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
     if (!auth.ok) {
-        throw new Error(`No API key for provider: ${TITLE_MODEL.provider}`);
+        throw new Error(`Authentication failed for ${model.id}: ${auth.error}`);
     }
 
-    // TODO: set temperature to 0.3 when pi-ai exposes it
-    const contextParts = [`User message:\n${userText}`];
-    if (assistantText) {
-        contextParts.push(`Assistant response:\n${assistantText}`);
-    }
+    // Preserve KV cache prefix: same system prompt + tools + messages
+    const systemPrompt = ctx.getSystemPrompt() ?? "";
+
+    const allTools = new Map(pi.getAllTools().map((t) => [t.name, t]));
+    const tools = pi
+        .getActiveTools()
+        .map((name) => allTools.get(name))
+        .filter((t) => t !== undefined)
+        .map(({ name, description, parameters }) => ({
+            name,
+            description,
+            parameters,
+        }));
+
+    // Build messages from session branch, then append title instruction
+    // as a trailing user message so the shared prefix stays intact.
+    const branch = ctx.sessionManager.getBranch();
+    const sctx = buildSessionContext(branch);
+    const llmMessages = convertToLlm(sctx.messages);
 
     const messages: Message[] = [
+        ...llmMessages,
         {
             role: "user",
-            content: [
-                {
-                    type: "text",
-                    text: `${contextParts.join("\n\n")}\n\nGenerate a title for this conversation.`,
-                },
-            ],
+            content: [{ type: "text", text: TITLE_INSTRUCTION }],
             timestamp: Date.now(),
         },
     ];
 
+    const thinkingLevel = pi.getThinkingLevel();
+    const reasoning = thinkingLevel !== "off" ? thinkingLevel : undefined;
+
     const response = await completeSimple(
         model,
-        { systemPrompt: TITLE_PROMPT, messages },
-        { apiKey: auth.apiKey, headers: auth.headers },
+        { systemPrompt, messages, tools },
+        { apiKey: auth.apiKey, headers: auth.headers, reasoning },
     );
 
     const raw = response.content
@@ -138,111 +130,63 @@ export async function generateTitle(
     return postProcessTitle(raw);
 }
 
-export function getFirstUserText(ctx: ExtensionContext): string | null {
-    const entries = ctx.sessionManager.getEntries();
-    const firstUserEntry = entries.find(
-        (e) => e.type === "message" && e.message.role === "user",
-    );
-    if (!firstUserEntry || firstUserEntry.type !== "message") return null;
-
-    const msg = firstUserEntry.message as UserMessage;
-    if (typeof msg.content === "string") {
-        return msg.content;
-    }
-    return msg.content
-        .filter((c): c is TextContent => c.type === "text")
-        .map((c) => c.text)
-        .join(" ");
-}
-
-export function getFirstAssistantText(ctx: ExtensionContext): string | null {
-    const entries = ctx.sessionManager.getEntries();
-    const firstAssistantEntry = entries.find(
-        (e) => e.type === "message" && e.message.role === "assistant",
-    );
-    if (!firstAssistantEntry || firstAssistantEntry.type !== "message") return null;
-
-    const msg = firstAssistantEntry.message as AssistantMessage;
-    // Filter for text content only -- this naturally excludes thinking blocks
-    // which have type "thinking", not "text".
-    return msg.content
-        .filter((c): c is TextContent => c.type === "text")
-        .map((c) => c.text)
-        .join("\n");
-}
-
-export async function generateAndSetTitle(
+export async function setTitle(
     pi: ExtensionAPI,
     ctx: ExtensionContext,
     isActive: () => boolean = () => true,
 ): Promise<void> {
-    const userText = getFirstUserText(ctx);
-    if (!userText?.trim()) {
-        ctx.ui.notify("No user message to generate title from", "warning");
-        return;
-    }
-
-    const assistantText = getFirstAssistantText(ctx) ?? "";
-
-    let lastError: Error | null = null;
-    for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
-        try {
-            const title = await generateTitle(userText, assistantText, ctx);
-            if (!isActive()) return;
-            if (!title) {
-                lastError = new Error("Model returned empty title");
-                if (attempt < MAX_RETRIES) {
-                    ctx.ui.notify(
-                        `Title generation returned empty (attempt ${attempt}/${MAX_RETRIES}), retrying...`,
-                        "warning",
-                    );
-                }
-                continue;
-            }
+    try {
+        const title = await generateTitle(pi, ctx);
+        if (!isActive()) return;
+        if (title) {
             pi.setSessionName(title);
-            ctx.ui.notify(`Session: ${title}`, "info");
-            return;
-        } catch (error) {
-            if (!isActive()) return;
-            lastError = error instanceof Error ? error : new Error(String(error));
-            if (attempt < MAX_RETRIES) {
-                ctx.ui.notify(
-                    `Title generation failed ${lastError} (attempt ${attempt}/${MAX_RETRIES}), retrying...`,
-                    "warning",
-                );
-            }
         }
+    } catch (error) {
+        if (!isActive()) return;
+        const msg = error instanceof Error ? error.message : String(error);
+        ctx.ui.notify(`Title generation failed: ${msg}`, "warning");
     }
-
-    if (!isActive()) return;
-
-    // All retries exhausted -- fallback
-    const fallback = buildFallbackTitle(userText);
-    pi.setSessionName(fallback);
-    ctx.ui.notify(`Title generation failed, using fallback: ${fallback}`, "error");
 }
 
 interface SessionNameState {
     hasAutoNamed: boolean;
     sessionActive: boolean;
+    generation: number;
 }
 
 export default function sessionNameExtension(pi: ExtensionAPI) {
     const state: SessionNameState = {
         hasAutoNamed: false,
         sessionActive: false,
+        generation: 0,
     };
 
     pi.on("session_start", async () => {
         state.hasAutoNamed = false;
         state.sessionActive = true;
+        state.generation++;
     });
 
     pi.on("session_shutdown", async () => {
         state.sessionActive = false;
     });
 
-    pi.on("turn_end", async (_event, ctx) => {
+    pi.registerCommand("title", {
+        description: "Generate a session title from the conversation",
+        handler: async (_args, ctx) => {
+            if (!state.sessionActive) return;
+            await ctx.ui.custom<void>((tui, theme, _kb, done) => {
+                const loader = new BorderedLoader(tui, theme, "Generating title...");
+                setTitle(pi, ctx, () => state.sessionActive).finally(() =>
+                    done(undefined),
+                );
+                return loader;
+            });
+        },
+    });
+
+    pi.on("agent_end", async (_event, ctx) => {
+        if (ctx.mode !== "tui") return;
         if (!state.sessionActive || state.hasAutoNamed) return;
 
         if (pi.getSessionName()) {
@@ -250,9 +194,13 @@ export default function sessionNameExtension(pi: ExtensionAPI) {
             return;
         }
 
-        await generateAndSetTitle(pi, ctx, () => state.sessionActive);
-        // Always mark as named: if session became inactive mid-call,
-        // this is harmless -- state resets on next session_start.
+        // Mark eagerly to prevent re-entry, then fire-and-forget.
         state.hasAutoNamed = true;
+        const gen = state.generation;
+        setTitle(
+            pi,
+            ctx,
+            () => state.sessionActive && state.generation === gen,
+        ).catch(() => {});
     });
 }
