@@ -173,13 +173,14 @@ const MAX_VISIBLE_LINES = 30;
 function formatTokens(n: number): string {
     if (n < 1000) return n.toString();
     if (n < 10000) return `${(n / 1000).toFixed(1)}k`;
-    return `${Math.round(n / 1000)}k`;
+    if (n < 1000000) return `${Math.round(n / 1000)}k`;
+    return `${(n / 1000000).toFixed(1)}M`;
 }
 
 function formatUsage(usage: Usage): string {
     const parts: string[] = [];
-    if (usage.input) parts.push(`in:${formatTokens(usage.input)}`);
-    if (usage.output) parts.push(`out:${formatTokens(usage.output)}`);
+    if (usage.input) parts.push(`\u2191${formatTokens(usage.input)}`);
+    if (usage.output) parts.push(`\u2193${formatTokens(usage.output)}`);
     if (usage.cacheRead) parts.push(`R${formatTokens(usage.cacheRead)}`);
     if (usage.cacheWrite) parts.push(`W${formatTokens(usage.cacheWrite)}`);
     if (usage.cost.total) parts.push(`$${usage.cost.total.toFixed(4)}`);

@@ -42,6 +42,13 @@ const ANTHROPIC_API = "anthropic-messages";
  */
 const CACHEABLE_BLOCK_TYPES = new Set(["text", "image", "tool_result"]);
 
+function formatTokens(count: number): string {
+    if (count < 1000) return count.toString();
+    if (count < 10000) return `${(count / 1000).toFixed(1)}k`;
+    if (count < 1000000) return `${Math.round(count / 1000)}k`;
+    return `${(count / 1000000).toFixed(1)}M`;
+}
+
 interface AnthropicContentBlock {
     // text | image | tool_use | tool_result | thinking | redacted_thinking
     type: string;
@@ -502,17 +509,14 @@ export default function (pi: ExtensionAPI) {
                 if (active) {
                     schedulePing(ctx);
                 }
-                // Format mirrors extensions/tps.ts: ` | `-separated groups,
-                // comma-separated `label value` pairs, thousands separators,
-                // and a cache hit-rate percentage when there is cache activity.
                 const promptTokens =
                     usage.input + usage.cacheRead + usage.cacheWrite;
                 const hasCacheActivity = usage.cacheRead > 0 || usage.cacheWrite > 0;
                 const hitRateSegment =
                     hasCacheActivity && promptTokens > 0
-                        ? `, ${((usage.cacheRead / promptTokens) * 100).toFixed(1)}%`
+                        ? ` ${((usage.cacheRead / promptTokens) * 100).toFixed(1)}%`
                         : "";
-                const msg = `Ghost ping ok | out ${usage.output.toLocaleString()}, in ${usage.input.toLocaleString()}, cache r/w ${usage.cacheRead.toLocaleString()}/${usage.cacheWrite.toLocaleString()}, total ${usage.totalTokens.toLocaleString()}${hitRateSegment} | $${usage.cost.total.toFixed(4)}`;
+                const msg = `Ghost ping ok | \u2191${formatTokens(usage.input)} \u2193${formatTokens(usage.output)} R${formatTokens(usage.cacheRead)} W${formatTokens(usage.cacheWrite)} total ${formatTokens(usage.totalTokens)}${hitRateSegment} | $${usage.cost.total.toFixed(4)}`;
                 ctx.ui.notify(msg, "info");
                 return;
             }

@@ -17,6 +17,13 @@ function getSubagentCost(message: unknown): number {
     return details?.result?.usage?.cost?.total ?? 0;
 }
 
+function formatTokens(count: number): string {
+    if (count < 1000) return count.toString();
+    if (count < 10000) return `${(count / 1000).toFixed(1)}k`;
+    if (count < 1000000) return `${Math.round(count / 1000)}k`;
+    return `${(count / 1000000).toFixed(1)}M`;
+}
+
 /**
  * Reports tokens-per-second based on generation time only.
  *
@@ -79,7 +86,7 @@ export default function (pi: ExtensionAPI) {
         const hasCacheActivity = cacheRead > 0 || cacheWrite > 0;
         const hitRateSegment =
             hasCacheActivity && promptTokens > 0
-                ? `, ${((cacheRead / promptTokens) * 100).toFixed(1)}%`
+                ? ` ${((cacheRead / promptTokens) * 100).toFixed(1)}%`
                 : "";
         let costSegment = "";
         if (parentCost > 0 || subagentCost > 0) {
@@ -88,7 +95,7 @@ export default function (pi: ExtensionAPI) {
                 costSegment += `(+$${subagentCost.toFixed(4)})`;
             }
         }
-        const message = `TPS ${tokensPerSecond.toFixed(1)} tok/s | out ${output.toLocaleString()}, in ${input.toLocaleString()}, cache r/w ${cacheRead.toLocaleString()}/${cacheWrite.toLocaleString()}, total ${totalTokens.toLocaleString()}${hitRateSegment}${costSegment} | ${elapsedSeconds.toFixed(1)}s`;
+        const message = `TPS ${tokensPerSecond.toFixed(1)} tok/s | \u2191${formatTokens(input)} \u2193${formatTokens(output)} R${formatTokens(cacheRead)} W${formatTokens(cacheWrite)} total ${formatTokens(totalTokens)}${hitRateSegment}${costSegment} | ${elapsedSeconds.toFixed(1)}s`;
         ctx.ui.notify(message, "info");
     });
 }
