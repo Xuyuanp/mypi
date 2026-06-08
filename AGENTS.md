@@ -15,6 +15,7 @@
 ## References
 
 - [KV_CACHE.md](./docs/KV_CACHE.md) - KV-cache-friendly coding guidelines for LLM API calls with prompt caching. Read before writing extensions that make direct LLM calls (e.g. `streamSimple`).
+- [CACHE_ALIGNED_SIDE_CALLS.md](./docs/CACHE_ALIGNED_SIDE_CALLS.md) - Pattern for making LLM side-calls that reuse the session's KV cache without blocking the agent loop. Read before making side LLM calls from extensions.
 
 ## Code Style
 
@@ -57,7 +58,7 @@
 
 - `try/catch` with empty catch body (`catch { }`) when errors are intentionally ignored
 - Return fallback values from catch blocks rather than re-throwing
-- Retry loops with a `MAX_RETRIES` constant and final fallback (see `session-name.ts`)
+- Retry loops with a `MAX_RETRIES` constant and final fallback when appropriate
 - Do NOT use broad try/catch to guard against stale `pi`/`ctx` access. Instead, subscribe to `session_shutdown` and use a `sessionActive` flag to cooperatively bail out. Check the flag at await boundaries (after async operations return) before calling mutation methods (`pi.setSessionName`, `pi.appendEntry`, `ctx.ui.notify`, `pi.exec`, etc.). The framework guarantees `session_shutdown` fires and is awaited before runtime invalidation.
 - When an async event handler accesses shared resources across await boundaries, look for the resource's lifecycle event first (e.g. `session_shutdown`), not error-based detection. Flags communicate intent; try/catch hides bugs.
 
