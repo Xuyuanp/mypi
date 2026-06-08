@@ -11,3 +11,6 @@ pre-commit:
       glob: "*.ts"
       run: npm run check -- {staged_files}
       stage_fixed: true
+    test:
+      glob: "*.ts"
+      run: npm test
