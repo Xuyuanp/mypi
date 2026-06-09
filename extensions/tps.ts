@@ -86,7 +86,7 @@ export default function (pi: ExtensionAPI) {
         const hasCacheActivity = cacheRead > 0 || cacheWrite > 0;
         const hitRateSegment =
             hasCacheActivity && promptTokens > 0
-                ? ` ${((cacheRead / promptTokens) * 100).toFixed(1)}%`
+                ? ` CH${((cacheRead / promptTokens) * 100).toFixed(0)}%`
                 : "";
         let costSegment = "";
         if (parentCost > 0 || subagentCost > 0) {
@@ -95,7 +95,7 @@ export default function (pi: ExtensionAPI) {
                 costSegment += `(+$${subagentCost.toFixed(4)})`;
             }
         }
-        const message = `TPS ${tokensPerSecond.toFixed(1)} tok/s | \u2191${formatTokens(input)} \u2193${formatTokens(output)} R${formatTokens(cacheRead)} W${formatTokens(cacheWrite)} total ${formatTokens(totalTokens)}${hitRateSegment}${costSegment} | ${elapsedSeconds.toFixed(1)}s`;
+        const message = `TPS ${tokensPerSecond.toFixed(1)} tok/s | \u2191${formatTokens(input)} \u2193${formatTokens(output)} R${formatTokens(cacheRead)} W${formatTokens(cacheWrite)}${hitRateSegment} total ${formatTokens(totalTokens)}${costSegment} | ${elapsedSeconds.toFixed(1)}s`;
         ctx.ui.notify(message, "info");
     });
 }
