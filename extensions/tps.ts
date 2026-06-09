@@ -43,11 +43,19 @@ function createTurnState(): TurnState {
     };
 }
 
+const STATUS_KEY = "tps-timer";
+
 export default function (pi: ExtensionAPI) {
     let s = createTurnState();
+    let timerInterval: ReturnType<typeof setInterval> | null = null;
 
-    pi.on("agent_start", () => {
+    pi.on("agent_start", (_event, ctx) => {
         s = createTurnState();
+        if (ctx.mode !== "tui") return;
+        timerInterval = setInterval(() => {
+            const elapsed = ((Date.now() - s.agentStartMs) / 1000).toFixed(1);
+            ctx.ui.setStatus(STATUS_KEY, ctx.ui.theme.fg("dim", `${elapsed}s`));
+        }, 100);
     });
 
     pi.on("message_start", (event) => {
@@ -79,13 +87,18 @@ export default function (pi: ExtensionAPI) {
     });
 
     pi.on("agent_end", (_event, ctx) => {
+        if (timerInterval) {
+            clearInterval(timerInterval);
+            timerInterval = null;
+        }
         if (!ctx.hasUI) return;
+        ctx.ui.setStatus(STATUS_KEY, undefined);
+        const wallSeconds = (Date.now() - s.agentStartMs) / 1000;
         if (s.generationMs <= 0) return;
         if (s.output <= 0) return;
 
         const genSeconds = s.generationMs / 1000;
         const tokensPerSecond = s.output / genSeconds;
-        const wallSeconds = (Date.now() - s.agentStartMs) / 1000;
         const promptTokens = s.input + s.cacheRead + s.cacheWrite;
         const hasCacheActivity = s.cacheRead > 0 || s.cacheWrite > 0;
         const hitRateSegment =
