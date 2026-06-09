@@ -141,6 +141,10 @@ function formatUsageStats(usage: UsageStats, opts?: FormatUsageOpts): string {
     if (usage.output) parts.push(`↓${formatTokens(usage.output)}`);
     if (usage.cacheRead) parts.push(`R${formatTokens(usage.cacheRead)}`);
     if (usage.cacheWrite) parts.push(`W${formatTokens(usage.cacheWrite)}`);
+    const promptTokens = usage.input + usage.cacheRead + usage.cacheWrite;
+    if ((usage.cacheRead > 0 || usage.cacheWrite > 0) && promptTokens > 0) {
+        parts.push(`CH${Math.round((usage.cacheRead / promptTokens) * 100)}%`);
+    }
     if (contextWindow && usage.contextTokens) {
         const pct = Math.round((usage.contextTokens / contextWindow) * 100);
         parts.push(`ctx ${pct}%`);
