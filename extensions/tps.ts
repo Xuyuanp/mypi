@@ -15,10 +15,12 @@ function formatTokens(count: number): string {
  * intervals for assistant messages, excluding tool execution time that
  * occurs between message_end and the next turn_start.
  */
-interface TurnState {
+interface RunState {
     agentStartMs: number;
     generationMs: number;
     generationStartMs: number | null;
+    turns: number;
+    toolCalls: number;
     input: number;
     output: number;
     cacheRead: number;
@@ -28,11 +30,13 @@ interface TurnState {
     subagentCost: number;
 }
 
-function createTurnState(): TurnState {
+function createRunState(): RunState {
     return {
         agentStartMs: Date.now(),
         generationMs: 0,
         generationStartMs: null,
+        turns: 0,
+        toolCalls: 0,
         input: 0,
         output: 0,
         cacheRead: 0,
@@ -46,11 +50,11 @@ function createTurnState(): TurnState {
 const STATUS_KEY = "tps-timer";
 
 export default function (pi: ExtensionAPI) {
-    let s = createTurnState();
+    let s = createRunState();
     let timerInterval: ReturnType<typeof setInterval> | null = null;
 
     pi.on("agent_start", (_event, ctx) => {
-        s = createTurnState();
+        s = createRunState();
         if (ctx.mode !== "tui") return;
         timerInterval = setInterval(() => {
             const elapsed = ((Date.now() - s.agentStartMs) / 1000).toFixed(1);
@@ -69,6 +73,7 @@ export default function (pi: ExtensionAPI) {
             return;
         s.generationMs += Date.now() - s.generationStartMs;
         s.generationStartMs = null;
+        s.turns++;
         const msg = event.message as AssistantMessage;
         s.input += msg.usage.input;
         s.output += msg.usage.output;
@@ -79,6 +84,7 @@ export default function (pi: ExtensionAPI) {
     });
 
     pi.on("tool_result", (event) => {
+        s.toolCalls++;
         if (event.toolName !== "subagent") return;
         const details = event.details as
             | { result?: { usage?: { cost?: { total?: number } } } }
@@ -112,7 +118,7 @@ export default function (pi: ExtensionAPI) {
                 costSegment += `(+$${s.subagentCost.toFixed(4)})`;
             }
         }
-        const message = `TPS ${tokensPerSecond.toFixed(1)} tok/s | \u2191${formatTokens(s.input)} \u2193${formatTokens(s.output)} R${formatTokens(s.cacheRead)} W${formatTokens(s.cacheWrite)}${hitRateSegment} total ${formatTokens(s.totalTokens)}${costSegment} | ${wallSeconds.toFixed(1)}s`;
+        const message = `TPS ${tokensPerSecond.toFixed(1)} tok/s | ${s.turns}T ${s.toolCalls}C | \u2191${formatTokens(s.input)} \u2193${formatTokens(s.output)} R${formatTokens(s.cacheRead)} W${formatTokens(s.cacheWrite)}${hitRateSegment} total ${formatTokens(s.totalTokens)}${costSegment} | ${wallSeconds.toFixed(1)}s`;
         ctx.ui.notify(message, "info");
     });
 }
