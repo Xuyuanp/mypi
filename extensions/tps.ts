@@ -1,22 +1,6 @@
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
-function isAssistantMessage(message: unknown): message is AssistantMessage {
-    if (!message || typeof message !== "object") return false;
-    const role = (message as { role?: unknown }).role;
-    return role === "assistant";
-}
-
-function getSubagentCost(message: unknown): number {
-    if (!message || typeof message !== "object") return 0;
-    const msg = message as { role?: string; toolName?: string; details?: unknown };
-    if (msg.role !== "toolResult" || msg.toolName !== "subagent") return 0;
-    const details = msg.details as
-        | { result?: { usage?: { cost?: { total?: number } } } }
-        | undefined;
-    return details?.result?.usage?.cost?.total ?? 0;
-}
-
 function formatTokens(count: number): string {
     if (count < 1000) return count.toString();
     if (count < 10000) return `${(count / 1000).toFixed(1)}k`;
@@ -31,71 +15,91 @@ function formatTokens(count: number): string {
  * intervals for assistant messages, excluding tool execution time that
  * occurs between message_end and the next turn_start.
  */
+interface TurnState {
+    agentStartMs: number;
+    generationMs: number;
+    generationStartMs: number | null;
+    input: number;
+    output: number;
+    cacheRead: number;
+    cacheWrite: number;
+    totalTokens: number;
+    parentCost: number;
+    subagentCost: number;
+}
+
+function createTurnState(): TurnState {
+    return {
+        agentStartMs: Date.now(),
+        generationMs: 0,
+        generationStartMs: null,
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        parentCost: 0,
+        subagentCost: 0,
+    };
+}
+
 export default function (pi: ExtensionAPI) {
-    let generationMs = 0;
-    let generationStartMs: number | null = null;
+    let s = createTurnState();
 
     pi.on("agent_start", () => {
-        generationMs = 0;
-        generationStartMs = null;
+        s = createTurnState();
     });
 
     pi.on("message_start", (event) => {
         if (event.message.role === "assistant") {
-            generationStartMs = Date.now();
+            s.generationStartMs = Date.now();
         }
     });
 
     pi.on("message_end", (event) => {
-        if (event.message.role === "assistant" && generationStartMs !== null) {
-            generationMs += Date.now() - generationStartMs;
-            generationStartMs = null;
-        }
+        if (event.message.role !== "assistant" || s.generationStartMs === null)
+            return;
+        s.generationMs += Date.now() - s.generationStartMs;
+        s.generationStartMs = null;
+        const msg = event.message as AssistantMessage;
+        s.input += msg.usage.input;
+        s.output += msg.usage.output;
+        s.cacheRead += msg.usage.cacheRead;
+        s.cacheWrite += msg.usage.cacheWrite;
+        s.totalTokens += msg.usage.totalTokens;
+        s.parentCost += msg.usage.cost.total;
     });
 
-    pi.on("agent_end", (event, ctx) => {
+    pi.on("tool_result", (event) => {
+        if (event.toolName !== "subagent") return;
+        const details = event.details as
+            | { result?: { usage?: { cost?: { total?: number } } } }
+            | undefined;
+        s.subagentCost += details?.result?.usage?.cost?.total ?? 0;
+    });
+
+    pi.on("agent_end", (_event, ctx) => {
         if (!ctx.hasUI) return;
-        if (generationMs <= 0) return;
+        if (s.generationMs <= 0) return;
+        if (s.output <= 0) return;
 
-        let input = 0;
-        let output = 0;
-        let cacheRead = 0;
-        let cacheWrite = 0;
-        let totalTokens = 0;
-        let parentCost = 0;
-        let subagentCost = 0;
-
-        for (const message of event.messages) {
-            if (isAssistantMessage(message)) {
-                input += message.usage.input;
-                output += message.usage.output;
-                cacheRead += message.usage.cacheRead;
-                cacheWrite += message.usage.cacheWrite;
-                totalTokens += message.usage.totalTokens;
-                parentCost += message.usage.cost.total;
-                continue;
-            }
-            subagentCost += getSubagentCost(message);
-        }
-
-        if (output <= 0) return;
-
-        const elapsedSeconds = generationMs / 1000;
-        const tokensPerSecond = output / elapsedSeconds;
-        const promptTokens = input + cacheRead + cacheWrite;
-        const hasCacheActivity = cacheRead > 0 || cacheWrite > 0;
+        const genSeconds = s.generationMs / 1000;
+        const tokensPerSecond = s.output / genSeconds;
+        const wallSeconds = (Date.now() - s.agentStartMs) / 1000;
+        const promptTokens = s.input + s.cacheRead + s.cacheWrite;
+        const hasCacheActivity = s.cacheRead > 0 || s.cacheWrite > 0;
         const hitRateSegment =
             hasCacheActivity && promptTokens > 0
-                ? ` CH${((cacheRead / promptTokens) * 100).toFixed(0)}%`
+                ? ` CH${((s.cacheRead / promptTokens) * 100).toFixed(0)}%`
                 : "";
         let costSegment = "";
-        if (parentCost > 0 || subagentCost > 0) {
-            costSegment = ` | $${parentCost.toFixed(4)}`;
-            if (subagentCost > 0) {
-                costSegment += `(+$${subagentCost.toFixed(4)})`;
+        if (s.parentCost > 0 || s.subagentCost > 0) {
+            costSegment = ` | $${s.parentCost.toFixed(4)}`;
+            if (s.subagentCost > 0) {
+                costSegment += `(+$${s.subagentCost.toFixed(4)})`;
             }
         }
-        const message = `TPS ${tokensPerSecond.toFixed(1)} tok/s | \u2191${formatTokens(input)} \u2193${formatTokens(output)} R${formatTokens(cacheRead)} W${formatTokens(cacheWrite)}${hitRateSegment} total ${formatTokens(totalTokens)}${costSegment} | ${elapsedSeconds.toFixed(1)}s`;
+        const message = `TPS ${tokensPerSecond.toFixed(1)} tok/s | \u2191${formatTokens(s.input)} \u2193${formatTokens(s.output)} R${formatTokens(s.cacheRead)} W${formatTokens(s.cacheWrite)}${hitRateSegment} total ${formatTokens(s.totalTokens)}${costSegment} | ${wallSeconds.toFixed(1)}s`;
         ctx.ui.notify(message, "info");
     });
 }
