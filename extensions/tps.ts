@@ -34,12 +34,10 @@ function formatTokens(count: number): string {
 export default function (pi: ExtensionAPI) {
     let generationMs = 0;
     let generationStartMs: number | null = null;
-    let agentStartMs = 0;
 
     pi.on("agent_start", () => {
         generationMs = 0;
         generationStartMs = null;
-        agentStartMs = Date.now();
     });
 
     pi.on("message_start", (event) => {
@@ -97,8 +95,7 @@ export default function (pi: ExtensionAPI) {
                 costSegment += `(+$${subagentCost.toFixed(4)})`;
             }
         }
-        const wallSeconds = (Date.now() - agentStartMs) / 1000;
-        const message = `TPS ${tokensPerSecond.toFixed(1)} tok/s | \u2191${formatTokens(input)} \u2193${formatTokens(output)} R${formatTokens(cacheRead)} W${formatTokens(cacheWrite)}${hitRateSegment} total ${formatTokens(totalTokens)}${costSegment} | ${wallSeconds.toFixed(1)}s`;
+        const message = `TPS ${tokensPerSecond.toFixed(1)} tok/s | \u2191${formatTokens(input)} \u2193${formatTokens(output)} R${formatTokens(cacheRead)} W${formatTokens(cacheWrite)}${hitRateSegment} total ${formatTokens(totalTokens)}${costSegment} | ${elapsedSeconds.toFixed(1)}s`;
         ctx.ui.notify(message, "info");
     });
 }
