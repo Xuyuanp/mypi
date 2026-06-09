@@ -59,7 +59,7 @@ function formatStatus(
         `($${usage.spend.toFixed(0)}/$${usage.maxBudget.toFixed(0)})`,
     );
 
-    return `${label}${pct} ${dollars}`;
+    return `${label} ${pct}${dollars}`;
 }
 
 export default function (pi: ExtensionAPI) {
