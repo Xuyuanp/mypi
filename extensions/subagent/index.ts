@@ -539,35 +539,35 @@ async function runSubagent(
 
 const SubagentParams = Type.Object({
     agent: Type.String({
-        description: "Name of the agent to invoke",
+        description:
+            "Name of an available agent. Must match a <name> from the agent list.",
     }),
     description: Type.String({
-        description: "A short (3-5 word) summary of what this subagent will do",
+        description: "A short (3-5 word) summary of the delegated task.",
     }),
     task: Type.String({
-        description: "Task to delegate to the agent",
+        description:
+            "Self-contained task description. The subagent has NO access to your conversation history -- include all necessary context, file paths, constraints, and expected output format. Be explicit about whether to write code or only research.",
     }),
     model: Type.Optional(
         Type.String({
-            description:
-                'Override the model for this invocation (e.g. "anthropic/claude-sonnet:high"). Only set this when the user explicitly requests a specific model; otherwise omit it to use the agent default.',
+            description: 'Model override, e.g. "anthropic/claude-sonnet:high".',
         }),
     ),
     cwd: Type.Optional(
         Type.String({
-            description: "Working directory for the agent process",
+            description: "Working directory override for the subprocess.",
         }),
     ),
     skills: Type.Optional(
         Type.Array(Type.String(), {
             description:
-                "Override skills for this invocation. Replaces agent default skills.",
+                "Skill names to attach. Replaces the agent's default skills.",
         }),
     ),
     background: Type.Optional(
         Type.Boolean({
-            description:
-                "Run in background -- returns immediately with an agent ID. Result is delivered later as a follow-up message. Note: multiple foreground subagents already run in parallel within a single turn. Use background mode only for fire-and-forget tasks where you do not need the result to continue.",
+            description: "Run as a fire-and-forget background task.",
         }),
     ),
 });
@@ -583,25 +583,22 @@ function buildToolDescription(agents: AgentConfig[]): string {
                   .join("\n")
             : "(none)";
 
-    return `Start a subagent instance to work on a focused task.
+    return `Spawn an agent to work on a focused task in an isolated context with its own tool set.
 
-Each instance runs in an isolated context with its own tool set.
-The subagent result is only visible to you. If the user should see it, summarize it yourself.
+The result is only visible to you. If the user should see it, summarize it yourself.
 
 <available_agents>
 ${agentList}
 </available_agents>
 
-**Usage**
+**Usage of Optional Parameters**
 
-- Use \`agent\` to select an available agent by name.
-- Always provide a short \`description\` (3-5 words) summarizing the task.
-- Provide a clear, self-contained \`task\`. The subagent has no access to your conversation history.
-- Be explicit about whether the subagent should write code or only do research.
-- Only set \`model\` when the user explicitly requests a specific model; otherwise omit it to use the agent default.
-- Use \`cwd\` to override the working directory when the task targets a different project root.
+- \`model\`: Set only when the user explicitly requests a specific model; otherwise omit to use the agent default.
+- \`cwd\`: Set when the task targets a different project root than the current working directory.
+- \`skills\`: Attach specialized skills by name. Use when the task requires domain knowledge not built into the agent.
+- \`background\`: Set to true for fire-and-forget work whose result you do not need to continue your current turn. Multiple foreground agents already run in parallel within a single turn -- prefer foreground unless you truly do not need the result.
 
-**When NOT to Use Subagent**
+**When NOT to Use**
 
 - Reading a known file path
 - Searching a small number of known files
