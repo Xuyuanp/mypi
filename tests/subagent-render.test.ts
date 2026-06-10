@@ -1,0 +1,591 @@
+/**
+ * Tests for extracted rendering/formatting helpers in render.ts.
+ *
+ * Covers: formatTokens, formatDuration, formatUsageStats, buildLastLine,
+ * formatToolCallPlain, getDisplayItems, getFinalOutput, countToolCalls,
+ * renderSubagentResult, renderBackgroundSubagentResult,
+ * AgentOutcome variants, isSubagentError, SubagentDetails discriminated union.
+ */
+
+import { describe, expect, it } from "vitest";
+import type { Message } from "@earendil-works/pi-ai";
+import {
+    buildLastLine,
+    countToolCalls,
+    formatDuration,
+    formatTokens,
+    formatToolCallPlain,
+    formatUsageStats,
+    getDisplayItems,
+    getFinalOutput,
+    renderBackgroundSubagentResult,
+    renderSubagentResult,
+} from "../extensions/subagent/render.js";
+import { createZeroUsage, isSubagentError } from "../extensions/subagent/types.js";
+import type {
+    AgentOutcome,
+    AgentRunResult,
+    BackgroundSubagentDetails,
+    ForegroundSubagentDetails,
+} from "../extensions/subagent/types.js";
+
+// ── Helpers ──────────────────────────────────────────────────────────
+
+function makeResult(overrides?: Partial<AgentRunResult>): AgentRunResult {
+    return {
+        agent: "scout",
+        agentSource: "system",
+        task: "find files",
+        outcome: { status: "success" },
+        messages: [],
+        stderr: "",
+        usage: createZeroUsage(),
+        ...overrides,
+    };
+}
+
+function makeTheme() {
+    return {
+        fg: (_color: string, text: string) => text,
+        bg: (_color: string, text: string) => text,
+        bold: (text: string) => text,
+    };
+}
+
+// ── formatTokens ─────────────────────────────────────────────────────
+
+describe("formatTokens", () => {
+    it("renders numbers < 1000 as-is", () => {
+        expect(formatTokens(0)).toBe("0");
+        expect(formatTokens(999)).toBe("999");
+        expect(formatTokens(42)).toBe("42");
+    });
+
+    it("renders 1000-9999 as X.Xk", () => {
+        expect(formatTokens(1000)).toBe("1.0k");
+        expect(formatTokens(1500)).toBe("1.5k");
+        expect(formatTokens(9999)).toBe("10.0k");
+    });
+
+    it("renders 10000-999999 as Xk", () => {
+        expect(formatTokens(10000)).toBe("10k");
+        expect(formatTokens(55000)).toBe("55k");
+        expect(formatTokens(999999)).toBe("1000k");
+    });
+
+    it("renders >= 1M as X.XM", () => {
+        expect(formatTokens(1000000)).toBe("1.0M");
+        expect(formatTokens(2500000)).toBe("2.5M");
+    });
+});
+
+// ── formatDuration ───────────────────────────────────────────────────
+
+describe("formatDuration", () => {
+    it("renders < 1000 as Xms", () => {
+        expect(formatDuration(0)).toBe("0ms");
+        expect(formatDuration(500)).toBe("500ms");
+        expect(formatDuration(999)).toBe("999ms");
+    });
+
+    it("renders 1000-59999 as X.Xs", () => {
+        expect(formatDuration(1000)).toBe("1.0s");
+        expect(formatDuration(5500)).toBe("5.5s");
+        expect(formatDuration(59999)).toBe("60.0s");
+    });
+
+    it("renders >= 60000 as XmXs", () => {
+        expect(formatDuration(60000)).toBe("1m0s");
+        expect(formatDuration(90000)).toBe("1m30s");
+        expect(formatDuration(125000)).toBe("2m5s");
+    });
+});
+
+// ── formatUsageStats ─────────────────────────────────────────────────
+
+describe("formatUsageStats", () => {
+    it("returns empty string for zero usage", () => {
+        expect(formatUsageStats(createZeroUsage())).toBe("");
+    });
+
+    it("includes all fields when present", () => {
+        const usage = {
+            ...createZeroUsage(),
+            inputTokens: 1500,
+            outputTokens: 500,
+            cacheReadTokens: 3000,
+            cacheWriteTokens: 100,
+            contextTokens: 4600,
+            cost: { input: 0.001, output: 0.002, cacheRead: 0.001, cacheWrite: 0, total: 0.004 },
+            turns: 2,
+        };
+        const result = formatUsageStats(usage, {
+            model: "test-model",
+            durationMs: 3500,
+            contextWindow: 10000,
+        });
+        expect(result).toContain("2 turns");
+        expect(result).toContain("\u21911.5k");
+        expect(result).toContain("\u2193500");
+        expect(result).toContain("R3.0k");
+        expect(result).toContain("W100");
+        expect(result).toContain("CH");
+        expect(result).toContain("ctx 46%");
+        expect(result).toContain("$0.0040");
+        expect(result).toContain("3.5s");
+        expect(result).toContain("test-model");
+    });
+
+    it("calculates cache hit ratio correctly", () => {
+        const usage = {
+            ...createZeroUsage(),
+            inputTokens: 500,
+            cacheReadTokens: 1500,
+            cacheWriteTokens: 0,
+            turns: 1,
+        };
+        const result = formatUsageStats(usage);
+        // cacheRead / (input + cacheRead + cacheWrite) = 1500/2000 = 75%
+        expect(result).toContain("CH75%");
+    });
+});
+
+// ── buildLastLine ────────────────────────────────────────────────────
+
+describe("buildLastLine", () => {
+    it("includes tool count and usage", () => {
+        const r = makeResult({
+            usage: { ...createZeroUsage(), inputTokens: 100, outputTokens: 50, turns: 1 },
+            model: "m",
+            durationMs: 2000,
+        });
+        const line = buildLastLine(r, 5);
+        expect(line).toContain("5 tools");
+        expect(line).toContain("1 turn");
+    });
+
+    it("omits tool count when zero", () => {
+        const r = makeResult({
+            usage: { ...createZeroUsage(), inputTokens: 100, turns: 1 },
+        });
+        const line = buildLastLine(r, 0);
+        expect(line).not.toContain("tools");
+        expect(line).toContain("1 turn");
+    });
+});
+
+// ── getDisplayItems ──────────────────────────────────────────────────
+
+describe("getDisplayItems", () => {
+    it("returns empty array for empty messages", () => {
+        expect(getDisplayItems([])).toEqual([]);
+    });
+
+    it("produces correct DisplayItem sequence from mixed messages", () => {
+        const messages: Message[] = [
+            {
+                role: "assistant",
+                content: [
+                    { type: "text", text: "hello" },
+                    { type: "toolCall", id: "tc1", name: "bash", arguments: { command: "ls" } },
+                ],
+            },
+            {
+                role: "toolResult",
+                toolCallId: "tc1",
+                content: [{ type: "text", text: "files" }],
+                isError: false,
+            },
+            {
+                role: "assistant",
+                content: [
+                    { type: "toolCall", id: "tc2", name: "read", arguments: { path: "/a.txt" } },
+                ],
+            },
+        ] as Message[];
+
+        const items = getDisplayItems(messages);
+        expect(items).toHaveLength(3);
+        expect(items[0]).toEqual({ type: "text", text: "hello" });
+        expect(items[1]).toMatchObject({
+            type: "toolCall",
+            name: "bash",
+            status: "success",
+        });
+        expect(items[2]).toMatchObject({
+            type: "toolCall",
+            name: "read",
+            status: "pending",
+        });
+    });
+});
+
+// ── getFinalOutput ───────────────────────────────────────────────────
+
+describe("getFinalOutput", () => {
+    it("returns empty string for no assistant messages", () => {
+        const messages: Message[] = [
+            { role: "user", content: [{ type: "text", text: "hi" }] },
+        ] as Message[];
+        expect(getFinalOutput(messages)).toBe("");
+    });
+
+    it("returns first text part from latest assistant message with text", () => {
+        const messages: Message[] = [
+            {
+                role: "assistant",
+                content: [{ type: "text", text: "first" }],
+            },
+            { role: "user", content: [{ type: "text", text: "q" }] },
+            {
+                role: "assistant",
+                content: [
+                    { type: "toolCall", id: "x", name: "bash", arguments: {} },
+                ],
+            },
+            {
+                role: "assistant",
+                content: [{ type: "text", text: "final answer" }],
+            },
+        ] as Message[];
+        expect(getFinalOutput(messages)).toBe("final answer");
+    });
+});
+
+// ── countToolCalls ───────────────────────────────────────────────────
+
+describe("countToolCalls", () => {
+    it("counts tool calls across multiple messages", () => {
+        const messages: Message[] = [
+            {
+                role: "assistant",
+                content: [
+                    { type: "toolCall", id: "a", name: "bash", arguments: {} },
+                    { type: "toolCall", id: "b", name: "read", arguments: {} },
+                ],
+            },
+            {
+                role: "assistant",
+                content: [
+                    { type: "text", text: "hi" },
+                    { type: "toolCall", id: "c", name: "write", arguments: {} },
+                ],
+            },
+        ] as Message[];
+        expect(countToolCalls(messages)).toBe(3);
+    });
+});
+
+// ── formatToolCallPlain ──────────────────────────────────────────────
+
+describe("formatToolCallPlain", () => {
+    it("formats bash with command preview", () => {
+        const result = formatToolCallPlain("bash", { command: "echo hello" });
+        expect(result).toBe("bash echo hello");
+    });
+
+    it("truncates long bash commands to 60 chars", () => {
+        const longCmd = "x".repeat(80);
+        const result = formatToolCallPlain("bash", { command: longCmd });
+        expect(result).toBe(`bash ${"x".repeat(60)}...`);
+    });
+
+    it("formats read with path (omits ranges)", () => {
+        const result = formatToolCallPlain("read", {
+            path: "/some/file.ts",
+            offset: 10,
+            limit: 20,
+        });
+        expect(result).toBe("read /some/file.ts");
+    });
+
+    it("formats default tool with JSON preview", () => {
+        const result = formatToolCallPlain("custom_tool", { key: "value" });
+        expect(result).toBe('custom_tool {"key":"value"}');
+    });
+
+    it("truncates long JSON args to 50 chars", () => {
+        const longVal = "v".repeat(60);
+        const result = formatToolCallPlain("tool", { key: longVal });
+        const expected = JSON.stringify({ key: longVal }).slice(0, 50) + "...";
+        expect(result).toBe(`tool ${expected}`);
+    });
+});
+
+// ── AgentOutcome variants ────────────────────────────────────────────
+
+describe("AgentOutcome variants", () => {
+    it("success variant accepts optional stopReason", () => {
+        const outcome: AgentOutcome = { status: "success", stopReason: "end_turn" };
+        expect(outcome.status).toBe("success");
+        expect(outcome.stopReason).toBe("end_turn");
+    });
+
+    it("running variant has no additional fields", () => {
+        const outcome: AgentOutcome = { status: "running" };
+        expect(outcome.status).toBe("running");
+    });
+
+    it("error variant requires exitCode and message", () => {
+        const outcome: AgentOutcome = {
+            status: "error",
+            exitCode: 1,
+            message: "spawn failed",
+            stopReason: "error",
+        };
+        expect(outcome.status).toBe("error");
+        expect(outcome.exitCode).toBe(1);
+        expect(outcome.message).toBe("spawn failed");
+    });
+
+    it("aborted variant accepts optional message", () => {
+        const outcome: AgentOutcome = { status: "aborted", message: "user cancelled" };
+        expect(outcome.status).toBe("aborted");
+        expect(outcome.message).toBe("user cancelled");
+    });
+});
+
+// ── isSubagentError ──────────────────────────────────────────────────
+
+describe("isSubagentError", () => {
+    it("returns true for error outcome", () => {
+        expect(isSubagentError(makeResult({
+            outcome: { status: "error", exitCode: 1, message: "failed" },
+        }))).toBe(true);
+    });
+
+    it("returns true for aborted outcome", () => {
+        expect(isSubagentError(makeResult({
+            outcome: { status: "aborted" },
+        }))).toBe(true);
+    });
+
+    it("returns false for success outcome", () => {
+        expect(isSubagentError(makeResult({
+            outcome: { status: "success", stopReason: "end_turn" },
+        }))).toBe(false);
+    });
+
+    it("returns false for running outcome", () => {
+        expect(isSubagentError(makeResult({
+            outcome: { status: "running" },
+        }))).toBe(false);
+    });
+});
+
+// ── SubagentDetails discriminated union ──────────────────────────────
+
+describe("SubagentDetails discriminated union", () => {
+    it("foreground has kind='foreground' and non-optional execStatuses", () => {
+        const details: ForegroundSubagentDetails = {
+            kind: "foreground",
+            result: makeResult(),
+            execStatuses: { tc1: false, tc2: true },
+        };
+        expect(details.kind).toBe("foreground");
+        expect(details.execStatuses).toEqual({ tc1: false, tc2: true });
+    });
+
+    it("background has kind='background', description, cancelled", () => {
+        const details: BackgroundSubagentDetails = {
+            kind: "background",
+            result: makeResult(),
+            description: "find auth files",
+            cancelled: false,
+        };
+        expect(details.kind).toBe("background");
+        expect(details.description).toBe("find auth files");
+        expect(details.cancelled).toBe(false);
+    });
+});
+
+// ── createZeroUsage new fields ───────────────────────────────────────
+
+describe("createZeroUsage", () => {
+    it("returns object with new field names all zero", () => {
+        const usage = createZeroUsage();
+        expect(usage.inputTokens).toBe(0);
+        expect(usage.outputTokens).toBe(0);
+        expect(usage.cacheReadTokens).toBe(0);
+        expect(usage.cacheWriteTokens).toBe(0);
+        expect(usage.contextTokens).toBe(0);
+        expect(usage.cost.total).toBe(0);
+        expect(usage.turns).toBe(0);
+    });
+
+    it("does not have totalTokens field", () => {
+        const usage = createZeroUsage() as Record<string, unknown>;
+        expect("totalTokens" in usage).toBe(false);
+    });
+});
+
+// ── renderSubagentResult ─────────────────────────────────────────────
+
+describe("renderSubagentResult", () => {
+    it("collapsed success includes recent tools and usage line", () => {
+        const messages: Message[] = [
+            {
+                role: "assistant",
+                content: [
+                    { type: "toolCall", id: "t1", name: "bash", arguments: { command: "ls" } },
+                    { type: "toolCall", id: "t2", name: "read", arguments: { path: "/a" } },
+                ],
+            },
+            {
+                role: "toolResult",
+                toolCallId: "t1",
+                content: [{ type: "text", text: "ok" }],
+                isError: false,
+            },
+            {
+                role: "toolResult",
+                toolCallId: "t2",
+                content: [{ type: "text", text: "ok" }],
+                isError: false,
+            },
+            {
+                role: "assistant",
+                content: [{ type: "text", text: "Done" }],
+            },
+        ] as Message[];
+
+        const details: ForegroundSubagentDetails = {
+            kind: "foreground",
+            result: makeResult({
+                messages,
+                usage: { ...createZeroUsage(), inputTokens: 100, outputTokens: 50, turns: 1 },
+                durationMs: 1000,
+            }),
+            execStatuses: {},
+        };
+
+        const component = renderSubagentResult(details, false, makeTheme());
+        // Renders as Text for collapsed view
+        const rendered = component.render(80);
+        expect(rendered.length).toBeGreaterThan(0);
+        const text = rendered.join("\n");
+        expect(text).toContain("bash");
+        expect(text).toContain("read");
+        expect(text).toContain("1 turn");
+    });
+
+    it("expanded error includes task, tools, and error message", () => {
+        const messages: Message[] = [
+            {
+                role: "assistant",
+                content: [
+                    { type: "toolCall", id: "t1", name: "bash", arguments: { command: "fail" } },
+                ],
+            },
+            {
+                role: "toolResult",
+                toolCallId: "t1",
+                content: [{ type: "text", text: "err" }],
+                isError: true,
+            },
+        ] as Message[];
+
+        const details: ForegroundSubagentDetails = {
+            kind: "foreground",
+            result: makeResult({
+                outcome: { status: "error", exitCode: 1, stopReason: "error", message: "command failed" },
+                messages,
+                usage: { ...createZeroUsage(), turns: 1 },
+            }),
+            execStatuses: { t1: true },
+        };
+
+        const component = renderSubagentResult(details, true, makeTheme());
+        const rendered = component.render(80);
+        const text = rendered.join("\n");
+        expect(text).toContain("Task");
+        expect(text).toContain("Output");
+        expect(text).toContain("bash");
+    });
+});
+
+// ── renderBackgroundSubagentResult ───────────────────────────────────
+
+describe("renderBackgroundSubagentResult", () => {
+    it("renders completed result with success styling", () => {
+        const messages: Message[] = [
+            {
+                role: "assistant",
+                content: [{ type: "text", text: "Found 5 files" }],
+            },
+        ] as Message[];
+
+        const details: BackgroundSubagentDetails = {
+            kind: "background",
+            result: makeResult({
+                messages,
+                usage: { ...createZeroUsage(), inputTokens: 200, turns: 1 },
+            }),
+            description: "find files",
+            cancelled: false,
+        };
+
+        const component = renderBackgroundSubagentResult(
+            details,
+            "content text",
+            false,
+            makeTheme(),
+        );
+        const rendered = component.render(80);
+        const text = rendered.join("\n");
+        expect(text).toContain("subagent");
+        expect(text).toContain("[completed]");
+        expect(text).toContain("find files");
+    });
+
+    it("renders cancelled result without requiring output", () => {
+        const details: BackgroundSubagentDetails = {
+            kind: "background",
+            result: makeResult({ outcome: { status: "success" }, messages: [] }),
+            description: "cancelled task",
+            cancelled: true,
+        };
+
+        const component = renderBackgroundSubagentResult(
+            details,
+            "(cancelled)",
+            false,
+            makeTheme(),
+        );
+        const rendered = component.render(80);
+        const text = rendered.join("\n");
+        expect(text).toContain("[cancelled]");
+        expect(text).toContain("cancelled task");
+    });
+
+    it("falls back to content text when details is undefined", () => {
+        const component = renderBackgroundSubagentResult(
+            undefined,
+            "fallback content",
+            false,
+            makeTheme(),
+        );
+        const rendered = component.render(80);
+        expect(rendered.join("\n")).toContain("fallback content");
+    });
+});
+
+// ── accumulateUsage maps framework fields ────────────────────────────
+
+describe("accumulateUsage integration", () => {
+    it("createZeroUsage followed by manual accumulation produces correct totals", () => {
+        const usage = createZeroUsage();
+        // Simulate what accumulateUsage does (tested via buildLastLine)
+        usage.inputTokens += 100;
+        usage.outputTokens += 50;
+        usage.cacheReadTokens += 200;
+        usage.turns = 1;
+
+        const r = makeResult({ usage, durationMs: 1000 });
+        const line = buildLastLine(r, 2);
+        expect(line).toContain("2 tools");
+        expect(line).toContain("\u2191100");
+        expect(line).toContain("\u219350");
+        expect(line).toContain("R200");
+    });
+});

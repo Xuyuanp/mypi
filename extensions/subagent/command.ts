@@ -43,7 +43,7 @@ import {
     visibleWidth,
 } from "@earendil-works/pi-tui";
 import { type AgentConfig, discoverAgents } from "./agents.js";
-import type { BackgroundAgent } from "./index.js";
+import type { BackgroundManager } from "./background.js";
 
 interface AgentRow {
     name: string;
@@ -474,15 +474,14 @@ class AgentsListView implements Component {
 
 export function registerSubagentCommand(
     pi: ExtensionAPI,
-    backgroundAgents: Map<string, BackgroundAgent>,
-    onBackgroundChange: () => void,
+    bgManager: BackgroundManager,
 ): void {
     pi.registerCommand("subagent", {
         description: "List agents or cancel a background agent",
         getArgumentCompletions(prefix) {
             if (prefix.startsWith("cancel ")) {
                 const partial = prefix.slice("cancel ".length);
-                return [...backgroundAgents.keys()]
+                return [...bgManager.agents.keys()]
                     .filter((id) => id.startsWith(partial))
                     .map((id) => ({
                         label: id,
@@ -500,14 +499,10 @@ export function registerSubagentCommand(
             // /subagent cancel <id>
             if (trimmed.startsWith("cancel ")) {
                 const id = trimmed.slice("cancel ".length).trim();
-                const entry = backgroundAgents.get(id);
-                if (!entry) {
+                if (!bgManager.cancel(id)) {
                     ctx.ui.notify(`No background agent with id: ${id}`);
                     return;
                 }
-                backgroundAgents.delete(id);
-                entry.kill();
-                onBackgroundChange();
                 ctx.ui.notify(`Cancelled background agent: ${id}`);
                 return;
             }

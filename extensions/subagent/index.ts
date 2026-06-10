@@ -29,71 +29,41 @@ import type { Message } from "@earendil-works/pi-ai";
 import {
     type ExtensionAPI,
     type ExtensionContext,
-    getMarkdownTheme,
     type Skill,
-    type ThemeColor,
     withFileMutationQueue,
 } from "@earendil-works/pi-coding-agent";
-import {
-    Box,
-    Container,
-    Markdown,
-    Spacer,
-    Text,
-    truncateToWidth,
-} from "@earendil-works/pi-tui";
+import { Container, Spacer, Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { type AgentConfig, discoverAgents } from "./agents.js";
+import { BACKGROUND_RESULT_TYPE, createBackgroundManager } from "./background.js";
 import { registerSubagentCommand } from "./command.js";
+import {
+    formatToolCallPlain,
+    formatUsageStats,
+    getDisplayItems,
+    getFinalOutput,
+    ICON_RUNNING,
+    renderBackgroundSubagentResult,
+    renderSubagentResult,
+    toolStatusIconPlain,
+} from "./render.js";
+import type {
+    AgentOutcome,
+    AgentRunResult,
+    BackgroundAgent,
+    BackgroundSubagentDetails,
+    ForegroundSubagentDetails,
+    SubagentDetails,
+    SubagentProgressCallback,
+    UsageStats,
+} from "./types.js";
+import { createZeroUsage, isSubagentError, ZERO_USAGE } from "./types.js";
 
-export interface BackgroundAgent {
-    id: string;
-    description: string;
-    agent: AgentConfig;
-    task: string;
-    kill: () => void;
-    promise: Promise<AgentRunResult>;
-    startedAt: number;
-    latestResult: AgentRunResult;
-    toolCallCount: number;
-}
+// ── Re-exports for backward compatibility ────────────────────────────
+export type { BackgroundAgent } from "./types.js";
+export { createZeroUsage } from "./types.js";
 
-const ICON_RUNNING = "○";
-const BG_WIDGET_KEY = "subagent-bg";
-const ICON_SUCCESS = "●";
-const ICON_ERROR = "●";
-
-function isSubagentError(r: AgentRunResult): boolean {
-    return (
-        r.exitCode !== 0 || r.stopReason === "error" || r.stopReason === "aborted"
-    );
-}
-type ToolCallStatus = "success" | "error" | "pending";
-
-function toolStatusIconPlain(status: ToolCallStatus): string {
-    switch (status) {
-        case "success":
-            return ICON_SUCCESS;
-        case "error":
-            return ICON_ERROR;
-        case "pending":
-            return ICON_RUNNING;
-    }
-}
-
-function toolStatusIcon(
-    status: ToolCallStatus,
-    theme: { fg: (color: ThemeColor, text: string) => string },
-): string {
-    switch (status) {
-        case "success":
-            return theme.fg("dim", ICON_SUCCESS);
-        case "error":
-            return ICON_ERROR;
-        case "pending":
-            return theme.fg("dim", ICON_RUNNING);
-    }
-}
+// ── Local constants & helpers ────────────────────────────────────────
 
 const SUBAGENT_PREAMBLE = `${[
     "You are now running as a subagent.",
@@ -111,64 +81,6 @@ function escapeXml(str: string): string {
     return str.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
-function formatTokens(count: number): string {
-    if (count < 1000) return count.toString();
-    if (count < 10000) return `${(count / 1000).toFixed(1)}k`;
-    if (count < 1000000) return `${Math.round(count / 1000)}k`;
-    return `${(count / 1000000).toFixed(1)}M`;
-}
-
-function formatDuration(ms: number): string {
-    if (ms < 1000) return `${ms}ms`;
-    const seconds = ms / 1000;
-    if (seconds < 60) return `${seconds.toFixed(1)}s`;
-    const minutes = Math.floor(seconds / 60);
-    const remainingSec = Math.round(seconds % 60);
-    return `${minutes}m${remainingSec}s`;
-}
-
-interface FormatUsageOpts {
-    model?: string;
-    durationMs?: number;
-    contextWindow?: number;
-}
-
-function formatUsageStats(usage: UsageStats, opts?: FormatUsageOpts): string {
-    const { model, durationMs, contextWindow } = opts ?? {};
-    const parts: string[] = [];
-    if (usage.turns) parts.push(`${usage.turns} turn${usage.turns > 1 ? "s" : ""}`);
-    if (usage.input) parts.push(`↑${formatTokens(usage.input)}`);
-    if (usage.output) parts.push(`↓${formatTokens(usage.output)}`);
-    if (usage.cacheRead) parts.push(`R${formatTokens(usage.cacheRead)}`);
-    if (usage.cacheWrite) parts.push(`W${formatTokens(usage.cacheWrite)}`);
-    const promptTokens = usage.input + usage.cacheRead + usage.cacheWrite;
-    if ((usage.cacheRead > 0 || usage.cacheWrite > 0) && promptTokens > 0) {
-        parts.push(`CH${Math.round((usage.cacheRead / promptTokens) * 100)}%`);
-    }
-    if (contextWindow && usage.contextTokens) {
-        const pct = Math.round((usage.contextTokens / contextWindow) * 100);
-        parts.push(`ctx ${pct}%`);
-    }
-    if (usage.cost.total) parts.push(`$${usage.cost.total.toFixed(4)}`);
-    if (durationMs !== undefined) parts.push(formatDuration(durationMs));
-    if (model) parts.push(model);
-    return parts.join(" ");
-}
-
-function buildLastLine(r: AgentRunResult, toolCallCount: number): string {
-    const countStr = toolCallCount > 0 ? `${toolCallCount} tools` : "";
-    const usageStr = formatUsageStats(r.usage, {
-        model: r.model,
-        durationMs: r.durationMs,
-        contextWindow: r.contextWindow,
-    });
-    return [countStr, usageStr].filter(Boolean).join(" ");
-}
-
-/**
- * Parse a model string in `provider/id` or `provider/id:thinkingLevel` form.
- * Returns null if the string doesn't contain a provider/id separator.
- */
 function parseModelStr(
     modelStr: string,
 ): { provider: string; id: string; thinkingLevel?: string } | null {
@@ -181,12 +93,6 @@ function parseModelStr(
     return { provider, id: rest };
 }
 
-/**
- * Resolve the context window (in tokens) for the subagent's model.
- *
- * Falls back to the parent model's context window when the subagent inherits
- * the parent model or the model cannot be resolved.
- */
 function resolveContextWindow(
     modelStr: string | undefined,
     ctx: ExtensionContext,
@@ -196,151 +102,6 @@ function resolveContextWindow(
     if (!parsed) return ctx.model?.contextWindow;
     const model = ctx.modelRegistry.find(parsed.provider, parsed.id);
     return model?.contextWindow ?? ctx.model?.contextWindow;
-}
-
-function formatToolCall(
-    toolName: string,
-    args: Record<string, unknown>,
-    themeFg: (color: any, text: string) => string,
-): string {
-    const shortenPath = (p: string) => {
-        const home = os.homedir();
-        return p.startsWith(home) ? `~${p.slice(home.length)}` : p;
-    };
-
-    switch (toolName) {
-        case "bash": {
-            const command = (args.command as string) || "...";
-            const preview =
-                command.length > 60 ? `${command.slice(0, 60)}...` : command;
-            return themeFg("muted", "bash ") + themeFg("dim", preview);
-        }
-        case "read": {
-            const rawPath = (args.file_path || args.path || "...") as string;
-            const filePath = shortenPath(rawPath);
-            const offset = args.offset as number | undefined;
-            const limit = args.limit as number | undefined;
-            let text = themeFg("dim", filePath);
-            if (offset !== undefined || limit !== undefined) {
-                const startLine = offset ?? 1;
-                const endLine = limit !== undefined ? startLine + limit - 1 : "";
-                text += themeFg(
-                    "dim",
-                    `:${startLine}${endLine ? `-${endLine}` : ""}`,
-                );
-            }
-            return themeFg("muted", "read ") + text;
-        }
-        case "write": {
-            const rawPath = (args.file_path || args.path || "...") as string;
-            const filePath = shortenPath(rawPath);
-            const content = (args.content || "") as string;
-            const lines = content.split("\n").length;
-            let text = themeFg("muted", "write ") + themeFg("dim", filePath);
-            if (lines > 1) text += themeFg("dim", ` (${lines} lines)`);
-            return text;
-        }
-        case "edit": {
-            const rawPath = (args.file_path || args.path || "...") as string;
-            return themeFg("muted", "edit ") + themeFg("dim", shortenPath(rawPath));
-        }
-        case "ls": {
-            const rawPath = (args.path || ".") as string;
-            return themeFg("muted", "ls ") + themeFg("dim", shortenPath(rawPath));
-        }
-        case "find": {
-            const pattern = (args.pattern || "*") as string;
-            const rawPath = (args.path || ".") as string;
-            return (
-                themeFg("muted", "find ") +
-                themeFg("dim", pattern) +
-                themeFg("dim", ` in ${shortenPath(rawPath)}`)
-            );
-        }
-        case "grep": {
-            const pattern = (args.pattern || "") as string;
-            const rawPath = (args.path || ".") as string;
-            return (
-                themeFg("muted", "grep ") +
-                themeFg("dim", `/${pattern}/`) +
-                themeFg("dim", ` in ${shortenPath(rawPath)}`)
-            );
-        }
-        default: {
-            const argsStr = JSON.stringify(args);
-            const preview =
-                argsStr.length > 50 ? `${argsStr.slice(0, 50)}...` : argsStr;
-            return themeFg("muted", toolName) + themeFg("dim", ` ${preview}`);
-        }
-    }
-}
-
-function formatToolCallPlain(
-    toolName: string,
-    args: Record<string, unknown>,
-): string {
-    const shortenPath = (p: string) => {
-        const home = os.homedir();
-        return p.startsWith(home) ? `~${p.slice(home.length)}` : p;
-    };
-
-    switch (toolName) {
-        case "bash": {
-            const command = (args.command as string) || "...";
-            const preview =
-                command.length > 60 ? `${command.slice(0, 60)}...` : command;
-            return `bash ${preview}`;
-        }
-        case "read": {
-            const rawPath = (args.file_path || args.path || "...") as string;
-            return `read ${shortenPath(rawPath)}`;
-        }
-        case "write": {
-            const rawPath = (args.file_path || args.path || "...") as string;
-            return `write ${shortenPath(rawPath)}`;
-        }
-        case "edit": {
-            const rawPath = (args.file_path || args.path || "...") as string;
-            return `edit ${shortenPath(rawPath)}`;
-        }
-        default: {
-            const argsStr = JSON.stringify(args);
-            const preview =
-                argsStr.length > 50 ? `${argsStr.slice(0, 50)}...` : argsStr;
-            return `${toolName} ${preview}`;
-        }
-    }
-}
-
-interface UsageStats {
-    input: number;
-    output: number;
-    cacheRead: number;
-    cacheWrite: number;
-    totalTokens: number;
-    /** Prompt size of the most recent assistant turn (input + cache read + cache write). */
-    contextTokens: number;
-    cost: {
-        input: number;
-        output: number;
-        cacheRead: number;
-        cacheWrite: number;
-        total: number;
-    };
-    turns: number;
-}
-
-export function createZeroUsage(): UsageStats {
-    return {
-        input: 0,
-        output: 0,
-        cacheRead: 0,
-        cacheWrite: 0,
-        totalTokens: 0,
-        contextTokens: 0,
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-        turns: 0,
-    };
 }
 
 function accumulateUsage(
@@ -360,11 +121,10 @@ function accumulateUsage(
         };
     },
 ): void {
-    target.input += source.input || 0;
-    target.output += source.output || 0;
-    target.cacheRead += source.cacheRead || 0;
-    target.cacheWrite += source.cacheWrite || 0;
-    target.totalTokens += source.totalTokens || 0;
+    target.inputTokens += source.input || 0;
+    target.outputTokens += source.output || 0;
+    target.cacheReadTokens += source.cacheRead || 0;
+    target.cacheWriteTokens += source.cacheWrite || 0;
     const cost = source.cost;
     if (cost) {
         target.cost.input += cost.input || 0;
@@ -375,108 +135,6 @@ function accumulateUsage(
     }
 }
 
-const ZERO_USAGE: Readonly<UsageStats> = Object.freeze({
-    ...createZeroUsage(),
-    cost: Object.freeze(createZeroUsage().cost),
-});
-
-interface AgentRunResult {
-    agent: string;
-    agentSource: "user" | "system" | "unknown";
-    task: string;
-    exitCode: number;
-    messages: Message[];
-    stderr: string;
-    usage: UsageStats;
-    model?: string;
-    contextWindow?: number;
-    stopReason?: string;
-    errorMessage?: string;
-    durationMs?: number;
-}
-
-interface SubagentDetails {
-    result: AgentRunResult;
-    execStatuses?: Record<string, boolean>;
-    description?: string;
-    cancelled?: boolean;
-    background?: boolean;
-}
-
-function getFinalOutput(messages: Message[]): string {
-    for (let i = messages.length - 1; i >= 0; i--) {
-        const msg = messages[i];
-        if (msg.role === "assistant") {
-            for (const part of msg.content) {
-                if (part.type === "text") return part.text;
-            }
-        }
-    }
-    return "";
-}
-
-type DisplayItem =
-    | { type: "text"; text: string }
-    | {
-          type: "toolCall";
-          name: string;
-          args: Record<string, any>;
-          status: ToolCallStatus;
-      };
-
-function getDisplayItems(
-    messages: Message[],
-    execStatusMap?: Map<string, boolean>,
-): DisplayItem[] {
-    const items: DisplayItem[] = [];
-    const resultMap = new Map<string, boolean>();
-    for (const msg of messages) {
-        if (msg.role === "toolResult") {
-            resultMap.set(msg.toolCallId, msg.isError);
-        }
-    }
-    for (const msg of messages) {
-        if (msg.role === "assistant") {
-            for (const part of msg.content) {
-                if (part.type === "text")
-                    items.push({ type: "text", text: part.text });
-                else if (part.type === "toolCall") {
-                    let status: ToolCallStatus = "pending";
-                    if (resultMap.has(part.id)) {
-                        status = resultMap.get(part.id) ? "error" : "success";
-                    } else if (execStatusMap?.has(part.id)) {
-                        status = execStatusMap.get(part.id) ? "error" : "success";
-                    }
-                    items.push({
-                        type: "toolCall",
-                        name: part.name,
-                        args: part.arguments,
-                        status,
-                    });
-                }
-            }
-        }
-    }
-    return items;
-}
-
-/** Count tool calls in a message array (single pass, no allocation). */
-function countToolCalls(messages: Message[]): number {
-    let count = 0;
-    for (const msg of messages) {
-        if (msg.role === "assistant") {
-            for (const part of msg.content) {
-                if (part.type === "toolCall") count++;
-            }
-        }
-    }
-    return count;
-}
-
-/**
- * Sanitize an agent name for use in filesystem identifiers (session IDs, temp files).
- * Replaces non-word chars with "_", trims non-alphanumeric edges, falls back to "agent".
- */
 function sanitizeAgentName(name: string): string {
     return (
         name
@@ -503,11 +161,17 @@ async function writePromptToTempFile(
     return filePath;
 }
 
-function getPiInvocation(args: string[]): { command: string; args: string[] } {
+function getPiInvocation(args: string[]): {
+    command: string;
+    args: string[];
+} {
     const currentScript = process.argv[1];
     const isBunVirtualScript = currentScript?.startsWith("/$bunfs/root/");
     if (currentScript && !isBunVirtualScript && fs.existsSync(currentScript)) {
-        return { command: process.execPath, args: [currentScript, ...args] };
+        return {
+            command: process.execPath,
+            args: [currentScript, ...args],
+        };
     }
 
     const execName = path.basename(process.execPath).toLowerCase();
@@ -519,16 +183,149 @@ function getPiInvocation(args: string[]): { command: string; args: string[] } {
     return { command: "pi", args };
 }
 
-type SubagentProgressEvent =
-    | { type: "message" }
-    | { type: "tool_start"; toolCallId: string }
-    | { type: "tool_end"; toolCallId: string; isError: boolean }
-    | { type: "tool_result" };
+/**
+ * Build an AgentOutcome from subprocess exit state.
+ *
+ * This is the single point where exitCode + stopReason + errorMessage
+ * are reconciled into a discriminated union variant.
+ */
+function buildOutcome(
+    exitCode: number,
+    wasAborted: boolean,
+    latestStopReason: string | undefined,
+    latestErrorMessage: string | undefined,
+    stderr: string,
+): AgentOutcome {
+    if (wasAborted) {
+        return { status: "aborted" };
+    }
+    if (exitCode !== 0) {
+        return {
+            status: "error",
+            exitCode,
+            stopReason: latestStopReason,
+            message:
+                latestErrorMessage ||
+                stderr ||
+                `(subprocess exited with code ${exitCode})`,
+        };
+    }
+    if (latestStopReason === "error") {
+        return {
+            status: "error",
+            exitCode: 0,
+            stopReason: "error",
+            message: latestErrorMessage || stderr || "(agent error)",
+        };
+    }
+    if (latestStopReason === "aborted") {
+        return { status: "aborted", message: latestErrorMessage };
+    }
+    return { status: "success", stopReason: latestStopReason };
+}
 
-type SubagentProgressCallback = (
-    result: AgentRunResult,
-    event: SubagentProgressEvent,
-) => void;
+// ── Backward compatibility shims ─────────────────────────────────────
+
+/**
+ * Normalize an AgentOutcome from a possibly old-format result.
+ *
+ * Old format stored exitCode/stopReason/errorMessage as top-level fields.
+ * New format uses a single `outcome` discriminated union.
+ */
+function normalizeOutcome(r: Record<string, unknown>): AgentOutcome {
+    // New format: already has outcome
+    if (r.outcome && typeof r.outcome === "object") {
+        return r.outcome as AgentOutcome;
+    }
+    // Old format: reconstruct from legacy fields via buildOutcome.
+    // Special case: exitCode -1 was the old "running" sentinel.
+    const exitCode = (r.exitCode as number | undefined) ?? 0;
+    if (exitCode === -1) return { status: "running" };
+    return buildOutcome(
+        exitCode,
+        false, // wasAborted cannot be inferred from serialized data
+        r.stopReason as string | undefined,
+        r.errorMessage as string | undefined,
+        "", // stderr not stored in old details
+    );
+}
+
+/**
+ * Normalize UsageStats from a possibly old-format shape.
+ *
+ * Old format: { input, output, cacheRead, cacheWrite, totalTokens, ... }
+ * New format: { inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens, ... }
+ */
+function normalizeUsage(raw: Record<string, unknown>): UsageStats {
+    // New format detection: has `inputTokens`
+    if ("inputTokens" in raw) return raw as unknown as UsageStats;
+    // Old format: map field names
+    return {
+        inputTokens: (raw.input as number) || 0,
+        outputTokens: (raw.output as number) || 0,
+        cacheReadTokens: (raw.cacheRead as number) || 0,
+        cacheWriteTokens: (raw.cacheWrite as number) || 0,
+        contextTokens: (raw.contextTokens as number) || 0,
+        cost: (raw.cost as UsageStats["cost"]) || {
+            input: 0,
+            output: 0,
+            cacheRead: 0,
+            cacheWrite: 0,
+            total: 0,
+        },
+        turns: (raw.turns as number) || 0,
+    };
+}
+
+/**
+ * Normalize SubagentDetails from a possibly old-format shape.
+ *
+ * Old format: { result: { exitCode, ... }, background?, description?, cancelled?, execStatuses? }
+ * New format: { kind: "foreground"|"background", result: { outcome, ... }, ... }
+ */
+function normalizeDetails(raw: unknown): SubagentDetails | undefined {
+    if (!raw || typeof raw !== "object") return undefined;
+    const d = raw as Record<string, unknown>;
+    // New-format detection: has `kind` field
+    if (d.kind === "foreground" || d.kind === "background") {
+        return raw as SubagentDetails;
+    }
+    // Old-format: map to new shape
+    const rawResult = d.result as Record<string, unknown> | undefined;
+    if (!rawResult) return undefined;
+    const outcome = normalizeOutcome(rawResult);
+    const usage = rawResult.usage
+        ? normalizeUsage(rawResult.usage as Record<string, unknown>)
+        : createZeroUsage();
+    const newResult: AgentRunResult = {
+        agent: (rawResult.agent as string) || "",
+        agentSource:
+            (rawResult.agentSource as AgentRunResult["agentSource"]) || "unknown",
+        task: (rawResult.task as string) || "",
+        outcome,
+        messages: (rawResult.messages as Message[]) || [],
+        stderr: (rawResult.stderr as string) || "",
+        usage,
+        model: rawResult.model as string | undefined,
+        contextWindow: rawResult.contextWindow as number | undefined,
+        durationMs: rawResult.durationMs as number | undefined,
+    };
+    if (d.background || d.description != null || d.cancelled != null) {
+        return {
+            kind: "background",
+            result: newResult,
+            description: (d.description as string) || "(unknown)",
+            cancelled: (d.cancelled as boolean) || false,
+        };
+    }
+    return {
+        kind: "foreground",
+        result: newResult,
+        execStatuses: (d.execStatuses as Record<string, boolean>) || {},
+    };
+}
+
+// ── Subprocess execution ─────────────────────────────────────────────
 
 async function runSubagent(
     agent: AgentConfig,
@@ -578,7 +375,7 @@ async function runSubagent(
         agent: agent.name,
         agentSource: agent.source,
         task,
-        exitCode: -1,
+        outcome: { status: "running" },
         messages: [],
         stderr: "",
         usage: createZeroUsage(),
@@ -587,6 +384,12 @@ async function runSubagent(
     };
 
     const startTime = Date.now();
+
+    // Local variables for streaming state — NOT stored on outcome
+    // during streaming. Merged into the single outcome assignment
+    // at completion.
+    let latestStopReason: string | undefined;
+    let latestErrorMessage: string | undefined;
 
     try {
         const fullSystemPrompt = agent.systemPrompt.trim()
@@ -643,10 +446,8 @@ async function runSubagent(
                                 ctx,
                             );
                         }
-                        if (msg.stopReason)
-                            currentResult.stopReason = msg.stopReason;
-                        if (msg.errorMessage)
-                            currentResult.errorMessage = msg.errorMessage;
+                        if (msg.stopReason) latestStopReason = msg.stopReason;
+                        if (msg.errorMessage) latestErrorMessage = msg.errorMessage;
                     }
                     onProgress?.(currentResult, { type: "message" });
                 }
@@ -668,7 +469,9 @@ async function runSubagent(
 
                 if (event.type === "tool_result_end" && event.message) {
                     currentResult.messages.push(event.message as Message);
-                    onProgress?.(currentResult, { type: "tool_result" });
+                    onProgress?.(currentResult, {
+                        type: "tool_result",
+                    });
                 }
             };
 
@@ -705,12 +508,21 @@ async function runSubagent(
                     }, 5000);
                 };
                 if (signal.aborted) killProc();
-                else signal.addEventListener("abort", killProc, { once: true });
+                else
+                    signal.addEventListener("abort", killProc, {
+                        once: true,
+                    });
             }
         });
 
-        currentResult.exitCode = exitCode;
         currentResult.durationMs = Date.now() - startTime;
+        currentResult.outcome = buildOutcome(
+            exitCode,
+            wasAborted,
+            latestStopReason,
+            latestErrorMessage,
+            currentResult.stderr,
+        );
         if (wasAborted) throw new Error("Subagent was aborted");
         return currentResult;
     } finally {
@@ -722,6 +534,8 @@ async function runSubagent(
             }
     }
 }
+
+// ── Tool schema & description ────────────────────────────────────────
 
 const SubagentParams = Type.Object({
     agent: Type.String({
@@ -794,234 +608,29 @@ ${agentList}
 - Tasks that can be completed in one or two direct tool calls`;
 }
 
-const BACKGROUND_RESULT_TYPE = "subagent_background_result";
-
-/**
- * Render a completed subagent result into a Component (shared between
- * foreground renderResult and background message renderer).
- */
-function renderSubagentResult(
-    details: SubagentDetails,
-    expanded: boolean,
-    theme: {
-        fg: (color: ThemeColor, text: string) => string;
-        bold: (text: string) => string;
-    },
-): Container | Text {
-    const r = details.result;
-    const mdTheme = getMarkdownTheme();
-    const isRunning = r.exitCode === -1;
-    const isError = !isRunning && isSubagentError(r);
-    const execStatusMap = details.execStatuses
-        ? new Map(Object.entries(details.execStatuses))
-        : undefined;
-    const displayItems = getDisplayItems(r.messages, execStatusMap);
-    const toolCallItems = displayItems.filter(
-        (i) => i.type === "toolCall",
-    ) as (DisplayItem & { type: "toolCall" })[];
-    const finalOutput = getFinalOutput(r.messages);
-
-    if (expanded) {
-        const container = new Container();
-        container.addChild(
-            new Text(
-                theme.fg("muted", "\u2500\u2500\u2500 Task \u2500\u2500\u2500"),
-                0,
-                0,
-            ),
-        );
-        container.addChild(new Text(theme.fg("dim", r.task), 0, 0));
-        container.addChild(new Spacer(1));
-        container.addChild(
-            new Text(
-                theme.fg("muted", "\u2500\u2500\u2500 Output \u2500\u2500\u2500"),
-                0,
-                0,
-            ),
-        );
-        if (toolCallItems.length === 0 && !finalOutput) {
-            container.addChild(new Text(theme.fg("muted", "(no output)"), 0, 0));
-        } else {
-            for (const item of toolCallItems) {
-                const icon = toolStatusIcon(item.status, theme);
-                container.addChild(
-                    new Text(
-                        ` ${icon} ` +
-                            formatToolCall(
-                                item.name,
-                                item.args,
-                                theme.fg.bind(theme),
-                            ),
-                        0,
-                        0,
-                    ),
-                );
-            }
-            if (finalOutput) {
-                container.addChild(new Spacer(1));
-                container.addChild(new Markdown(finalOutput.trim(), 0, 0, mdTheme));
-            }
-        }
-        const lastLine = buildLastLine(r, toolCallItems.length);
-        container.addChild(new Spacer(1));
-        container.addChild(new Text(theme.fg("dim", lastLine), 0, 0));
-        return container;
-    }
-
-    // Collapsed view -- last 3 tool calls
-    const recentToolCalls = toolCallItems.slice(-3);
-    let text = "";
-    for (const item of recentToolCalls) {
-        if (text) text += "\n";
-        const icon = toolStatusIcon(item.status, theme);
-        text += ` ${icon} ${formatToolCall(item.name, item.args, theme.fg.bind(theme))}`;
-    }
-    const lastLine = buildLastLine(r, toolCallItems.length);
-    if (isError) {
-        const errorMsg = r.errorMessage || r.stopReason || "failed";
-        if (text) text += "\n";
-        text += theme.fg("error", errorMsg);
-        if (lastLine) text += `\n${theme.fg("dim", lastLine)}`;
-    } else {
-        if (text) text += "\n";
-        text += theme.fg("dim", lastLine);
-    }
-    return new Text(text, 0, 0);
-}
+// ── Extension entry point ────────────────────────────────────────────
 
 export default function (pi: ExtensionAPI) {
     // Pre-load agents at registration time so the LLM
     // knows which agents are available from the tool description.
     const knownAgents = discoverAgents().agents;
 
-    // Background agent tracking
-    const backgroundAgents = new Map<string, BackgroundAgent>();
-    let sessionActive = true;
-    let currentCtx: ExtensionContext | null = null;
-    let widgetActive = false;
+    // Background agent lifecycle manager
+    const bgManager = createBackgroundManager(pi);
 
-    function updateWidget(): void {
-        const ctx = currentCtx;
-        if (!ctx) return;
-        const count = backgroundAgents.size;
-
-        if (count === 0) {
-            if (widgetActive) {
-                ctx.ui.setWidget(BG_WIDGET_KEY, undefined);
-                widgetActive = false;
-            }
-            ctx.ui.setStatus(BG_WIDGET_KEY, undefined);
-            return;
-        }
-
-        // Update status count
-        ctx.ui.setStatus(
-            BG_WIDGET_KEY,
-            ctx.ui.theme.fg("accent", `${ICON_RUNNING} ${count} bg`),
-        );
-
-        // Create widget only on first spawn (0 -> 1 transition)
-        if (!widgetActive) {
-            ctx.ui.setWidget(BG_WIDGET_KEY, (tui, theme) => {
-                const interval = setInterval(() => tui.requestRender(), 1000);
-                return {
-                    render(width: number): string[] {
-                        const lines: string[] = [];
-                        const MAX_ENTRIES = 5;
-                        const ICON_W = 2; // "X "
-                        const NAME_W = 10; // agent name + padding
-                        const ID_W = 10; // short uuid + spacing
-                        const FIXED_W = ICON_W + NAME_W + ID_W;
-                        const descAvail = Math.max(8, width - FIXED_W);
-
-                        let rendered = 0;
-                        for (const entry of backgroundAgents.values()) {
-                            if (rendered >= MAX_ENTRIES) {
-                                const remaining =
-                                    backgroundAgents.size - MAX_ENTRIES;
-                                lines.push(
-                                    truncateToWidth(
-                                        theme.fg("muted", `  +${remaining} more`),
-                                        width,
-                                    ),
-                                );
-                                break;
-                            }
-                            const r = entry.latestResult;
-                            const elapsed = Date.now() - entry.startedAt;
-
-                            // Line 1: icon + agent + id + description
-                            const agentName = entry.agent.name.padEnd(8).slice(0, 8);
-                            const shortId = entry.id.slice(
-                                entry.id.lastIndexOf("-") + 1,
-                            );
-                            const desc = truncateToWidth(
-                                entry.description,
-                                descAvail,
-                                "\u2026",
-                            );
-                            const line1 =
-                                `${theme.fg("accent", ICON_RUNNING)} ` +
-                                `${theme.fg("muted", agentName)}  ` +
-                                `${theme.fg("dim", shortId)}  ` +
-                                `${theme.fg("muted", desc)}`;
-                            lines.push(truncateToWidth(line1, width));
-
-                            // Line 2: usage (toolCallCount pre-computed in onProgress)
-                            const usageLine = buildLastLine(
-                                {
-                                    ...r,
-                                    durationMs: elapsed,
-                                    contextWindow: undefined,
-                                },
-                                entry.toolCallCount,
-                            );
-                            const line2 = `  ${theme.fg("dim", usageLine)}`;
-                            lines.push(truncateToWidth(line2, width));
-                            rendered++;
-                        }
-                        return lines;
-                    },
-                    invalidate(): void {
-                        /* no-op: render is stateless */
-                    },
-                    dispose(): void {
-                        clearInterval(interval);
-                    },
-                };
-            });
-            widgetActive = true;
-        }
-    }
-
-    registerSubagentCommand(pi, backgroundAgents, updateWidget);
+    registerSubagentCommand(pi, bgManager);
 
     // Cache loaded skills from the parent session so we can resolve
     // skill names to filesystem paths for --skill flags.
     let skillCache = new Map<string, Skill>();
 
     pi.on("session_start", (_event, ctx) => {
-        sessionActive = true;
-        currentCtx = ctx;
-        widgetActive = false;
+        bgManager.setSessionActive(true);
+        bgManager.setContext(ctx);
     });
 
     pi.on("session_shutdown", async () => {
-        sessionActive = false;
-        // Clear widget and status before killing (so UI is clean immediately)
-        if (currentCtx) {
-            currentCtx.ui.setWidget(BG_WIDGET_KEY, undefined);
-            currentCtx.ui.setStatus(BG_WIDGET_KEY, undefined);
-        }
-        widgetActive = false;
-        currentCtx = null;
-        const entries = [...backgroundAgents.values()];
-        if (entries.length === 0) return;
-        for (const entry of entries) {
-            entry.kill();
-        }
-        await Promise.allSettled(entries.map((e) => e.promise));
-        backgroundAgents.clear();
+        await bgManager.shutdown();
     });
 
     pi.on("before_agent_start", (event) => {
@@ -1033,81 +642,21 @@ export default function (pi: ExtensionAPI) {
     pi.registerMessageRenderer<SubagentDetails>(
         BACKGROUND_RESULT_TYPE,
         (message, { expanded }, theme) => {
-            const details = message.details;
-            if (!details) {
-                const content =
-                    typeof message.content === "string"
-                        ? message.content
-                        : message.content
-                              .map((p) => (p.type === "text" ? p.text : ""))
-                              .join("");
-                return new Text(content || "(no output)", 0, 0);
-            }
-
-            const r = details.result;
-            const isCancelled = details.cancelled === true;
-            const isError = !isCancelled && isSubagentError(r);
-            const bgFn =
-                isCancelled || isError
-                    ? (t: string) => theme.bg("toolErrorBg", t)
-                    : (t: string) => theme.bg("toolSuccessBg", t);
-
-            const agentName = r.agent || "...";
-            const desc = details.description || "...";
-            const status = isCancelled
-                ? "cancelled"
-                : isError
-                  ? "error"
-                  : "completed";
-            const statusColor = isCancelled
-                ? "warning"
-                : isError
-                  ? "error"
-                  : "success";
-            const modelSuffix = r.model ? theme.fg("muted", ` [${r.model}]`) : "";
-            const headerText =
-                theme.fg("toolTitle", theme.bold("subagent ")) +
-                theme.fg("text", agentName) +
-                modelSuffix +
-                theme.fg("muted", " (bg)") +
-                theme.fg(statusColor, ` [${status}]`) +
-                theme.fg("dim", ` ${desc}`);
-
-            const output = getFinalOutput(r.messages) || "(no output)";
-            const mdTheme = getMarkdownTheme();
-
-            const execStatusMap = details.execStatuses
-                ? new Map(Object.entries(details.execStatuses))
-                : undefined;
-            const displayItems = getDisplayItems(r.messages, execStatusMap);
-            const toolCallCount = displayItems.filter(
-                (i) => i.type === "toolCall",
-            ).length;
-            const usageLine = buildLastLine(r, toolCallCount);
-
-            const box = new Box(1, 1, bgFn);
-            box.addChild(new Text(headerText, 0, 0));
-            box.addChild(new Spacer(1));
-
-            if (expanded) {
-                box.addChild(new Markdown(output.trim(), 0, 0, mdTheme));
-            } else {
-                const lines = output.trim().split("\n");
-                const truncated = lines.length > 3;
-                const preview = lines.slice(0, 3).join("\n");
-                box.addChild(new Text(preview, 0, 0));
-                if (truncated) {
-                    box.addChild(
-                        new Text(theme.fg("muted", "... ctrl-o to expand"), 0, 0),
-                    );
-                }
-            }
-
-            if (usageLine) {
-                box.addChild(new Spacer(1));
-                box.addChild(new Text(theme.fg("dim", usageLine), 0, 0));
-            }
-            return box;
+            const contentText =
+                typeof message.content === "string"
+                    ? message.content
+                    : message.content
+                          .map((p) => (p.type === "text" ? p.text : ""))
+                          .join("");
+            // Normalize details from possibly old session format
+            const details = normalizeDetails(message.details);
+            const bgDetails = details?.kind === "background" ? details : undefined;
+            return renderBackgroundSubagentResult(
+                bgDetails,
+                contentText,
+                expanded,
+                theme,
+            );
         },
     );
 
@@ -1122,7 +671,10 @@ export default function (pi: ExtensionAPI) {
 
             const execStatusMap = new Map<string, boolean>();
 
-            const makeDetails = (result: AgentRunResult): SubagentDetails => ({
+            const makeDetails = (
+                result: AgentRunResult,
+            ): ForegroundSubagentDetails => ({
+                kind: "foreground",
                 result,
                 execStatuses: Object.fromEntries(execStatusMap),
             });
@@ -1134,8 +686,11 @@ export default function (pi: ExtensionAPI) {
                       }
 
                       const items = getDisplayItems(result.messages, execStatusMap);
-                      let lastToolCall: (DisplayItem & { type: "toolCall" }) | null =
-                          null;
+                      let lastToolCall:
+                          | ((typeof items)[number] & {
+                                type: "toolCall";
+                            })
+                          | null = null;
                       for (let i = items.length - 1; i >= 0; i--) {
                           const item = items[i];
                           if (item.type === "toolCall") {
@@ -1177,7 +732,11 @@ export default function (pi: ExtensionAPI) {
                     agent: params.agent,
                     agentSource,
                     task: params.task,
-                    exitCode: 1,
+                    outcome: {
+                        status: "error" as const,
+                        exitCode: 1,
+                        message: msg,
+                    },
                     messages: [],
                     stderr: msg,
                     usage: ZERO_USAGE,
@@ -1248,10 +807,12 @@ export default function (pi: ExtensionAPI) {
 
                 let entry: BackgroundAgent | undefined;
 
-                const bgOnProgress: SubagentProgressCallback = (result) => {
+                const bgOnProgress: SubagentProgressCallback = (result, event) => {
                     if (!entry) return;
                     entry.latestResult = result;
-                    entry.toolCallCount = countToolCalls(result.messages);
+                    if (event.type === "tool_start") {
+                        entry.toolCallCount++;
+                    }
                 };
 
                 const promise = runSubagent(
@@ -1277,7 +838,7 @@ export default function (pi: ExtensionAPI) {
                         agent: resolvedAgent.name,
                         agentSource: resolvedAgent.source,
                         task: params.task,
-                        exitCode: -1,
+                        outcome: { status: "running" },
                         messages: [],
                         stderr: "",
                         usage: createZeroUsage(),
@@ -1288,70 +849,66 @@ export default function (pi: ExtensionAPI) {
                         ),
                     },
                 };
-                backgroundAgents.set(id, entry);
-                updateWidget();
+                bgManager.register(entry);
 
                 // When done, inject result and clean up
-                const injectResult = (
-                    status: "completed" | "failed" | "cancelled",
-                    output: string,
-                    result: AgentRunResult,
-                ) => {
-                    const content = `[Background subagent result — this is NOT a user message. A fire-and-forget background agent "${id}" has been ${status}. ${status === "cancelled" ? "Do not wait for its result." : "Acknowledge briefly or act on the result only if relevant to the current task."}]
-
-${output}`;
-                    pi.sendMessage<SubagentDetails>(
-                        {
-                            customType: BACKGROUND_RESULT_TYPE,
-                            content,
-                            display: true,
-                            details: {
-                                result,
-                                description: params.description,
-                                cancelled: status === "cancelled",
-                            },
-                        },
-                        {
-                            deliverAs: "followUp",
-                            triggerTurn: status !== "cancelled",
-                        },
-                    );
-                };
-
                 promise
                     .then((result) => {
                         const wasCancelled = controller.signal.aborted;
-                        if (backgroundAgents.delete(id)) updateWidget();
-                        if (!sessionActive) return;
+                        bgManager.remove(id);
+                        if (!bgManager.sessionActive) return;
 
                         if (wasCancelled) {
-                            injectResult("cancelled", "(cancelled by user)", result);
+                            bgManager.injectResult(
+                                id,
+                                "cancelled",
+                                "(cancelled by user)",
+                                result,
+                                {
+                                    description: params.description,
+                                    cancelled: true,
+                                },
+                            );
                             return;
                         }
 
                         const isError = isSubagentError(result);
                         const output = isError
-                            ? result.errorMessage ||
+                            ? (result.outcome.status === "error"
+                                  ? result.outcome.message
+                                  : result.outcome.status === "aborted"
+                                    ? result.outcome.message || "(aborted)"
+                                    : "") ||
                               result.stderr ||
                               getFinalOutput(result.messages) ||
                               "(no output)"
                             : getFinalOutput(result.messages) || "(no output)";
-                        injectResult(
+                        bgManager.injectResult(
+                            id,
                             isError ? "failed" : "completed",
                             output,
                             result,
+                            {
+                                description: params.description,
+                                cancelled: false,
+                            },
                         );
                     })
                     .catch((err: unknown) => {
                         const wasCancelled = controller.signal.aborted;
-                        if (backgroundAgents.delete(id)) updateWidget();
-                        if (!sessionActive) return;
+                        bgManager.remove(id);
+                        if (!bgManager.sessionActive) return;
 
                         if (wasCancelled) {
-                            injectResult(
+                            bgManager.injectResult(
+                                id,
                                 "cancelled",
                                 "(cancelled by user)",
                                 entry!.latestResult,
+                                {
+                                    description: params.description,
+                                    cancelled: true,
+                                },
                             );
                             return;
                         }
@@ -1359,16 +916,36 @@ ${output}`;
                         // Pre-spawn or unexpected failure — notify the LLM.
                         const errMsg =
                             err instanceof Error ? err.message : "unknown error";
-                        injectResult("failed", `Failed to start: ${errMsg}`, {
-                            agent: params.agent,
-                            agentSource: resolvedAgent.source,
-                            task: params.task,
-                            exitCode: 1,
-                            messages: [],
-                            stderr: errMsg,
-                            usage: ZERO_USAGE,
-                        });
+                        bgManager.injectResult(
+                            id,
+                            "failed",
+                            `Failed to start: ${errMsg}`,
+                            {
+                                agent: params.agent,
+                                agentSource: resolvedAgent.source,
+                                task: params.task,
+                                outcome: {
+                                    status: "error",
+                                    exitCode: 1,
+                                    message: errMsg,
+                                },
+                                messages: [],
+                                stderr: errMsg,
+                                usage: ZERO_USAGE,
+                            },
+                            {
+                                description: params.description,
+                                cancelled: false,
+                            },
+                        );
                     });
+
+                const bgDetails: BackgroundSubagentDetails = {
+                    kind: "background",
+                    result: entry.latestResult,
+                    description: params.description,
+                    cancelled: false,
+                };
 
                 return {
                     content: [
@@ -1377,10 +954,7 @@ ${output}`;
                             text: `Background agent started: ${id}`,
                         },
                     ],
-                    details: {
-                        ...makeDetails(entry.latestResult),
-                        background: true,
-                    },
+                    details: bgDetails,
                 };
             }
 
@@ -1395,19 +969,28 @@ ${output}`;
                 ctx,
             );
 
-            const isError = isSubagentError(result);
+            const isErr = isSubagentError(result);
 
-            if (isError) {
+            if (isErr) {
                 const errorMsg =
-                    result.errorMessage ||
-                    result.stderr ||
-                    getFinalOutput(result.messages) ||
-                    "(no output)";
+                    result.outcome.status === "error"
+                        ? result.outcome.message
+                        : result.outcome.status === "aborted"
+                          ? result.outcome.message || "(aborted)"
+                          : result.stderr ||
+                            getFinalOutput(result.messages) ||
+                            "(no output)";
+                const stopLabel =
+                    result.outcome.status === "error"
+                        ? result.outcome.stopReason || "failed"
+                        : result.outcome.status === "aborted"
+                          ? "aborted"
+                          : "failed";
                 return {
                     content: [
                         {
                             type: "text",
-                            text: `Agent ${result.stopReason || "failed"}: ${errorMsg}`,
+                            text: `Agent ${stopLabel}: ${errorMsg}`,
                         },
                     ],
                     details: makeDetails(result),
@@ -1439,7 +1022,8 @@ ${output}`;
         },
 
         renderResult(result, { expanded }, theme, _context) {
-            const details = result.details as SubagentDetails | undefined;
+            // Normalize details from possibly old session format
+            const details = normalizeDetails(result.details);
 
             const fallbackText = () => {
                 const text = result.content[0];
@@ -1455,7 +1039,7 @@ ${output}`;
             if (!details) return fallbackText();
 
             // Background agent — show model name, show task when expanded
-            if (details.background) {
+            if (details.kind === "background") {
                 const r = details.result;
                 const modelSuffix = r.model ? theme.fg("muted", ` ${r.model}`) : "";
                 const text = result.content[0];

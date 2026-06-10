@@ -16,13 +16,17 @@ import {
     type BackgroundAgent,
     createZeroUsage,
 } from "../extensions/subagent/index.js";
+import { createBackgroundManager } from "../extensions/subagent/background.js";
+import type { BackgroundManager } from "../extensions/subagent/background.js";
+import { isSubagentError } from "../extensions/subagent/types.js";
+import type { AgentRunResult } from "../extensions/subagent/types.js";
 
-function makeFakeResult(overrides?: Partial<BackgroundAgent["latestResult"]>) {
+function makeFakeResult(overrides?: Partial<AgentRunResult>): AgentRunResult {
     return {
         agent: "scout",
         agentSource: "system" as const,
         task: "do something",
-        exitCode: -1,
+        outcome: { status: "running" },
         messages: [],
         stderr: "",
         usage: createZeroUsage(),
@@ -164,11 +168,11 @@ describe("background agent lifecycle", () => {
         const map = new Map<string, BackgroundAgent>();
         let injectedContent: string | undefined;
 
-        const fakeResult = {
+        const fakeResult: AgentRunResult = {
             agent: "scout",
             agentSource: "system" as const,
             task: "find files",
-            exitCode: 0,
+            outcome: { status: "success" },
             messages: [
                 {
                     role: "assistant" as const,
@@ -177,11 +181,10 @@ describe("background agent lifecycle", () => {
             ],
             stderr: "",
             usage: {
-                input: 100,
-                output: 50,
-                cacheRead: 0,
-                cacheWrite: 0,
-                totalTokens: 150,
+                inputTokens: 100,
+                outputTokens: 50,
+                cacheReadTokens: 0,
+                cacheWriteTokens: 0,
                 contextTokens: 100,
                 cost: {
                     input: 0,
@@ -221,9 +224,7 @@ describe("background agent lifecycle", () => {
             map.delete(entry.id);
             if (!sessionActive) return;
 
-            const isError =
-                result.exitCode !== 0 ||
-                result.agentSource === "unknown"; // simplified check
+            const isError = isSubagentError(result);
             const output = "Found 5 files";
             const status = isError ? "failed" : "completed";
             injectedContent = `[Background agent ${entry.id} ${status}]\n\n${output}`;
@@ -240,21 +241,26 @@ describe("background agent lifecycle", () => {
 
     it("sessionActive=false prevents result injection", async () => {
         let sendMessageCalled = false;
-        let sessionActive = false;
+        const sessionActive = false;
 
-        const fakeResult = {
-            exitCode: 0,
+        const fakeResult: AgentRunResult = {
+            agent: "scout",
+            agentSource: "system",
+            task: "test",
+            outcome: { status: "success" },
             messages: [
                 {
                     role: "assistant" as const,
                     content: [{ type: "text" as const, text: "done" }],
                 },
             ],
+            stderr: "",
+            usage: createZeroUsage(),
         };
 
         const promise = Promise.resolve(fakeResult);
 
-        promise.then((result) => {
+        promise.then((_result) => {
             if (!sessionActive) return;
             sendMessageCalled = true;
         });
@@ -267,11 +273,14 @@ describe("background agent lifecycle", () => {
     it("failed subprocess injects 'failed' status", async () => {
         let injectedContent: string | undefined;
 
-        const fakeResult = {
-            exitCode: 1,
-            stopReason: "error",
-            errorMessage: "spawn ENOENT",
+        const fakeResult: AgentRunResult = {
+            agent: "scout",
+            agentSource: "system",
+            task: "test",
+            outcome: { status: "error", exitCode: 1, stopReason: "error", message: "spawn ENOENT" },
             messages: [] as any[],
+            stderr: "",
+            usage: createZeroUsage(),
         };
 
         const promise = Promise.resolve(fakeResult);
@@ -280,8 +289,7 @@ describe("background agent lifecycle", () => {
         promise.then((result) => {
             if (!sessionActive) return;
 
-            const isError =
-                result.exitCode !== 0 || result.stopReason === "error";
+            const isError = isSubagentError(result);
             const output = "(no output)";
             const status = isError ? "failed" : "completed";
             injectedContent = `[Background agent test-12345678 ${status}]\n\n${output}`;
@@ -422,7 +430,7 @@ describe("widget lifecycle (updateWidget logic)", () => {
             }
 
             statusKey = "subagent-bg";
-            statusValue = `○ ${count} bg`;
+            statusValue = `\u25cb ${count} bg`;
 
             if (!widgetActive) {
                 widgetKey = "subagent-bg";
@@ -453,7 +461,7 @@ describe("widget lifecycle (updateWidget logic)", () => {
 
         expect(state.widgetActive).toBe(true);
         expect(state.widgetKey).toBe("subagent-bg");
-        expect(state.statusValue).toBe("○ 1 bg");
+        expect(state.statusValue).toBe("\u25cb 1 bg");
     });
 
     it("clears widget when last agent completes (1 -> 0)", () => {
@@ -477,7 +485,7 @@ describe("widget lifecycle (updateWidget logic)", () => {
             state.backgroundAgents.set(id, makeFakeEntry({ id, agent: { name: id.split("-")[0], description: "t", systemPrompt: "", source: "system" as const, filePath: "/f.md" } }));
         }
         state.updateWidget();
-        expect(state.statusValue).toBe("○ 3 bg");
+        expect(state.statusValue).toBe("\u25cb 3 bg");
     });
 
     it("does not recreate widget when count goes from 2 -> 1", () => {
@@ -494,7 +502,7 @@ describe("widget lifecycle (updateWidget logic)", () => {
 
         // Widget should still be active (not recreated)
         expect(state.widgetActive).toBe(true);
-        expect(state.statusValue).toBe("○ 1 bg");
+        expect(state.statusValue).toBe("\u25cb 1 bg");
     });
 });
 
@@ -623,5 +631,177 @@ describe("widget render width compliance", () => {
         for (const line of lines) {
             expect(visibleWidth(line)).toBeLessThanOrEqual(5);
         }
+    });
+});
+
+// ── createBackgroundManager tests ────────────────────────────────────
+
+describe("createBackgroundManager", () => {
+    function makeMockPi() {
+        return {
+            sendMessage: vi.fn(),
+        } as any;
+    }
+
+    function makeMockCtx() {
+        return {
+            ui: {
+                setWidget: vi.fn(),
+                setStatus: vi.fn(),
+                theme: {
+                    fg: (_color: string, text: string) => text,
+                },
+            },
+        } as any;
+    }
+
+    it("register updates widget (sets status)", () => {
+        const pi = makeMockPi();
+        const mgr = createBackgroundManager(pi);
+        const ctx = makeMockCtx();
+        mgr.setContext(ctx);
+
+        const entry = makeFakeEntry({ kill: vi.fn() });
+        mgr.register(entry);
+
+        expect(mgr.agents.size).toBe(1);
+        expect(ctx.ui.setStatus).toHaveBeenCalled();
+        expect(ctx.ui.setWidget).toHaveBeenCalled();
+    });
+
+    it("remove clears widget when last agent removed", () => {
+        const pi = makeMockPi();
+        const mgr = createBackgroundManager(pi);
+        const ctx = makeMockCtx();
+        mgr.setContext(ctx);
+
+        const entry = makeFakeEntry({ kill: vi.fn() });
+        mgr.register(entry);
+        ctx.ui.setStatus.mockClear();
+        ctx.ui.setWidget.mockClear();
+
+        mgr.remove(entry.id);
+
+        expect(mgr.agents.size).toBe(0);
+        // When count goes to 0, widget is cleared and status is cleared
+        expect(ctx.ui.setWidget).toHaveBeenCalledWith("subagent-bg", undefined);
+        expect(ctx.ui.setStatus).toHaveBeenCalledWith("subagent-bg", undefined);
+    });
+
+    it("cancel kills and removes, returns false for unknown IDs", () => {
+        const pi = makeMockPi();
+        const mgr = createBackgroundManager(pi);
+        const ctx = makeMockCtx();
+        mgr.setContext(ctx);
+
+        const killFn = vi.fn();
+        const entry = makeFakeEntry({ kill: killFn });
+        mgr.register(entry);
+
+        // Unknown ID returns false
+        expect(mgr.cancel("nonexistent")).toBe(false);
+
+        // Known ID returns true, kills and removes
+        expect(mgr.cancel(entry.id)).toBe(true);
+        expect(killFn).toHaveBeenCalledOnce();
+        expect(mgr.agents.size).toBe(0);
+    });
+
+    it("injectResult sends followUp with triggerTurn: true for completion", () => {
+        const pi = makeMockPi();
+        const mgr = createBackgroundManager(pi);
+        const ctx = makeMockCtx();
+        mgr.setContext(ctx);
+        mgr.setSessionActive(true);
+
+        mgr.injectResult(
+            "test-id",
+            "completed",
+            "output text",
+            makeFakeResult({ outcome: { status: "success" } }),
+            { description: "test task", cancelled: false },
+        );
+
+        expect(pi.sendMessage).toHaveBeenCalledOnce();
+        const [msg, opts] = pi.sendMessage.mock.calls[0];
+        expect(opts.deliverAs).toBe("followUp");
+        expect(opts.triggerTurn).toBe(true);
+        expect(msg.content).toContain("completed");
+    });
+
+    it("injectResult sends triggerTurn: false for cancelled", () => {
+        const pi = makeMockPi();
+        const mgr = createBackgroundManager(pi);
+        const ctx = makeMockCtx();
+        mgr.setContext(ctx);
+        mgr.setSessionActive(true);
+
+        mgr.injectResult(
+            "test-id",
+            "cancelled",
+            "(cancelled by user)",
+            makeFakeResult({ outcome: { status: "success" } }),
+            { description: "test task", cancelled: true },
+        );
+
+        expect(pi.sendMessage).toHaveBeenCalledOnce();
+        const [_msg, opts] = pi.sendMessage.mock.calls[0];
+        expect(opts.triggerTurn).toBe(false);
+    });
+
+    it("shutdown marks inactive and kills/awaits/clears", async () => {
+        const pi = makeMockPi();
+        const mgr = createBackgroundManager(pi);
+        const ctx = makeMockCtx();
+        mgr.setContext(ctx);
+
+        const killFn = vi.fn();
+        const entry = makeFakeEntry({
+            kill: killFn,
+            promise: Promise.resolve(makeFakeResult()) as any,
+        });
+        mgr.register(entry);
+
+        await mgr.shutdown();
+
+        expect(mgr.sessionActive).toBe(false);
+        expect(killFn).toHaveBeenCalledOnce();
+        expect(mgr.agents.size).toBe(0);
+    });
+
+    it("injectResult is a no-op when session is inactive", () => {
+        const pi = makeMockPi();
+        const mgr = createBackgroundManager(pi);
+        mgr.setSessionActive(false);
+
+        mgr.injectResult(
+            "test-id",
+            "completed",
+            "output",
+            makeFakeResult({ outcome: { status: "success" } }),
+        );
+
+        expect(pi.sendMessage).not.toHaveBeenCalled();
+    });
+
+    it("injectResult constructs BackgroundSubagentDetails with kind='background'", () => {
+        const pi = makeMockPi();
+        const mgr = createBackgroundManager(pi);
+        const ctx = makeMockCtx();
+        mgr.setContext(ctx);
+        mgr.setSessionActive(true);
+
+        mgr.injectResult(
+            "bg-id",
+            "completed",
+            "done",
+            makeFakeResult({ outcome: { status: "success" } }),
+            { description: "bg task", cancelled: false },
+        );
+
+        const [msg] = pi.sendMessage.mock.calls[0];
+        expect(msg.details.kind).toBe("background");
+        expect(msg.details.description).toBe("bg task");
+        expect(msg.details.cancelled).toBe(false);
     });
 });
