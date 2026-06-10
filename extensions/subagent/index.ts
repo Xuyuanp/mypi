@@ -35,17 +35,13 @@ import {
 import { Container, Spacer, Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { type AgentConfig, discoverAgents } from "./agents.js";
+import type { BackgroundManager } from "./background.js";
 import { BACKGROUND_RESULT_TYPE, createBackgroundManager } from "./background.js";
 import { registerSubagentCommand } from "./command.js";
 import {
-    formatToolCallPlain,
-    formatUsageStats,
-    getDisplayItems,
     getFinalOutput,
-    ICON_RUNNING,
     renderBackgroundSubagentResult,
     renderSubagentResult,
-    toolStatusIconPlain,
 } from "./render.js";
 import type {
     AgentOutcome,
@@ -537,6 +533,24 @@ async function runSubagent(
 
 // ── Tool schema & description ────────────────────────────────────────
 
+// ── Subagent tool params & types ─────────────────────────────────────
+
+interface SubagentToolParams {
+    agent: string;
+    description: string;
+    task: string;
+    model?: string;
+    cwd?: string;
+    skills?: string[];
+    background?: boolean;
+}
+
+interface ToolResult {
+    content: { type: "text"; text: string }[];
+    details: ForegroundSubagentDetails | BackgroundSubagentDetails;
+    isError?: boolean;
+}
+
 const SubagentParams = Type.Object({
     agent: Type.String({
         description:
@@ -591,6 +605,12 @@ The result is only visible to you. If the user should see it, summarize it yours
 ${agentList}
 </available_agents>
 
+**Writing the \`task\`**
+- The agent starts with zero context — it has not seen this conversation. Brief it like a colleague who just walked into the room: state the goal, list what you already know, hand over the specifics.
+- Lookups (read this file, run that test): put the exact path or command in the prompt. The agent should not have to search for things you already know.
+- Investigations (figure out X, find why Y): give the question, not prescribed steps — fixed steps become dead weight when the premise is wrong.
+- Do not delegate understanding. If the task hinges on a file path or line number, find it yourself first and write it into the prompt.
+
 **Usage of Optional Parameters**
 
 - \`model\`: Set only when the user explicitly requests a specific model; otherwise omit to use the agent default.
@@ -603,6 +623,317 @@ ${agentList}
 - Reading a known file path
 - Searching a small number of known files
 - Tasks that can be completed in one or two direct tool calls`;
+}
+
+// ── Execute helpers ──────────────────────────────────────────────────
+
+/** Extract a human-readable error/output string from a completed agent result. */
+function getResultOutput(result: AgentRunResult): string {
+    if (result.outcome.status === "error") {
+        return (
+            result.outcome.message ||
+            result.stderr ||
+            getFinalOutput(result.messages) ||
+            "(no output)"
+        );
+    }
+    if (result.outcome.status === "aborted") {
+        return (
+            result.outcome.message ||
+            result.stderr ||
+            getFinalOutput(result.messages) ||
+            "(aborted)"
+        );
+    }
+    return getFinalOutput(result.messages) || "(no output)";
+}
+
+type ResolveResult =
+    | { error: ToolResult; agent?: never; session?: never }
+    | {
+          error?: never;
+          agent: AgentConfig;
+          session: { dir: string; id: string } | undefined;
+      };
+
+/**
+ * Validate params and resolve the final AgentConfig + session path.
+ * Returns either a ready-to-use config or an early-error tool result.
+ */
+function resolveAgentConfig(
+    params: SubagentToolParams,
+    agents: AgentConfig[],
+    skillCache: Map<string, Skill>,
+    ctx: ExtensionContext,
+): ResolveResult {
+    const makeErrorResult = (
+        msg: string,
+        agentSource: AgentRunResult["agentSource"],
+    ): ToolResult => ({
+        content: [{ type: "text", text: msg }],
+        details: {
+            kind: "foreground",
+            result: {
+                agent: params.agent,
+                agentSource,
+                task: params.task,
+                outcome: { status: "error", exitCode: 1, message: msg },
+                messages: [],
+                stderr: msg,
+                usage: ZERO_USAGE,
+            },
+            execStatuses: {},
+        },
+        isError: true,
+    });
+
+    const agent = agents.find((a) => a.name === params.agent);
+    if (!agent) {
+        const available = agents.map((a) => `"${a.name}"`).join(", ") || "none";
+        const msg = `Unknown agent: "${params.agent}". Available agents: ${available}.`;
+        return { error: makeErrorResult(msg, "unknown") };
+    }
+
+    const skillNames = params.skills !== undefined ? params.skills : agent.skills;
+    const unresolvedSkills = skillNames?.filter((name) => !skillCache.has(name));
+    if (unresolvedSkills?.length) {
+        const available =
+            skillCache.size > 0
+                ? [...skillCache.keys()].map((n) => `"${n}"`).join(", ")
+                : "none (skill cache empty)";
+        const msg = `Unknown skill${unresolvedSkills.length > 1 ? "s" : ""}: ${unresolvedSkills.map((n) => `"${n}"`).join(", ")}. Available: ${available}.`;
+        return { error: makeErrorResult(msg, agent.source) };
+    }
+    const resolvedSkillPaths = skillNames?.map(
+        (name) => skillCache.get(name)!.filePath,
+    );
+
+    const parentModel = ctx.model
+        ? `${ctx.model.provider}/${ctx.model.id}`
+        : undefined;
+
+    const resolvedAgent: AgentConfig = {
+        ...agent,
+        model: (params.model || undefined) ?? agent.model ?? parentModel,
+        skills: resolvedSkillPaths?.length ? resolvedSkillPaths : undefined,
+    };
+
+    // Persist subagent session alongside the parent session.
+    // Layout: <parent-session-without-ext>/subagent/<name>-<uuid8>.jsonl
+    let session: { dir: string; id: string } | undefined;
+    const parentSessionFile = ctx.sessionManager.getSessionFile();
+    if (parentSessionFile) {
+        const dir = path.resolve(
+            parentSessionFile.slice(0, -".jsonl".length),
+            "subagent",
+        );
+        const safeName = sanitizeAgentName(resolvedAgent.name);
+        const id = `${safeName}-${randomUUID().slice(0, 8)}`;
+        session = { dir, id };
+    }
+
+    return { agent: resolvedAgent, session };
+}
+
+/** Execute a subagent in background (fire-and-forget) mode. */
+function executeBackground(
+    resolvedAgent: AgentConfig,
+    params: SubagentToolParams,
+    session: { dir: string; id: string } | undefined,
+    bgManager: BackgroundManager,
+    ctx: ExtensionContext,
+): ToolResult {
+    const id =
+        session?.id ??
+        `${sanitizeAgentName(resolvedAgent.name)}-${randomUUID().slice(0, 8)}`;
+
+    const controller = new AbortController();
+
+    let entry: BackgroundAgent | undefined;
+
+    const bgOnProgress: SubagentProgressCallback = (result, event) => {
+        if (!entry) return;
+        entry.latestResult = result;
+        if (event.type === "tool_start") {
+            entry.toolCallCount++;
+        }
+    };
+
+    const promise = runSubagent(
+        resolvedAgent,
+        params.task,
+        params.cwd ?? ctx.cwd,
+        controller.signal,
+        bgOnProgress,
+        session,
+        ctx,
+    );
+
+    entry = {
+        id,
+        description: params.description,
+        agent: resolvedAgent,
+        task: params.task,
+        kill: () => controller.abort(),
+        promise,
+        startedAt: Date.now(),
+        toolCallCount: 0,
+        latestResult: {
+            agent: resolvedAgent.name,
+            agentSource: resolvedAgent.source,
+            task: params.task,
+            outcome: { status: "running" },
+            messages: [],
+            stderr: "",
+            usage: createZeroUsage(),
+            model: resolvedAgent.model,
+            contextWindow: resolveContextWindow(resolvedAgent.model, ctx),
+        },
+    };
+    bgManager.register(entry);
+
+    // When done, inject result and clean up
+    promise
+        .then((result) => {
+            const wasCancelled = controller.signal.aborted;
+            bgManager.remove(id);
+            if (!bgManager.sessionActive) return;
+
+            if (wasCancelled) {
+                bgManager.injectResult(
+                    id,
+                    "cancelled",
+                    "(cancelled by user)",
+                    result,
+                    { description: params.description, cancelled: true },
+                );
+                return;
+            }
+
+            bgManager.injectResult(
+                id,
+                isSubagentError(result) ? "failed" : "completed",
+                getResultOutput(result),
+                result,
+                { description: params.description, cancelled: false },
+            );
+        })
+        .catch((err: unknown) => {
+            const wasCancelled = controller.signal.aborted;
+            bgManager.remove(id);
+            if (!bgManager.sessionActive) return;
+
+            if (wasCancelled) {
+                bgManager.injectResult(
+                    id,
+                    "cancelled",
+                    "(cancelled by user)",
+                    entry!.latestResult,
+                    { description: params.description, cancelled: true },
+                );
+                return;
+            }
+
+            // Pre-spawn or unexpected failure — notify the LLM.
+            const errMsg = err instanceof Error ? err.message : "unknown error";
+            bgManager.injectResult(
+                id,
+                "failed",
+                `Failed to start: ${errMsg}`,
+                {
+                    agent: params.agent,
+                    agentSource: resolvedAgent.source,
+                    task: params.task,
+                    outcome: {
+                        status: "error",
+                        exitCode: 1,
+                        message: errMsg,
+                    },
+                    messages: [],
+                    stderr: errMsg,
+                    usage: ZERO_USAGE,
+                },
+                { description: params.description, cancelled: false },
+            );
+        });
+
+    return {
+        content: [{ type: "text", text: `Background agent started: ${id}` }],
+        details: {
+            kind: "background",
+            result: entry.latestResult,
+            description: params.description,
+            cancelled: false,
+        },
+    };
+}
+
+/** Execute a subagent in foreground (blocking) mode. */
+async function executeForeground(
+    resolvedAgent: AgentConfig,
+    params: SubagentToolParams,
+    session: { dir: string; id: string } | undefined,
+    signal: AbortSignal | undefined,
+    onUpdate:
+        | ((update: {
+              content: { type: "text"; text: string }[];
+              details: ForegroundSubagentDetails;
+          }) => void)
+        | undefined,
+    ctx: ExtensionContext,
+): Promise<ToolResult> {
+    const execStatusMap = new Map<string, boolean>();
+
+    const makeDetails = (result: AgentRunResult): ForegroundSubagentDetails => ({
+        kind: "foreground",
+        result,
+        execStatuses: Object.fromEntries(execStatusMap),
+    });
+
+    const onProgress: SubagentProgressCallback | undefined = onUpdate
+        ? (result, event) => {
+              if (event.type === "tool_end") {
+                  execStatusMap.set(event.toolCallId, event.isError);
+              }
+              // Only push updates on events that change rendered state
+              if (event.type === "tool_end" || event.type === "message") {
+                  onUpdate({
+                      content: [{ type: "text", text: "" }],
+                      details: makeDetails(result),
+                  });
+              }
+          }
+        : undefined;
+
+    const result = await runSubagent(
+        resolvedAgent,
+        params.task,
+        params.cwd ?? ctx.cwd,
+        signal,
+        onProgress,
+        session,
+        ctx,
+    );
+
+    if (isSubagentError(result)) {
+        return {
+            content: [
+                { type: "text", text: `Agent failed: ${getResultOutput(result)}` },
+            ],
+            details: makeDetails(result),
+            isError: true,
+        };
+    }
+
+    return {
+        content: [
+            {
+                type: "text",
+                text: getFinalOutput(result.messages) || "(no output)",
+            },
+        ],
+        details: makeDetails(result),
+    };
 }
 
 // ── Extension entry point ────────────────────────────────────────────
@@ -664,346 +995,34 @@ export default function (pi: ExtensionAPI) {
         parameters: SubagentParams,
 
         async execute(_toolCallId, params, signal, onUpdate, ctx) {
-            const agents = discoverAgents().agents;
-
-            const execStatusMap = new Map<string, boolean>();
-
-            const makeDetails = (
-                result: AgentRunResult,
-            ): ForegroundSubagentDetails => ({
-                kind: "foreground",
-                result,
-                execStatuses: Object.fromEntries(execStatusMap),
-            });
-
-            const onProgress: SubagentProgressCallback | undefined = onUpdate
-                ? (result, event) => {
-                      if (event.type === "tool_end") {
-                          execStatusMap.set(event.toolCallId, event.isError);
-                      }
-
-                      const items = getDisplayItems(result.messages, execStatusMap);
-                      let lastToolCall:
-                          | ((typeof items)[number] & {
-                                type: "toolCall";
-                            })
-                          | null = null;
-                      for (let i = items.length - 1; i >= 0; i--) {
-                          const item = items[i];
-                          if (item.type === "toolCall") {
-                              lastToolCall = item;
-                              break;
-                          }
-                      }
-
-                      const lastToolLine = lastToolCall
-                          ? `${toolStatusIconPlain(lastToolCall.status)} ${formatToolCallPlain(lastToolCall.name, lastToolCall.args)}`
-                          : "(running...)";
-
-                      const usageStr = formatUsageStats(result.usage, {
-                          model: result.model,
-                          contextWindow: result.contextWindow,
-                      });
-                      const statusLine = usageStr
-                          ? `${ICON_RUNNING} ${usageStr}`
-                          : ICON_RUNNING;
-
-                      onUpdate({
-                          content: [
-                              {
-                                  type: "text",
-                                  text: `${lastToolLine}\n${statusLine}`,
-                              },
-                          ],
-                          details: makeDetails(result),
-                      });
-                  }
-                : undefined;
-
-            const earlyError = (
-                msg: string,
-                agentSource: AgentRunResult["agentSource"],
-            ) => ({
-                content: [{ type: "text" as const, text: msg }],
-                details: makeDetails({
-                    agent: params.agent,
-                    agentSource,
-                    task: params.task,
-                    outcome: {
-                        status: "error" as const,
-                        exitCode: 1,
-                        message: msg,
-                    },
-                    messages: [],
-                    stderr: msg,
-                    usage: ZERO_USAGE,
-                }),
-                isError: true,
-            });
-
-            const parentModel = ctx.model
-                ? `${ctx.model.provider}/${ctx.model.id}`
-                : undefined;
-
-            const agent = agents.find((a) => a.name === params.agent);
-
-            if (!agent) {
-                const available =
-                    agents.map((a) => `"${a.name}"`).join(", ") || "none";
-                const msg = `Unknown agent: "${params.agent}". Available agents: ${available}.`;
-                return earlyError(msg, "unknown");
-            }
-
-            const skillNames =
-                params.skills !== undefined ? params.skills : agent.skills;
-            const unresolvedSkills = skillNames?.filter(
-                (name) => !skillCache.has(name),
-            );
-            if (unresolvedSkills?.length) {
-                const available =
-                    skillCache.size > 0
-                        ? [...skillCache.keys()].map((n) => `"${n}"`).join(", ")
-                        : "none (skill cache empty)";
-                const msg = `Unknown skill${unresolvedSkills.length > 1 ? "s" : ""}: ${unresolvedSkills.map((n) => `"${n}"`).join(", ")}. Available: ${available}.`;
-                return earlyError(msg, agent.source);
-            }
-            const resolvedSkillPaths = skillNames?.map(
-                (name) => skillCache.get(name)!.filePath,
-            );
-
-            // Note: skills is overwritten from names to resolved file paths
-            // for the subprocess --skill flag.
-            const resolvedAgent: AgentConfig = {
-                ...agent,
-                model: (params.model || undefined) ?? agent.model ?? parentModel,
-                skills: resolvedSkillPaths?.length ? resolvedSkillPaths : undefined,
-            };
-
-            // Persist subagent session alongside the parent session.
-            // Layout: <parent-session-without-ext>/subagent/<name>-<uuid8>.jsonl
-            // (Pi prepends its own timestamp to the filename.)
-            let session: { dir: string; id: string } | undefined;
-            const parentSessionFile = ctx.sessionManager.getSessionFile();
-            if (parentSessionFile) {
-                const dir = path.resolve(
-                    parentSessionFile.slice(0, -".jsonl".length),
-                    "subagent",
-                );
-                const safeName = sanitizeAgentName(resolvedAgent.name);
-                const id = `${safeName}-${randomUUID().slice(0, 8)}`;
-                session = { dir, id };
-            }
-
-            // ── Background mode ──────────────────────────────────────
-            if (params.background) {
-                const id =
-                    session?.id ??
-                    `${sanitizeAgentName(resolvedAgent.name)}-${randomUUID().slice(0, 8)}`;
-
-                const controller = new AbortController();
-
-                let entry: BackgroundAgent | undefined;
-
-                const bgOnProgress: SubagentProgressCallback = (result, event) => {
-                    if (!entry) return;
-                    entry.latestResult = result;
-                    if (event.type === "tool_start") {
-                        entry.toolCallCount++;
-                    }
-                };
-
-                const promise = runSubagent(
-                    resolvedAgent,
-                    params.task,
-                    params.cwd ?? ctx.cwd,
-                    controller.signal,
-                    bgOnProgress,
-                    session,
-                    ctx,
-                );
-
-                entry = {
-                    id,
-                    description: params.description,
-                    agent: resolvedAgent,
-                    task: params.task,
-                    kill: () => controller.abort(),
-                    promise,
-                    startedAt: Date.now(),
-                    toolCallCount: 0,
-                    latestResult: {
-                        agent: resolvedAgent.name,
-                        agentSource: resolvedAgent.source,
-                        task: params.task,
-                        outcome: { status: "running" },
-                        messages: [],
-                        stderr: "",
-                        usage: createZeroUsage(),
-                        model: resolvedAgent.model,
-                        contextWindow: resolveContextWindow(
-                            resolvedAgent.model,
-                            ctx,
-                        ),
-                    },
-                };
-                bgManager.register(entry);
-
-                // When done, inject result and clean up
-                promise
-                    .then((result) => {
-                        const wasCancelled = controller.signal.aborted;
-                        bgManager.remove(id);
-                        if (!bgManager.sessionActive) return;
-
-                        if (wasCancelled) {
-                            bgManager.injectResult(
-                                id,
-                                "cancelled",
-                                "(cancelled by user)",
-                                result,
-                                {
-                                    description: params.description,
-                                    cancelled: true,
-                                },
-                            );
-                            return;
-                        }
-
-                        const isError = isSubagentError(result);
-                        const output = isError
-                            ? (result.outcome.status === "error"
-                                  ? result.outcome.message
-                                  : result.outcome.status === "aborted"
-                                    ? result.outcome.message || "(aborted)"
-                                    : "") ||
-                              result.stderr ||
-                              getFinalOutput(result.messages) ||
-                              "(no output)"
-                            : getFinalOutput(result.messages) || "(no output)";
-                        bgManager.injectResult(
-                            id,
-                            isError ? "failed" : "completed",
-                            output,
-                            result,
-                            {
-                                description: params.description,
-                                cancelled: false,
-                            },
-                        );
-                    })
-                    .catch((err: unknown) => {
-                        const wasCancelled = controller.signal.aborted;
-                        bgManager.remove(id);
-                        if (!bgManager.sessionActive) return;
-
-                        if (wasCancelled) {
-                            bgManager.injectResult(
-                                id,
-                                "cancelled",
-                                "(cancelled by user)",
-                                entry!.latestResult,
-                                {
-                                    description: params.description,
-                                    cancelled: true,
-                                },
-                            );
-                            return;
-                        }
-
-                        // Pre-spawn or unexpected failure — notify the LLM.
-                        const errMsg =
-                            err instanceof Error ? err.message : "unknown error";
-                        bgManager.injectResult(
-                            id,
-                            "failed",
-                            `Failed to start: ${errMsg}`,
-                            {
-                                agent: params.agent,
-                                agentSource: resolvedAgent.source,
-                                task: params.task,
-                                outcome: {
-                                    status: "error",
-                                    exitCode: 1,
-                                    message: errMsg,
-                                },
-                                messages: [],
-                                stderr: errMsg,
-                                usage: ZERO_USAGE,
-                            },
-                            {
-                                description: params.description,
-                                cancelled: false,
-                            },
-                        );
-                    });
-
-                const bgDetails: BackgroundSubagentDetails = {
-                    kind: "background",
-                    result: entry.latestResult,
-                    description: params.description,
-                    cancelled: false,
-                };
-
-                return {
-                    content: [
-                        {
-                            type: "text",
-                            text: `Background agent started: ${id}`,
-                        },
-                    ],
-                    details: bgDetails,
-                };
-            }
-
-            // ── Foreground mode (default) ────────────────────────────
-            const result = await runSubagent(
-                resolvedAgent,
-                params.task,
-                params.cwd ?? ctx.cwd,
-                signal,
-                onProgress,
-                session,
+            const resolved = resolveAgentConfig(
+                params,
+                discoverAgents().agents,
+                skillCache,
                 ctx,
             );
+            if (resolved.error) return resolved.error;
 
-            const isErr = isSubagentError(result);
+            const { agent: resolvedAgent, session } = resolved;
 
-            if (isErr) {
-                const errorMsg =
-                    result.outcome.status === "error"
-                        ? result.outcome.message
-                        : result.outcome.status === "aborted"
-                          ? result.outcome.message || "(aborted)"
-                          : result.stderr ||
-                            getFinalOutput(result.messages) ||
-                            "(no output)";
-                const stopLabel =
-                    result.outcome.status === "error"
-                        ? result.outcome.stopReason || "failed"
-                        : result.outcome.status === "aborted"
-                          ? "aborted"
-                          : "failed";
-                return {
-                    content: [
-                        {
-                            type: "text",
-                            text: `Agent ${stopLabel}: ${errorMsg}`,
-                        },
-                    ],
-                    details: makeDetails(result),
-                    isError: true,
-                };
+            if (params.background) {
+                return executeBackground(
+                    resolvedAgent,
+                    params,
+                    session,
+                    bgManager,
+                    ctx,
+                );
             }
 
-            return {
-                content: [
-                    {
-                        type: "text",
-                        text: getFinalOutput(result.messages) || "(no output)",
-                    },
-                ],
-                details: makeDetails(result),
-            };
+            return executeForeground(
+                resolvedAgent,
+                params,
+                session,
+                signal,
+                onUpdate,
+                ctx,
+            );
         },
 
         renderCall(args, theme, _context) {
