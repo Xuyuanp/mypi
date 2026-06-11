@@ -70,6 +70,7 @@ export interface ForegroundSubagentDetails {
     kind: "foreground";
     result: AgentRunResult;
     execStatuses: Record<string, boolean>;
+    session?: { dir: string; id: string };
 }
 
 export interface BackgroundSubagentDetails {
@@ -77,6 +78,7 @@ export interface BackgroundSubagentDetails {
     result: AgentRunResult;
     description: string;
     cancelled: boolean;
+    session?: { dir: string; id: string };
 }
 
 export type SubagentDetails = ForegroundSubagentDetails | BackgroundSubagentDetails;
