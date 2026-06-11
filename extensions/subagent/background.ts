@@ -249,7 +249,10 @@ export function createBackgroundManager(pi: ExtensionAPI): BackgroundManager {
             details?: Omit<BackgroundSubagentDetails, "result" | "kind">,
         ): void {
             if (!active) return;
-            const content = `[Background subagent result \u2014 this is NOT a user message. A fire-and-forget background agent "${id}" has been ${status}. ${status === "cancelled" ? "Do not wait for its result." : "Acknowledge briefly or act on the result only if relevant to the current task."}]\n\n${output}`;
+            const sessionHeader = details?.session
+                ? `[subagent: ${details.session.id}]\n\n`
+                : "";
+            const content = `${sessionHeader}[Background subagent result \u2014 this is NOT a user message. A fire-and-forget background agent "${id}" has been ${status}. ${status === "cancelled" ? "Do not wait for its result." : "Acknowledge briefly or act on the result only if relevant to the current task."}]\n\n${output}`;
             pi.sendMessage<SubagentDetails>(
                 {
                     customType: BACKGROUND_RESULT_TYPE,
@@ -260,6 +263,7 @@ export function createBackgroundManager(pi: ExtensionAPI): BackgroundManager {
                         result,
                         description: details?.description ?? "(unknown)",
                         cancelled: details?.cancelled ?? false,
+                        session: details?.session,
                     },
                 },
                 {

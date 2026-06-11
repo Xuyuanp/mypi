@@ -622,7 +622,9 @@ ${agentList}
 
 - Reading a known file path
 - Searching a small number of known files
-- Tasks that can be completed in one or two direct tool calls`;
+- Tasks that can be completed in one or two direct tool calls
+
+Each completed subagent can be resumed via subagent_resume using the subagent ID shown in the result.`;
 }
 
 // ── Execute helpers ──────────────────────────────────────────────────
@@ -805,7 +807,7 @@ function executeBackground(
                     "cancelled",
                     "(cancelled by user)",
                     result,
-                    { description: params.description, cancelled: true },
+                    { description: params.description, cancelled: true, session },
                 );
                 return;
             }
@@ -815,7 +817,7 @@ function executeBackground(
                 isSubagentError(result) ? "failed" : "completed",
                 getResultOutput(result),
                 result,
-                { description: params.description, cancelled: false },
+                { description: params.description, cancelled: false, session },
             );
         })
         .catch((err: unknown) => {
@@ -829,7 +831,7 @@ function executeBackground(
                     "cancelled",
                     "(cancelled by user)",
                     entry!.latestResult,
-                    { description: params.description, cancelled: true },
+                    { description: params.description, cancelled: true, session },
                 );
                 return;
             }
@@ -853,17 +855,24 @@ function executeBackground(
                     stderr: errMsg,
                     usage: ZERO_USAGE,
                 },
-                { description: params.description, cancelled: false },
+                { description: params.description, cancelled: false, session },
             );
         });
 
+    const startedHeader = session ? `[subagent: ${session.id}]\n\n` : "";
     return {
-        content: [{ type: "text", text: `Background agent started: ${id}` }],
+        content: [
+            {
+                type: "text",
+                text: `${startedHeader}Background agent started: ${id}`,
+            },
+        ],
         details: {
             kind: "background",
             result: entry.latestResult,
             description: params.description,
             cancelled: false,
+            session,
         },
     };
 }
@@ -888,6 +897,7 @@ async function executeForeground(
         kind: "foreground",
         result,
         execStatuses: Object.fromEntries(execStatusMap),
+        session,
     });
 
     const onProgress: SubagentProgressCallback | undefined = onUpdate
@@ -915,10 +925,15 @@ async function executeForeground(
         ctx,
     );
 
+    const sessionHeader = session ? `[subagent: ${session.id}]\n\n` : "";
+
     if (isSubagentError(result)) {
         return {
             content: [
-                { type: "text", text: `Agent failed: ${getResultOutput(result)}` },
+                {
+                    type: "text",
+                    text: `${sessionHeader}Agent failed: ${getResultOutput(result)}`,
+                },
             ],
             details: makeDetails(result),
             isError: true,
@@ -929,7 +944,7 @@ async function executeForeground(
         content: [
             {
                 type: "text",
-                text: getFinalOutput(result.messages) || "(no output)",
+                text: `${sessionHeader}${getFinalOutput(result.messages) || "(no output)"}`,
             },
         ],
         details: makeDetails(result),
