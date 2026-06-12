@@ -463,8 +463,8 @@ describe("renderSubagentResult", () => {
         const rendered = component.render(80);
         expect(rendered.length).toBeGreaterThan(0);
         const text = rendered.join("\n");
-        expect(text).toContain("bash");
-        expect(text).toContain("read");
+        // Completed foreground shows final output preview, not tool calls
+        expect(text).toContain("Done");
         expect(text).toContain("1 turn");
     });
 

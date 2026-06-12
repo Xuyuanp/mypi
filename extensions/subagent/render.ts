@@ -327,36 +327,142 @@ export function countToolCalls(messages: Message[]): number {
 
 // ── Result renderer ──────────────────────────────────────────────────
 
-/**
- * Unified renderer for subagent results (foreground + background).
- *
- * Renders a header line, tool calls, output, and usage — adapting
- * layout and wrapper based on `details.kind`.
- *
- * - Foreground: bare Container/Text, tool calls with per-call status icons.
- * - Background: Box with colored background, output preview when collapsed.
- */
-export function renderSubagentResult(
-    details: SubagentDetails,
-    expanded: boolean,
-    theme: {
-        fg: ThemeFg;
-        bg?: ThemeBgFn;
-        bold: (text: string) => string;
-    },
-): Container | Box | Text {
-    const r = details.result;
-    const isForeground = details.kind === "foreground";
-    const isCancelled =
-        !isForeground && (details as BackgroundSubagentDetails).cancelled;
-    const isRunning = r.outcome.status === "running";
-    const isError = !isRunning && !isCancelled && isSubagentError(r);
+interface RenderTheme {
+    fg: ThemeFg;
+    bg?: ThemeBgFn;
+    bold: (text: string) => string;
+}
 
-    // ── Header ───────────────────────────────────────────────────────
-    const agentName = r.agent || "...";
-    const agentId = details.session?.id;
-    const prefix = isForeground ? "subagent " : "background agent ";
-    const status = isRunning
+/** Build the background Box wrapper function based on error/cancel state. */
+function resolveBgFn(
+    isCancelled: boolean,
+    isError: boolean,
+    theme: RenderTheme,
+): ((t: string) => string) | undefined {
+    if (!theme.bg) return undefined;
+    return isCancelled || isError
+        ? (t: string) => theme.bg!("toolErrorBg", t)
+        : (t: string) => theme.bg!("toolSuccessBg", t);
+}
+
+/** Create the appropriate container: Box (with bg) or plain Container. */
+function makeContainer(bgFn: ((t: string) => string) | undefined): Box | Container {
+    return bgFn ? new Box(1, 1, bgFn) : new Container();
+}
+
+/** Append expanded content (Task + Output + tools + markdown + usage) to a container. */
+function appendExpandedContent(
+    container: Box | Container,
+    task: string,
+    toolCallItems: (DisplayItem & { type: "toolCall" })[],
+    finalOutput: string,
+    lastLine: string,
+    theme: RenderTheme,
+): void {
+    const mdTheme = getMarkdownTheme();
+    container.addChild(
+        new Text(
+            theme.fg("muted", "\u2500\u2500\u2500 Task \u2500\u2500\u2500"),
+            0,
+            0,
+        ),
+    );
+    container.addChild(new Text(theme.fg("dim", task), 0, 0));
+    container.addChild(new Spacer(1));
+    container.addChild(
+        new Text(
+            theme.fg("muted", "\u2500\u2500\u2500 Output \u2500\u2500\u2500"),
+            0,
+            0,
+        ),
+    );
+    if (toolCallItems.length === 0 && !finalOutput) {
+        container.addChild(new Text(theme.fg("muted", "(no output)"), 0, 0));
+    } else {
+        for (const item of toolCallItems) {
+            const icon = toolStatusIcon(item.status, theme);
+            container.addChild(
+                new Text(
+                    ` ${icon} ${formatToolCall(item.name, item.args, theme.fg.bind(theme))}`,
+                    0,
+                    0,
+                ),
+            );
+        }
+        if (finalOutput) {
+            container.addChild(new Spacer(1));
+            container.addChild(new Markdown(finalOutput.trim(), 0, 0, mdTheme));
+        }
+    }
+    container.addChild(new Spacer(1));
+    container.addChild(new Text(theme.fg("dim", lastLine), 0, 0));
+}
+
+/** Build collapsed output preview text (first 3 lines + expand hint). */
+function buildOutputPreview(finalOutput: string, theme: RenderTheme): string {
+    const output = finalOutput || "(no output)";
+    const lines = output.trim().split("\n");
+    const truncated = lines.length > 3;
+    let text = lines.slice(0, 3).join("\n");
+    if (truncated) {
+        text += `\n${theme.fg("muted", "... ctrl-o to expand")}`;
+    }
+    return text;
+}
+
+/** Build collapsed tool call text (last 3 with status icons). */
+function buildRecentToolCallsText(
+    toolCallItems: (DisplayItem & { type: "toolCall" })[],
+    theme: RenderTheme,
+): string {
+    const recent = toolCallItems.slice(-3);
+    let text = "";
+    for (const item of recent) {
+        if (text) text += "\n";
+        const icon = toolStatusIcon(item.status, theme);
+        text += ` ${icon} ${formatToolCall(item.name, item.args, theme.fg.bind(theme))}`;
+    }
+    return text;
+}
+
+/** Render the background-running state (header + model + optional task). */
+function renderBackgroundRunning(
+    headerText: string,
+    result: AgentRunResult,
+    expanded: boolean,
+    bgFn: ((t: string) => string) | undefined,
+    theme: RenderTheme,
+): Box | Container {
+    const box = makeContainer(bgFn);
+    box.addChild(new Text(headerText, 0, 0));
+    if (result.model) {
+        box.addChild(new Spacer(1));
+        box.addChild(new Text(theme.fg("muted", result.model), 0, 0));
+    }
+    if (expanded && result.task) {
+        box.addChild(new Spacer(1));
+        box.addChild(
+            new Text(
+                theme.fg("muted", "\u2500\u2500\u2500 Task \u2500\u2500\u2500"),
+                0,
+                0,
+            ),
+        );
+        box.addChild(new Text(theme.fg("dim", result.task), 0, 0));
+    }
+    return box;
+}
+
+/** Build background header text line. */
+function buildBackgroundHeader(
+    details: BackgroundSubagentDetails,
+    isRunning: boolean,
+    isCancelled: boolean,
+    isError: boolean,
+    theme: RenderTheme,
+): string {
+    const agentName = details.result.agent || "...";
+    const statusLabel = isRunning
         ? "running"
         : isCancelled
           ? "cancelled"
@@ -370,72 +476,84 @@ export function renderSubagentResult(
           : isError
             ? "error"
             : "success";
-    const desc = isForeground
-        ? ""
-        : (details as BackgroundSubagentDetails).description || "...";
-    const headerText =
-        theme.fg("toolTitle", theme.bold(prefix)) +
+    const desc = details.description || "...";
+    return (
+        theme.fg("toolTitle", theme.bold("background agent ")) +
         theme.fg("text", agentName) +
-        (agentId ? theme.fg("dim", `(${agentId})`) : "") +
-        theme.fg(statusColor, ` [${status}]`) +
-        (desc ? theme.fg("dim", ` ${desc}`) : "");
+        theme.fg(statusColor, ` [${statusLabel}]`) +
+        theme.fg("dim", ` ${desc}`)
+    );
+}
+
+/**
+ * Unified renderer for subagent results (foreground + background).
+ *
+ * Dispatches to focused helpers based on kind, state, and expanded flag.
+ * Background results get a colored Box wrapper and header line;
+ * foreground results render bare (renderCall provides the header).
+ */
+export function renderSubagentResult(
+    details: SubagentDetails,
+    expanded: boolean,
+    theme: RenderTheme,
+): Container | Box | Text {
+    const r = details.result;
+    const isForeground = details.kind === "foreground";
+    const isCancelled =
+        !isForeground && (details as BackgroundSubagentDetails).cancelled;
+    const isRunning = r.outcome.status === "running";
+    const isError = !isRunning && !isCancelled && isSubagentError(r);
 
     // ── Shared data ──────────────────────────────────────────────────
+    const agentId = details.session?.id;
+    const execStatusMap = isForeground
+        ? new Map(
+              Object.entries((details as ForegroundSubagentDetails).execStatuses),
+          )
+        : undefined;
+    const displayItems = getDisplayItems(r.messages, execStatusMap);
+    const toolCallItems = displayItems.filter(
+        (i) => i.type === "toolCall",
+    ) as (DisplayItem & { type: "toolCall" })[];
+    const rawLastLine = buildLastLine(r, toolCallItems.length);
+    const lastLine = agentId ? `${agentId} ${rawLastLine}` : rawLastLine;
     const finalOutput = getFinalOutput(r.messages);
-    const mdTheme = getMarkdownTheme();
 
-    // ── Background wrapper ───────────────────────────────────────────
+    // ── Background agent ─────────────────────────────────────────────
     if (!isForeground) {
-        const lastLine = buildLastLine(r, countToolCalls(r.messages));
-        const bgFn =
-            theme.bg && (isCancelled || isError)
-                ? (t: string) => theme.bg!("toolErrorBg", t)
-                : theme.bg
-                  ? (t: string) => theme.bg!("toolSuccessBg", t)
-                  : undefined;
-
-        const box = bgFn ? new Box(1, 1, bgFn) : new Container();
-        box.addChild(new Text(headerText, 0, 0));
+        const bgFn = resolveBgFn(isCancelled, isError, theme);
+        const headerText = buildBackgroundHeader(
+            details as BackgroundSubagentDetails,
+            isRunning,
+            isCancelled,
+            isError,
+            theme,
+        );
 
         if (isRunning) {
-            // In-progress background agent — show model + task
-            const modelLine = r.model ? theme.fg("muted", r.model) : "";
-            if (modelLine) {
-                box.addChild(new Spacer(1));
-                box.addChild(new Text(modelLine, 0, 0));
-            }
-            if (expanded && r.task) {
-                box.addChild(new Spacer(1));
-                box.addChild(
-                    new Text(
-                        theme.fg(
-                            "muted",
-                            "\u2500\u2500\u2500 Task \u2500\u2500\u2500",
-                        ),
-                        0,
-                        0,
-                    ),
-                );
-                box.addChild(new Text(theme.fg("dim", r.task), 0, 0));
-            }
-            return box;
+            return renderBackgroundRunning(headerText, r, expanded, bgFn, theme);
         }
 
-        box.addChild(new Spacer(1));
-        const output = finalOutput || "(no output)";
         if (expanded) {
-            box.addChild(new Markdown(output.trim(), 0, 0, mdTheme));
-        } else {
-            const lines = output.trim().split("\n");
-            const truncated = lines.length > 3;
-            const preview = lines.slice(0, 3).join("\n");
-            box.addChild(new Text(preview, 0, 0));
-            if (truncated) {
-                box.addChild(
-                    new Text(theme.fg("muted", "... ctrl-o to expand"), 0, 0),
-                );
-            }
+            const container = makeContainer(bgFn);
+            container.addChild(new Text(headerText, 0, 0));
+            container.addChild(new Spacer(1));
+            appendExpandedContent(
+                container,
+                r.task,
+                toolCallItems,
+                finalOutput,
+                lastLine,
+                theme,
+            );
+            return container;
         }
+
+        // Background collapsed
+        const box = makeContainer(bgFn);
+        box.addChild(new Text(headerText, 0, 0));
+        box.addChild(new Spacer(1));
+        box.addChild(new Text(buildOutputPreview(finalOutput, theme), 0, 0));
         if (lastLine) {
             box.addChild(new Spacer(1));
             box.addChild(new Text(theme.fg("dim", lastLine), 0, 0));
@@ -443,70 +561,27 @@ export function renderSubagentResult(
         return box;
     }
 
-    // ── Foreground ───────────────────────────────────────────────────
-    const execStatusMap = new Map(
-        Object.entries((details as ForegroundSubagentDetails).execStatuses),
-    );
-    const displayItems = getDisplayItems(r.messages, execStatusMap);
-    const toolCallItems = displayItems.filter(
-        (i) => i.type === "toolCall",
-    ) as (DisplayItem & { type: "toolCall" })[];
-    const lastLine = buildLastLine(r, toolCallItems.length);
-
+    // ── Foreground expanded ──────────────────────────────────────────
     if (expanded) {
         const container = new Container();
-        container.addChild(
-            new Text(
-                theme.fg("muted", "\u2500\u2500\u2500 Task \u2500\u2500\u2500"),
-                0,
-                0,
-            ),
+        appendExpandedContent(
+            container,
+            r.task,
+            toolCallItems,
+            finalOutput,
+            lastLine,
+            theme,
         );
-        container.addChild(new Text(theme.fg("dim", r.task), 0, 0));
-        container.addChild(new Spacer(1));
-        container.addChild(
-            new Text(
-                theme.fg("muted", "\u2500\u2500\u2500 Output \u2500\u2500\u2500"),
-                0,
-                0,
-            ),
-        );
-        if (toolCallItems.length === 0 && !finalOutput) {
-            container.addChild(new Text(theme.fg("muted", "(no output)"), 0, 0));
-        } else {
-            for (const item of toolCallItems) {
-                const icon = toolStatusIcon(item.status, theme);
-                container.addChild(
-                    new Text(
-                        ` ${icon} ` +
-                            formatToolCall(
-                                item.name,
-                                item.args,
-                                theme.fg.bind(theme),
-                            ),
-                        0,
-                        0,
-                    ),
-                );
-            }
-            if (finalOutput) {
-                container.addChild(new Spacer(1));
-                container.addChild(new Markdown(finalOutput.trim(), 0, 0, mdTheme));
-            }
-        }
-        container.addChild(new Spacer(1));
-        container.addChild(new Text(theme.fg("dim", lastLine), 0, 0));
         return container;
     }
 
     // ── Foreground collapsed ─────────────────────────────────────────
-    const recentToolCalls = toolCallItems.slice(-3);
-    let text = "";
-    for (const item of recentToolCalls) {
-        if (text) text += "\n";
-        const icon = toolStatusIcon(item.status, theme);
-        text += ` ${icon} ${formatToolCall(item.name, item.args, theme.fg.bind(theme))}`;
-    }
+    const isCompleted = !isRunning && !isError;
+    let text =
+        isCompleted && finalOutput
+            ? buildOutputPreview(finalOutput, theme)
+            : buildRecentToolCallsText(toolCallItems, theme);
+
     if (isError) {
         const errorMsg =
             r.outcome.status === "error"

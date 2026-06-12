@@ -1263,10 +1263,18 @@ export default function (pi: ExtensionAPI) {
 
         renderCall(args, theme, _context) {
             const sessionId = args.id || "...";
+            const agentName = sessionId.replace(/-[^-]+$/, "") || sessionId;
+            const rawFollowUp = args.follow_up
+                ? args.follow_up.replace(/\s+/g, " ").trim()
+                : "...";
+            const followUp =
+                rawFollowUp.length > 60
+                    ? `${rawFollowUp.slice(0, 60)}...`
+                    : rawFollowUp;
             const text =
                 theme.fg("toolTitle", theme.bold("subagent_resume ")) +
-                theme.fg("text", sessionId) +
-                theme.fg("muted", " (resumed)");
+                theme.fg("text", agentName) +
+                theme.fg("dim", ` ${followUp}`);
             return new Text(text, 0, 0);
         },
 
