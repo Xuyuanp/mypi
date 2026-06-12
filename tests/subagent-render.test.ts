@@ -3,7 +3,7 @@
  *
  * Covers: formatTokens, formatDuration, formatUsageStats, buildLastLine,
  * formatToolCallPlain, getDisplayItems, getFinalOutput, countToolCalls,
- * renderSubagentResult, renderBackgroundSubagentResult,
+ * renderSubagentResult (foreground + background),
  * AgentOutcome variants, isSubagentError, SubagentDetails discriminated union.
  */
 
@@ -18,7 +18,6 @@ import {
     formatUsageStats,
     getDisplayItems,
     getFinalOutput,
-    renderBackgroundSubagentResult,
     renderSubagentResult,
 } from "../extensions/subagent/render.js";
 import { createZeroUsage, isSubagentError } from "../extensions/subagent/types.js";
@@ -504,10 +503,10 @@ describe("renderSubagentResult", () => {
     });
 });
 
-// ── renderBackgroundSubagentResult ───────────────────────────────────
+// ── renderSubagentResult (background) ─────────────────────────────────
 
-describe("renderBackgroundSubagentResult", () => {
-    it("renders completed result with success styling", () => {
+describe("renderSubagentResult (background)", () => {
+    it("renders completed result with header and output", () => {
         const messages: Message[] = [
             {
                 role: "assistant",
@@ -525,15 +524,10 @@ describe("renderBackgroundSubagentResult", () => {
             cancelled: false,
         };
 
-        const component = renderBackgroundSubagentResult(
-            details,
-            "content text",
-            false,
-            makeTheme(),
-        );
+        const component = renderSubagentResult(details, false, makeTheme());
         const rendered = component.render(80);
         const text = rendered.join("\n");
-        expect(text).toContain("subagent");
+        expect(text).toContain("background agent");
         expect(text).toContain("[completed]");
         expect(text).toContain("find files");
     });
@@ -546,27 +540,31 @@ describe("renderBackgroundSubagentResult", () => {
             cancelled: true,
         };
 
-        const component = renderBackgroundSubagentResult(
-            details,
-            "(cancelled)",
-            false,
-            makeTheme(),
-        );
+        const component = renderSubagentResult(details, false, makeTheme());
         const rendered = component.render(80);
         const text = rendered.join("\n");
         expect(text).toContain("[cancelled]");
         expect(text).toContain("cancelled task");
     });
 
-    it("falls back to content text when details is undefined", () => {
-        const component = renderBackgroundSubagentResult(
-            undefined,
-            "fallback content",
-            false,
-            makeTheme(),
-        );
+    it("renders running state with model info", () => {
+        const details: BackgroundSubagentDetails = {
+            kind: "background",
+            result: makeResult({
+                outcome: { status: "running" },
+                model: "deepseek/deepseek-v4-flash",
+                task: "explore codebase",
+            }),
+            description: "find files",
+            cancelled: false,
+        };
+
+        const component = renderSubagentResult(details, false, makeTheme());
         const rendered = component.render(80);
-        expect(rendered.join("\n")).toContain("fallback content");
+        const text = rendered.join("\n");
+        expect(text).toContain("background agent");
+        expect(text).toContain("[running]");
+        expect(text).toContain("deepseek/deepseek-v4-flash");
     });
 });
 
