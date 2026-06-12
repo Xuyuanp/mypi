@@ -38,11 +38,8 @@ import { type AgentConfig, discoverAgents } from "./agents.js";
 import type { BackgroundManager } from "./background.js";
 import { BACKGROUND_RESULT_TYPE, createBackgroundManager } from "./background.js";
 import { registerSubagentCommand } from "./command.js";
-import {
-    getFinalOutput,
-    renderBackgroundSubagentResult,
-    renderSubagentResult,
-} from "./render.js";
+import { getFinalOutput, renderSubagentResult } from "./render.js";
+import { lookupSubagentSession } from "./resume.js";
 import type {
     AgentOutcome,
     AgentRunResult,
@@ -331,6 +328,7 @@ async function runSubagent(
     onProgress: SubagentProgressCallback | undefined,
     session: { dir: string; id: string } | undefined,
     ctx: ExtensionContext,
+    resume?: boolean,
 ): Promise<AgentRunResult> {
     const args: string[] = [
         "--mode",
@@ -342,7 +340,7 @@ async function runSubagent(
     ];
 
     if (session) {
-        args.push("--session-dir", session.dir, "--session-id", session.id);
+        args.push("--session", path.join(session.dir, `${session.id}.jsonl`));
     } else {
         args.push("--no-session");
     }
@@ -394,7 +392,7 @@ async function runSubagent(
         tmpPromptPath = await writePromptToTempFile(agent.name, fullSystemPrompt);
         args.push("--append-system-prompt", tmpPromptPath);
 
-        args.push(`Task: ${task}`);
+        args.push(resume ? task : `Task: ${task}`);
         let wasAborted = false;
 
         const exitCode = await new Promise<number>((resolve) => {
@@ -650,6 +648,29 @@ function getResultOutput(result: AgentRunResult): string {
     return getFinalOutput(result.messages) || "(no output)";
 }
 
+/**
+ * Resolve skill names to absolute file paths via the skill cache.
+ * Returns resolved paths, or an error message if any skill is unknown.
+ */
+function resolveSkills(
+    skillNames: string[] | undefined,
+    skillCache: Map<string, Skill>,
+):
+    | { paths: string[] | undefined; error?: never }
+    | { error: string; paths?: never } {
+    if (!skillNames?.length) return { paths: undefined };
+    const unresolved = skillNames.filter((name) => !skillCache.has(name));
+    if (unresolved.length) {
+        const available =
+            skillCache.size > 0
+                ? [...skillCache.keys()].map((n) => `"${n}"`).join(", ")
+                : "none (skill cache empty)";
+        const msg = `Unknown skill${unresolved.length > 1 ? "s" : ""}: ${unresolved.map((n) => `"${n}"`).join(", ")}. Available: ${available}.`;
+        return { error: msg };
+    }
+    return { paths: skillNames.map((name) => skillCache.get(name)!.filePath) };
+}
+
 type ResolveResult =
     | { error: ToolResult; agent?: never; session?: never }
     | {
@@ -697,18 +718,10 @@ function resolveAgentConfig(
     }
 
     const skillNames = params.skills !== undefined ? params.skills : agent.skills;
-    const unresolvedSkills = skillNames?.filter((name) => !skillCache.has(name));
-    if (unresolvedSkills?.length) {
-        const available =
-            skillCache.size > 0
-                ? [...skillCache.keys()].map((n) => `"${n}"`).join(", ")
-                : "none (skill cache empty)";
-        const msg = `Unknown skill${unresolvedSkills.length > 1 ? "s" : ""}: ${unresolvedSkills.map((n) => `"${n}"`).join(", ")}. Available: ${available}.`;
-        return { error: makeErrorResult(msg, agent.source) };
+    const skillResult = resolveSkills(skillNames, skillCache);
+    if (skillResult.error) {
+        return { error: makeErrorResult(skillResult.error, agent.source) };
     }
-    const resolvedSkillPaths = skillNames?.map(
-        (name) => skillCache.get(name)!.filePath,
-    );
 
     const parentModel = ctx.model
         ? `${ctx.model.provider}/${ctx.model.id}`
@@ -717,7 +730,7 @@ function resolveAgentConfig(
     const resolvedAgent: AgentConfig = {
         ...agent,
         model: (params.model || undefined) ?? agent.model ?? parentModel,
-        skills: resolvedSkillPaths?.length ? resolvedSkillPaths : undefined,
+        skills: skillResult.paths,
     };
 
     // Persist subagent session alongside the parent session.
@@ -859,12 +872,11 @@ function executeBackground(
             );
         });
 
-    const startedHeader = session ? `[subagent: ${session.id}]\n\n` : "";
     return {
         content: [
             {
                 type: "text",
-                text: `${startedHeader}Background agent started: ${id}`,
+                text: `Background agent started: ${id}`,
             },
         ],
         details: {
@@ -985,21 +997,19 @@ export default function (pi: ExtensionAPI) {
     pi.registerMessageRenderer<SubagentDetails>(
         BACKGROUND_RESULT_TYPE,
         (message, { expanded }, theme) => {
-            const contentText =
-                typeof message.content === "string"
-                    ? message.content
-                    : message.content
-                          .map((p) => (p.type === "text" ? p.text : ""))
-                          .join("");
             // Normalize details from possibly old session format
             const details = normalizeDetails(message.details);
             const bgDetails = details?.kind === "background" ? details : undefined;
-            return renderBackgroundSubagentResult(
-                bgDetails,
-                contentText,
-                expanded,
-                theme,
-            );
+            if (!bgDetails) {
+                const contentText =
+                    typeof message.content === "string"
+                        ? message.content
+                        : message.content
+                              .map((p) => (p.type === "text" ? p.text : ""))
+                              .join("");
+                return new Text(contentText || "(no output)", 0, 0);
+            }
+            return renderSubagentResult(bgDetails, expanded, theme);
         },
     );
 
@@ -1055,8 +1065,7 @@ export default function (pi: ExtensionAPI) {
         renderResult(result, { expanded }, theme, _context) {
             // Normalize details from possibly old session format
             const details = normalizeDetails(result.details);
-
-            const fallbackText = () => {
+            if (!details) {
                 const text = result.content[0];
                 return new Text(
                     text?.type === "text"
@@ -1065,21 +1074,21 @@ export default function (pi: ExtensionAPI) {
                     0,
                     0,
                 );
-            };
-
-            if (!details) return fallbackText();
-
-            // Background agent — show model name, show task when expanded
+            }
+            // Background tool result ("started") — renderCall
+            // already provides the header, just show model + task.
             if (details.kind === "background") {
                 const r = details.result;
-                const modelSuffix = r.model ? theme.fg("muted", ` ${r.model}`) : "";
-                const text = result.content[0];
-                const msg = text?.type === "text" ? text.text : "(started)";
+                const modelLine = r.model ? theme.fg("muted", r.model) : "";
+                const contentText = result.content[0];
+                const msg =
+                    contentText?.type === "text" ? contentText.text : "(started)";
+                const parts = [theme.fg("dim", msg), modelLine]
+                    .filter(Boolean)
+                    .join(" ");
                 if (expanded && r.task) {
                     const container = new Container();
-                    container.addChild(
-                        new Text(theme.fg("dim", msg) + modelSuffix, 0, 0),
-                    );
+                    container.addChild(new Text(parts, 0, 0));
                     container.addChild(new Spacer(1));
                     container.addChild(
                         new Text(
@@ -1094,9 +1103,185 @@ export default function (pi: ExtensionAPI) {
                     container.addChild(new Text(theme.fg("dim", r.task), 0, 0));
                     return container;
                 }
-                return new Text(theme.fg("dim", msg) + modelSuffix, 0, 0);
+                return new Text(parts, 0, 0);
+            }
+            // Foreground result — no header (renderCall provides it)
+            return renderSubagentResult(details, expanded, theme);
+        },
+    });
+
+    // ── subagent_resume tool ──────────────────────────────────────────
+
+    const ResumeParams = Type.Object({
+        id: Type.String({
+            description: "Session ID of the completed subagent to resume.",
+        }),
+        follow_up: Type.String({
+            description:
+                "New message to send to the subagent, continuing its conversation.",
+        }),
+    });
+
+    type ResumeToolParams = { id: string; follow_up: string };
+
+    pi.registerTool({
+        name: "subagent_resume",
+        label: "Subagent Resume",
+        description:
+            "Resume a completed subagent session with a follow-up message. " +
+            "Use when the follow-up depends on the subagent's prior context " +
+            "(files it read, conclusions it reached, changes it made). " +
+            "The subagent reloads its full conversation history and continues from where it left off. " +
+            "Always executes in foreground (blocking).",
+        parameters: ResumeParams,
+
+        async execute(_toolCallId, params: ResumeToolParams, signal, onUpdate, ctx) {
+            const { id, follow_up } = params;
+
+            const errorResult = (text: string) => ({
+                content: [{ type: "text" as const, text }],
+                details: undefined,
+                isError: true,
+            });
+
+            if (bgManager.agents.has(id)) {
+                return errorResult(
+                    `Agent "${id}" is still running. Wait for it to complete or cancel it first.`,
+                );
             }
 
+            // Lookup session in message history
+            const entries = ctx.sessionManager.getEntries() as any[];
+            const lookup = lookupSubagentSession(entries, id);
+
+            if (!lookup.found) {
+                if (lookup.error === "no_session_info") {
+                    return errorResult(
+                        `Session "${id}" predates resume support (no session info stored).`,
+                    );
+                }
+                const available =
+                    lookup.availableIds.length > 0
+                        ? lookup.availableIds.map((i) => `"${i}"`).join(", ")
+                        : "none";
+                return errorResult(
+                    `No subagent found with id "${id}". Available sessions: ${available}.`,
+                );
+            }
+
+            const { details: matchedDetails, session } = lookup;
+
+            const sessionFile = path.join(session.dir, `${session.id}.jsonl`);
+            if (!fs.existsSync(sessionFile)) {
+                return errorResult(`Session file not found on disk: ${sessionFile}`);
+            }
+
+            const agentName = matchedDetails.result.agent;
+            const agent = knownAgents.find((a) => a.name === agentName);
+            if (!agent) {
+                return errorResult(`Agent "${agentName}" is no longer available.`);
+            }
+
+            // Resolve skills and model for the resumed agent
+            const skillResult = resolveSkills(agent.skills, skillCache);
+            if (skillResult.error) {
+                return errorResult(skillResult.error);
+            }
+
+            const parentModel = ctx.model
+                ? `${ctx.model.provider}/${ctx.model.id}`
+                : undefined;
+            const resolvedAgent: AgentConfig = {
+                ...agent,
+                skills: skillResult.paths,
+                model: matchedDetails.result.model ?? agent.model ?? parentModel,
+            };
+
+            // Execute resumed subagent
+            const execStatusMap = new Map<string, boolean>();
+
+            const makeDetails = (
+                result: AgentRunResult,
+            ): ForegroundSubagentDetails => ({
+                kind: "foreground",
+                result,
+                execStatuses: Object.fromEntries(execStatusMap),
+                session,
+                resumedFrom: id,
+            });
+
+            const onProgress: SubagentProgressCallback | undefined = onUpdate
+                ? (result, event) => {
+                      if (event.type === "tool_end") {
+                          execStatusMap.set(event.toolCallId, event.isError);
+                      }
+                      if (event.type === "tool_end" || event.type === "message") {
+                          onUpdate({
+                              content: [{ type: "text", text: "" }],
+                              details: makeDetails(result),
+                          });
+                      }
+                  }
+                : undefined;
+
+            const result = await runSubagent(
+                resolvedAgent,
+                follow_up,
+                ctx.cwd,
+                signal,
+                onProgress,
+                session,
+                ctx,
+                true, // resume mode: no "Task: " prefix
+            );
+
+            const sessionHeader = `[subagent: ${session.id}]\n\n`;
+
+            if (isSubagentError(result)) {
+                return {
+                    content: [
+                        {
+                            type: "text",
+                            text: `${sessionHeader}Agent failed: ${getResultOutput(result)}`,
+                        },
+                    ],
+                    details: makeDetails(result),
+                    isError: true,
+                };
+            }
+
+            return {
+                content: [
+                    {
+                        type: "text",
+                        text: `${sessionHeader}${getFinalOutput(result.messages) || "(no output)"}`,
+                    },
+                ],
+                details: makeDetails(result),
+            };
+        },
+
+        renderCall(args, theme, _context) {
+            const sessionId = args.id || "...";
+            const text =
+                theme.fg("toolTitle", theme.bold("subagent_resume ")) +
+                theme.fg("text", sessionId) +
+                theme.fg("muted", " (resumed)");
+            return new Text(text, 0, 0);
+        },
+
+        renderResult(result, { expanded }, theme, _context) {
+            const details = normalizeDetails(result.details);
+            if (!details || details.kind !== "foreground") {
+                const text = result.content[0];
+                return new Text(
+                    text?.type === "text"
+                        ? theme.fg("dim", text.text)
+                        : "(no output)",
+                    0,
+                    0,
+                );
+            }
             return renderSubagentResult(details, expanded, theme);
         },
     });

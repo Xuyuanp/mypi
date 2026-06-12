@@ -21,6 +21,7 @@ import type {
     AgentRunResult,
     BackgroundSubagentDetails,
     ForegroundSubagentDetails,
+    SubagentDetails,
     UsageStats,
 } from "./types.js";
 import { isSubagentError } from "./types.js";
@@ -324,31 +325,133 @@ export function countToolCalls(messages: Message[]): number {
     return count;
 }
 
-// ── Result renderers ─────────────────────────────────────────────────
+// ── Result renderer ──────────────────────────────────────────────────
 
 /**
- * Render a completed foreground subagent result into a TUI Component.
+ * Unified renderer for subagent results (foreground + background).
  *
- * Used by the tool's `renderResult` callback for foreground results.
+ * Renders a header line, tool calls, output, and usage — adapting
+ * layout and wrapper based on `details.kind`.
+ *
+ * - Foreground: bare Container/Text, tool calls with per-call status icons.
+ * - Background: Box with colored background, output preview when collapsed.
  */
 export function renderSubagentResult(
-    details: ForegroundSubagentDetails,
+    details: SubagentDetails,
     expanded: boolean,
     theme: {
         fg: ThemeFg;
+        bg?: ThemeBgFn;
         bold: (text: string) => string;
     },
-): Container | Text {
+): Container | Box | Text {
     const r = details.result;
-    const mdTheme = getMarkdownTheme();
+    const isForeground = details.kind === "foreground";
+    const isCancelled =
+        !isForeground && (details as BackgroundSubagentDetails).cancelled;
     const isRunning = r.outcome.status === "running";
-    const isError = !isRunning && isSubagentError(r);
-    const execStatusMap = new Map(Object.entries(details.execStatuses));
+    const isError = !isRunning && !isCancelled && isSubagentError(r);
+
+    // ── Header ───────────────────────────────────────────────────────
+    const agentName = r.agent || "...";
+    const agentId = details.session?.id;
+    const prefix = isForeground ? "subagent " : "background agent ";
+    const status = isRunning
+        ? "running"
+        : isCancelled
+          ? "cancelled"
+          : isError
+            ? "error"
+            : "completed";
+    const statusColor: ThemeColor = isRunning
+        ? "muted"
+        : isCancelled
+          ? "warning"
+          : isError
+            ? "error"
+            : "success";
+    const desc = isForeground
+        ? ""
+        : (details as BackgroundSubagentDetails).description || "...";
+    const headerText =
+        theme.fg("toolTitle", theme.bold(prefix)) +
+        theme.fg("text", agentName) +
+        (agentId ? theme.fg("dim", `(${agentId})`) : "") +
+        theme.fg(statusColor, ` [${status}]`) +
+        (desc ? theme.fg("dim", ` ${desc}`) : "");
+
+    // ── Shared data ──────────────────────────────────────────────────
+    const finalOutput = getFinalOutput(r.messages);
+    const mdTheme = getMarkdownTheme();
+
+    // ── Background wrapper ───────────────────────────────────────────
+    if (!isForeground) {
+        const lastLine = buildLastLine(r, countToolCalls(r.messages));
+        const bgFn =
+            theme.bg && (isCancelled || isError)
+                ? (t: string) => theme.bg!("toolErrorBg", t)
+                : theme.bg
+                  ? (t: string) => theme.bg!("toolSuccessBg", t)
+                  : undefined;
+
+        const box = bgFn ? new Box(1, 1, bgFn) : new Container();
+        box.addChild(new Text(headerText, 0, 0));
+
+        if (isRunning) {
+            // In-progress background agent — show model + task
+            const modelLine = r.model ? theme.fg("muted", r.model) : "";
+            if (modelLine) {
+                box.addChild(new Spacer(1));
+                box.addChild(new Text(modelLine, 0, 0));
+            }
+            if (expanded && r.task) {
+                box.addChild(new Spacer(1));
+                box.addChild(
+                    new Text(
+                        theme.fg(
+                            "muted",
+                            "\u2500\u2500\u2500 Task \u2500\u2500\u2500",
+                        ),
+                        0,
+                        0,
+                    ),
+                );
+                box.addChild(new Text(theme.fg("dim", r.task), 0, 0));
+            }
+            return box;
+        }
+
+        box.addChild(new Spacer(1));
+        const output = finalOutput || "(no output)";
+        if (expanded) {
+            box.addChild(new Markdown(output.trim(), 0, 0, mdTheme));
+        } else {
+            const lines = output.trim().split("\n");
+            const truncated = lines.length > 3;
+            const preview = lines.slice(0, 3).join("\n");
+            box.addChild(new Text(preview, 0, 0));
+            if (truncated) {
+                box.addChild(
+                    new Text(theme.fg("muted", "... ctrl-o to expand"), 0, 0),
+                );
+            }
+        }
+        if (lastLine) {
+            box.addChild(new Spacer(1));
+            box.addChild(new Text(theme.fg("dim", lastLine), 0, 0));
+        }
+        return box;
+    }
+
+    // ── Foreground ───────────────────────────────────────────────────
+    const execStatusMap = new Map(
+        Object.entries((details as ForegroundSubagentDetails).execStatuses),
+    );
     const displayItems = getDisplayItems(r.messages, execStatusMap);
     const toolCallItems = displayItems.filter(
         (i) => i.type === "toolCall",
     ) as (DisplayItem & { type: "toolCall" })[];
-    const finalOutput = getFinalOutput(r.messages);
+    const lastLine = buildLastLine(r, toolCallItems.length);
 
     if (expanded) {
         const container = new Container();
@@ -391,13 +494,12 @@ export function renderSubagentResult(
                 container.addChild(new Markdown(finalOutput.trim(), 0, 0, mdTheme));
             }
         }
-        const lastLine = buildLastLine(r, toolCallItems.length);
         container.addChild(new Spacer(1));
         container.addChild(new Text(theme.fg("dim", lastLine), 0, 0));
         return container;
     }
 
-    // Collapsed view -- last 3 tool calls
+    // ── Foreground collapsed ─────────────────────────────────────────
     const recentToolCalls = toolCallItems.slice(-3);
     let text = "";
     for (const item of recentToolCalls) {
@@ -405,7 +507,6 @@ export function renderSubagentResult(
         const icon = toolStatusIcon(item.status, theme);
         text += ` ${icon} ${formatToolCall(item.name, item.args, theme.fg.bind(theme))}`;
     }
-    const lastLine = buildLastLine(r, toolCallItems.length);
     if (isError) {
         const errorMsg =
             r.outcome.status === "error"
@@ -415,80 +516,10 @@ export function renderSubagentResult(
                   : "failed";
         if (text) text += "\n";
         text += theme.fg("error", errorMsg);
-        if (lastLine) text += `\n${theme.fg("dim", lastLine)}`;
-    } else {
+    }
+    if (lastLine) {
         if (text) text += "\n";
         text += theme.fg("dim", lastLine);
     }
     return new Text(text, 0, 0);
-}
-
-/**
- * Render a background subagent result message into a TUI Component.
- *
- * Used by the custom message renderer registered for background results.
- * When `details` is undefined, falls back to rendering `contentText`.
- */
-export function renderBackgroundSubagentResult(
-    details: BackgroundSubagentDetails | undefined,
-    contentText: string,
-    expanded: boolean,
-    theme: {
-        fg: ThemeFg;
-        bg: ThemeBgFn;
-        bold: (text: string) => string;
-    },
-): Box | Text {
-    if (!details) {
-        return new Text(contentText || "(no output)", 0, 0);
-    }
-
-    const r = details.result;
-    const isCancelled = details.cancelled;
-    const isError = !isCancelled && isSubagentError(r);
-    const bgFn =
-        isCancelled || isError
-            ? (t: string) => theme.bg("toolErrorBg", t)
-            : (t: string) => theme.bg("toolSuccessBg", t);
-
-    const agentName = r.agent || "...";
-    const desc = details.description || "...";
-    const status = isCancelled ? "cancelled" : isError ? "error" : "completed";
-    const statusColor = isCancelled ? "warning" : isError ? "error" : "success";
-    const modelSuffix = r.model ? theme.fg("muted", ` [${r.model}]`) : "";
-    const headerText =
-        theme.fg("toolTitle", theme.bold("subagent ")) +
-        theme.fg("text", agentName) +
-        modelSuffix +
-        theme.fg("muted", " (bg)") +
-        theme.fg(statusColor, ` [${status}]`) +
-        theme.fg("dim", ` ${desc}`);
-
-    const output = getFinalOutput(r.messages) || "(no output)";
-    const mdTheme = getMarkdownTheme();
-
-    const toolCallCount = countToolCalls(r.messages);
-    const usageLine = buildLastLine(r, toolCallCount);
-
-    const box = new Box(1, 1, bgFn);
-    box.addChild(new Text(headerText, 0, 0));
-    box.addChild(new Spacer(1));
-
-    if (expanded) {
-        box.addChild(new Markdown(output.trim(), 0, 0, mdTheme));
-    } else {
-        const lines = output.trim().split("\n");
-        const truncated = lines.length > 3;
-        const preview = lines.slice(0, 3).join("\n");
-        box.addChild(new Text(preview, 0, 0));
-        if (truncated) {
-            box.addChild(new Text(theme.fg("muted", "... ctrl-o to expand"), 0, 0));
-        }
-    }
-
-    if (usageLine) {
-        box.addChild(new Spacer(1));
-        box.addChild(new Text(theme.fg("dim", usageLine), 0, 0));
-    }
-    return box;
 }

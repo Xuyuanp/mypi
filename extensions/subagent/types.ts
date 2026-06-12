@@ -71,6 +71,7 @@ export interface ForegroundSubagentDetails {
     result: AgentRunResult;
     execStatuses: Record<string, boolean>;
     session?: { dir: string; id: string };
+    resumedFrom?: string;
 }
 
 export interface BackgroundSubagentDetails {
