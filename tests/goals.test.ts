@@ -212,11 +212,7 @@ function makeGoal(overrides: Partial<SessionGoal> = {}): SessionGoal {
  * `newSession({id})` resets fileEntries, so any prior appendCustomEntry
  * is wiped. Always call newSession FIRST.
  */
-function stageGoal(
-    sm: SessionManager,
-    sessionId: string,
-    goal: SessionGoal,
-): void {
+function stageGoal(sm: SessionManager, sessionId: string, goal: SessionGoal): void {
     sm.newSession({ id: sessionId });
     sm.appendCustomEntry(GOAL_ENTRY_TYPE, {
         kind: "snapshot",
@@ -230,10 +226,7 @@ interface MiniSessionOptions {
     sessionManager?: SessionManager;
 }
 
-async function makeMiniSession(
-    h: Harness,
-    options: MiniSessionOptions = {},
-) {
+async function makeMiniSession(h: Harness, options: MiniSessionOptions = {}) {
     const model = h.faux.getModel()!;
     const authStorage = AuthStorage.inMemory();
     authStorage.setRuntimeApiKey(model.provider, "fake-key");
@@ -255,8 +248,7 @@ async function makeMiniSession(
         systemPromptOverride: () => "test",
     });
     await resourceLoader.reload();
-    const sessionManager =
-        options.sessionManager ?? SessionManager.inMemory(h.cwd);
+    const sessionManager = options.sessionManager ?? SessionManager.inMemory(h.cwd);
     const { session } = await createAgentSession({
         cwd: h.cwd,
         agentDir: join(h.cwd, ".pi-test-agent"),
@@ -333,10 +325,9 @@ describe("goals extension", () => {
 
     it("test_update_goal_complete_tool: marks complete, continuation stops", async () => {
         h.faux.setResponses([
-            fauxAssistantMessage(
-                fauxToolCall("create_goal", { objective: "obj" }),
-                { stopReason: "toolUse" },
-            ),
+            fauxAssistantMessage(fauxToolCall("create_goal", { objective: "obj" }), {
+                stopReason: "toolUse",
+            }),
             fauxAssistantMessage(
                 fauxToolCall("update_goal", { status: "complete" }),
                 { stopReason: "toolUse" },
@@ -360,10 +351,9 @@ describe("goals extension", () => {
         // completes the goal.
         h.faux.setResponses([
             // Run 1: tool call + text stop
-            fauxAssistantMessage(
-                fauxToolCall("create_goal", { objective: "obj" }),
-                { stopReason: "toolUse" },
-            ),
+            fauxAssistantMessage(fauxToolCall("create_goal", { objective: "obj" }), {
+                stopReason: "toolUse",
+            }),
             fauxAssistantMessage(fauxText("acked")),
             // Run 2 (autonomous): tool call + text stop
             fauxAssistantMessage(
@@ -481,9 +471,7 @@ describe("goals extension", () => {
     });
 
     it("test_no_goal_no_continuation: empty session does not auto-continue", async () => {
-        h.faux.setResponses([
-            fauxAssistantMessage(fauxText("ok, ready")),
-        ]);
+        h.faux.setResponses([fauxAssistantMessage(fauxText("ok, ready"))]);
         const result = await runScenario(h, "hi");
         expect(result.agentRuns).toBe(1);
         expect(getGoalFromSession(result.sessionManager)).toBeNull();
@@ -506,9 +494,7 @@ describe("goals extension", () => {
             }),
         );
 
-        h.faux.setResponses([
-            fauxAssistantMessage(fauxText("should not run")),
-        ]);
+        h.faux.setResponses([fauxAssistantMessage(fauxText("should not run"))]);
 
         const { session } = await makeMiniSession(h, { sessionManager: sm });
         // bindExtensions already ran inside makeMiniSession; allow the
@@ -534,10 +520,7 @@ describe("goals extension", () => {
             ),
             fauxAssistantMessage(fauxText("done")),
         ]);
-        const result = await runScenario(
-            h,
-            "/goal Refactor auth --budget 5000",
-        );
+        const result = await runScenario(h, "/goal Refactor auth --budget 5000");
 
         const goal = getGoalFromSession(result.sessionManager);
         expect(goal).not.toBeNull();
@@ -632,9 +615,7 @@ describe("goals extension", () => {
             }),
         );
         // Sentinel: if continuation fires, this response is consumed.
-        h.faux.setResponses([
-            fauxAssistantMessage(fauxText("should not run")),
-        ]);
+        h.faux.setResponses([fauxAssistantMessage(fauxText("should not run"))]);
         const { session } = await makeMiniSession(h, { sessionManager: sm });
         await new Promise((r) => setTimeout(r, 200));
         const sentinelConsumed = h.faux.getPendingResponseCount() === 0;
@@ -658,9 +639,7 @@ describe("goals extension", () => {
                 tokens_used: 500,
             }),
         );
-        h.faux.setResponses([
-            fauxAssistantMessage(fauxText("should not run")),
-        ]);
+        h.faux.setResponses([fauxAssistantMessage(fauxText("should not run"))]);
         const { session } = await makeMiniSession(h, { sessionManager: sm });
         await new Promise((r) => setTimeout(r, 200));
         const sentinelConsumed = h.faux.getPendingResponseCount() === 0;
@@ -800,9 +779,7 @@ describe("goals extension", () => {
         expect(tokensAfterComplete).toBeGreaterThan(0);
 
         // Phase 2: Unrelated user prompt with text-only response.
-        h.faux.setResponses([
-            fauxAssistantMessage(fauxText("just chatting")),
-        ]);
+        h.faux.setResponses([fauxAssistantMessage(fauxText("just chatting"))]);
         await session.prompt("how is the weather?");
         await new Promise((r) => setTimeout(r, 200));
 
@@ -816,10 +793,9 @@ describe("goals extension", () => {
 
     it("test_empty_objective_rejected: create_goal with empty string returns error", async () => {
         h.faux.setResponses([
-            fauxAssistantMessage(
-                fauxToolCall("create_goal", { objective: "" }),
-                { stopReason: "toolUse" },
-            ),
+            fauxAssistantMessage(fauxToolCall("create_goal", { objective: "" }), {
+                stopReason: "toolUse",
+            }),
             fauxAssistantMessage(fauxText("done")),
         ]);
         const result = await runScenario(h, "go");
@@ -925,9 +901,7 @@ describe("goals extension", () => {
             }),
         );
 
-        h.faux.setResponses([
-            fauxAssistantMessage(fauxText("should not run")),
-        ]);
+        h.faux.setResponses([fauxAssistantMessage(fauxText("should not run"))]);
         const { session } = await makeMiniSession(h, { sessionManager: sm });
         await session.prompt("/goal resume");
         await new Promise((r) => setTimeout(r, 300));
@@ -954,9 +928,7 @@ describe("goals extension", () => {
             }),
         );
 
-        h.faux.setResponses([
-            fauxAssistantMessage(fauxText("should not run")),
-        ]);
+        h.faux.setResponses([fauxAssistantMessage(fauxText("should not run"))]);
         const { session } = await makeMiniSession(h, { sessionManager: sm });
         await session.prompt("/goal resume");
         await new Promise((r) => setTimeout(r, 300));

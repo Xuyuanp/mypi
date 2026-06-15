@@ -14,7 +14,7 @@ import {
     fauxText,
     registerFauxProvider,
 } from "@earendil-works/pi-ai";
-import type { AgentSession, AgentSessionEvent } from "@earendil-works/pi-coding-agent";
+import type { AgentSession } from "@earendil-works/pi-coding-agent";
 import {
     AuthStorage,
     createAgentSession,
@@ -23,18 +23,8 @@ import {
     SessionManager,
     SettingsManager,
 } from "@earendil-works/pi-coding-agent";
-import {
-    afterEach,
-    beforeEach,
-    describe,
-    expect,
-    it,
-    vi,
-} from "vitest";
-import keepalive, {
-    getMaxPings,
-    getMaxTotalCost,
-} from "../extensions/keepalive.js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import keepalive, { getMaxPings, getMaxTotalCost } from "../extensions/keepalive.js";
 
 // ── Helpers ────────────────────────────────────────────────────────────
 
@@ -77,12 +67,6 @@ async function createSession(
     });
 
     return session;
-}
-
-function collectEvents(session: AgentSession): AgentSessionEvent[] {
-    const events: AgentSessionEvent[] = [];
-    session.subscribe((event) => events.push(event));
-    return events;
 }
 
 // Ping interval matches the extension constant
@@ -135,9 +119,7 @@ describe("keepalive extension", () => {
     });
 
     it("stops keepalive on /keepalive off command", async () => {
-        faux.setResponses([
-            fauxAssistantMessage(fauxText("hello")),
-        ]);
+        faux.setResponses([fauxAssistantMessage(fauxText("hello"))]);
 
         session = await createSession(tmpDir, faux);
         await session.prompt("hello");
@@ -151,9 +133,7 @@ describe("keepalive extension", () => {
     });
 
     it("toggles keepalive with bare /keepalive command", async () => {
-        faux.setResponses([
-            fauxAssistantMessage(fauxText("hello")),
-        ]);
+        faux.setResponses([fauxAssistantMessage(fauxText("hello"))]);
 
         session = await createSession(tmpDir, faux);
         await session.prompt("hello");
@@ -173,9 +153,7 @@ describe("keepalive extension", () => {
         // Use a non-anthropic faux provider
         faux.unregister();
         faux = registerFauxProvider({ provider: "openai" });
-        faux.setResponses([
-            fauxAssistantMessage(fauxText("hello")),
-        ]);
+        faux.setResponses([fauxAssistantMessage(fauxText("hello"))]);
 
         session = await createSession(tmpDir, faux);
         await session.prompt("hello");

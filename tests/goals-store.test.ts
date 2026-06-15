@@ -20,7 +20,7 @@ import {
     type GoalStore,
     type GoalStoreOptions,
 } from "../extensions/goals/store.js";
-import { GOAL_ENTRY_TYPE, type SessionGoal } from "../extensions/goals/types.js";
+import { GOAL_ENTRY_TYPE } from "../extensions/goals/types.js";
 
 interface TestRig {
     store: GoalStore;
@@ -245,9 +245,9 @@ describe("GoalStore", () => {
         const { store, sm } = makeTestRig();
         store.createGoal("obj", 1000);
 
-        const entries = sm.getBranch().filter(
-            (e) => e.type === "custom" && e.customType === GOAL_ENTRY_TYPE,
-        );
+        const entries = sm
+            .getBranch()
+            .filter((e) => e.type === "custom" && e.customType === GOAL_ENTRY_TYPE);
         expect(entries.length).toBe(1);
         const data = (entries[0] as { data: GoalEntryData }).data;
         expect(data.kind).toBe("snapshot");

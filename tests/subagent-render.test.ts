@@ -7,8 +7,8 @@
  * AgentOutcome variants, isSubagentError, SubagentDetails discriminated union.
  */
 
-import { describe, expect, it } from "vitest";
 import type { Message } from "@earendil-works/pi-ai";
+import { describe, expect, it } from "vitest";
 import {
     buildLastLine,
     countToolCalls,
@@ -20,13 +20,13 @@ import {
     getFinalOutput,
     renderSubagentResult,
 } from "../extensions/subagent/render.js";
-import { createZeroUsage, isSubagentError } from "../extensions/subagent/types.js";
 import type {
     AgentOutcome,
     AgentRunResult,
     BackgroundSubagentDetails,
     ForegroundSubagentDetails,
 } from "../extensions/subagent/types.js";
+import { createZeroUsage, isSubagentError } from "../extensions/subagent/types.js";
 
 // ── Helpers ──────────────────────────────────────────────────────────
 
@@ -115,7 +115,13 @@ describe("formatUsageStats", () => {
             cacheReadTokens: 3000,
             cacheWriteTokens: 100,
             contextTokens: 4600,
-            cost: { input: 0.001, output: 0.002, cacheRead: 0.001, cacheWrite: 0, total: 0.004 },
+            cost: {
+                input: 0.001,
+                output: 0.002,
+                cacheRead: 0.001,
+                cacheWrite: 0,
+                total: 0.004,
+            },
             turns: 2,
         };
         const result = formatUsageStats(usage, {
@@ -154,7 +160,12 @@ describe("formatUsageStats", () => {
 describe("buildLastLine", () => {
     it("includes tool count and usage", () => {
         const r = makeResult({
-            usage: { ...createZeroUsage(), inputTokens: 100, outputTokens: 50, turns: 1 },
+            usage: {
+                ...createZeroUsage(),
+                inputTokens: 100,
+                outputTokens: 50,
+                turns: 1,
+            },
             model: "m",
             durationMs: 2000,
         });
@@ -186,7 +197,12 @@ describe("getDisplayItems", () => {
                 role: "assistant",
                 content: [
                     { type: "text", text: "hello" },
-                    { type: "toolCall", id: "tc1", name: "bash", arguments: { command: "ls" } },
+                    {
+                        type: "toolCall",
+                        id: "tc1",
+                        name: "bash",
+                        arguments: { command: "ls" },
+                    },
                 ],
             },
             {
@@ -198,7 +214,12 @@ describe("getDisplayItems", () => {
             {
                 role: "assistant",
                 content: [
-                    { type: "toolCall", id: "tc2", name: "read", arguments: { path: "/a.txt" } },
+                    {
+                        type: "toolCall",
+                        id: "tc2",
+                        name: "read",
+                        arguments: { path: "/a.txt" },
+                    },
                 ],
             },
         ] as Message[];
@@ -306,7 +327,7 @@ describe("formatToolCallPlain", () => {
     it("truncates long JSON args to 50 chars", () => {
         const longVal = "v".repeat(60);
         const result = formatToolCallPlain("tool", { key: longVal });
-        const expected = JSON.stringify({ key: longVal }).slice(0, 50) + "...";
+        const expected = `${JSON.stringify({ key: longVal }).slice(0, 50)}...`;
         expect(result).toBe(`tool ${expected}`);
     });
 });
@@ -338,7 +359,10 @@ describe("AgentOutcome variants", () => {
     });
 
     it("aborted variant accepts optional message", () => {
-        const outcome: AgentOutcome = { status: "aborted", message: "user cancelled" };
+        const outcome: AgentOutcome = {
+            status: "aborted",
+            message: "user cancelled",
+        };
         expect(outcome.status).toBe("aborted");
         expect(outcome.message).toBe("user cancelled");
     });
@@ -348,27 +372,43 @@ describe("AgentOutcome variants", () => {
 
 describe("isSubagentError", () => {
     it("returns true for error outcome", () => {
-        expect(isSubagentError(makeResult({
-            outcome: { status: "error", exitCode: 1, message: "failed" },
-        }))).toBe(true);
+        expect(
+            isSubagentError(
+                makeResult({
+                    outcome: { status: "error", exitCode: 1, message: "failed" },
+                }),
+            ),
+        ).toBe(true);
     });
 
     it("returns true for aborted outcome", () => {
-        expect(isSubagentError(makeResult({
-            outcome: { status: "aborted" },
-        }))).toBe(true);
+        expect(
+            isSubagentError(
+                makeResult({
+                    outcome: { status: "aborted" },
+                }),
+            ),
+        ).toBe(true);
     });
 
     it("returns false for success outcome", () => {
-        expect(isSubagentError(makeResult({
-            outcome: { status: "success", stopReason: "end_turn" },
-        }))).toBe(false);
+        expect(
+            isSubagentError(
+                makeResult({
+                    outcome: { status: "success", stopReason: "end_turn" },
+                }),
+            ),
+        ).toBe(false);
     });
 
     it("returns false for running outcome", () => {
-        expect(isSubagentError(makeResult({
-            outcome: { status: "running" },
-        }))).toBe(false);
+        expect(
+            isSubagentError(
+                makeResult({
+                    outcome: { status: "running" },
+                }),
+            ),
+        ).toBe(false);
     });
 });
 
@@ -413,7 +453,7 @@ describe("createZeroUsage", () => {
     });
 
     it("does not have totalTokens field", () => {
-        const usage = createZeroUsage() as Record<string, unknown>;
+        const usage = createZeroUsage() as unknown as Record<string, unknown>;
         expect("totalTokens" in usage).toBe(false);
     });
 });
@@ -426,8 +466,18 @@ describe("renderSubagentResult", () => {
             {
                 role: "assistant",
                 content: [
-                    { type: "toolCall", id: "t1", name: "bash", arguments: { command: "ls" } },
-                    { type: "toolCall", id: "t2", name: "read", arguments: { path: "/a" } },
+                    {
+                        type: "toolCall",
+                        id: "t1",
+                        name: "bash",
+                        arguments: { command: "ls" },
+                    },
+                    {
+                        type: "toolCall",
+                        id: "t2",
+                        name: "read",
+                        arguments: { path: "/a" },
+                    },
                 ],
             },
             {
@@ -452,7 +502,12 @@ describe("renderSubagentResult", () => {
             kind: "foreground",
             result: makeResult({
                 messages,
-                usage: { ...createZeroUsage(), inputTokens: 100, outputTokens: 50, turns: 1 },
+                usage: {
+                    ...createZeroUsage(),
+                    inputTokens: 100,
+                    outputTokens: 50,
+                    turns: 1,
+                },
                 durationMs: 1000,
             }),
             execStatuses: {},
@@ -473,7 +528,12 @@ describe("renderSubagentResult", () => {
             {
                 role: "assistant",
                 content: [
-                    { type: "toolCall", id: "t1", name: "bash", arguments: { command: "fail" } },
+                    {
+                        type: "toolCall",
+                        id: "t1",
+                        name: "bash",
+                        arguments: { command: "fail" },
+                    },
                 ],
             },
             {
@@ -487,7 +547,12 @@ describe("renderSubagentResult", () => {
         const details: ForegroundSubagentDetails = {
             kind: "foreground",
             result: makeResult({
-                outcome: { status: "error", exitCode: 1, stopReason: "error", message: "command failed" },
+                outcome: {
+                    status: "error",
+                    exitCode: 1,
+                    stopReason: "error",
+                    message: "command failed",
+                },
                 messages,
                 usage: { ...createZeroUsage(), turns: 1 },
             }),

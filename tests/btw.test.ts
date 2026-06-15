@@ -109,9 +109,7 @@ describe("moveCacheMarkerToSharedPrefix", () => {
         const input = makeRichPayload();
         moveCacheMarkerToSharedPrefix(input, ANTHROPIC);
 
-        const target = input.messages[2].content as Array<
-            Record<string, unknown>
-        >;
+        const target = input.messages[2].content as Array<Record<string, unknown>>;
         expect(target[0]).toMatchObject({
             type: "tool_result",
             tool_use_id: "toolu_1",
@@ -124,9 +122,7 @@ describe("moveCacheMarkerToSharedPrefix", () => {
             cache_control: MARKER,
         });
 
-        const newest = input.messages[3].content as Array<
-            Record<string, unknown>
-        >;
+        const newest = input.messages[3].content as Array<Record<string, unknown>>;
         expect(newest[0]).toEqual({
             type: "image",
             source: { type: "base64", data: "xx" },
@@ -146,14 +142,15 @@ describe("moveCacheMarkerToSharedPrefix", () => {
                 },
             ],
         };
-        const result = moveCacheMarkerToSharedPrefix(input, ANTHROPIC) as typeof input;
+        const result = moveCacheMarkerToSharedPrefix(
+            input,
+            ANTHROPIC,
+        ) as typeof input;
         expect(result).toBe(input);
         expect(input.messages[1].content).toEqual([
             { type: "text", text: "last parent user turn", cache_control: MARKER },
         ]);
-        const newest = input.messages[2].content as Array<
-            Record<string, unknown>
-        >;
+        const newest = input.messages[2].content as Array<Record<string, unknown>>;
         expect(newest[0].cache_control).toBeUndefined();
     });
 

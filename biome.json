@@ -26,11 +26,12 @@
                 "noNonNullAssertion": "off"
             },
             "suspicious": {
-                "noExplicitAny": "off"
+                "noExplicitAny": "off",
+                "noControlCharactersInRegex": "off"
             }
         }
     },
     "files": {
-        "includes": ["extensions/**/*.ts"]
+        "includes": ["extensions/**/*.ts", "tests/**/*.ts"]
     }
 }

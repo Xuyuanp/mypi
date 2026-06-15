@@ -8,12 +8,12 @@
  */
 
 import { describe, expect, it } from "vitest";
-import {
-    lookupSubagentSession,
-    type LookupEntry,
-} from "../extensions/subagent/resume.js";
-import { createZeroUsage } from "../extensions/subagent/index.js";
 import { BACKGROUND_RESULT_TYPE } from "../extensions/subagent/background.js";
+import { createZeroUsage } from "../extensions/subagent/index.js";
+import {
+    type LookupEntry,
+    lookupSubagentSession,
+} from "../extensions/subagent/resume.js";
 import type {
     AgentRunResult,
     BackgroundSubagentDetails,
@@ -127,25 +127,25 @@ describe("lookupSubagentSession", () => {
         const result = lookupSubagentSession(entries, "reviewer-99999999");
 
         expect(result.found).toBe(false);
-        if (!result.found) {
-            expect(result.error).toBe("not_found");
+        if (!result.found && result.error === "not_found") {
             expect(result.availableIds).toContain("scout-11111111");
             expect(result.availableIds).toContain("worker-22222222");
+        } else {
+            expect.unreachable("expected not_found error");
         }
     });
 
     it("returns no_session_info when entry predates resume support", () => {
         // Entry without session field (predates issue #12)
-        const entries: LookupEntry[] = [
-            makeForegroundEntry(undefined, "scout"),
-        ];
+        const entries: LookupEntry[] = [makeForegroundEntry(undefined, "scout")];
 
         const result = lookupSubagentSession(entries, "scout-a1b2c3d4");
 
         expect(result.found).toBe(false);
-        if (!result.found) {
-            expect(result.error).toBe("no_session_info");
+        if (!result.found && result.error === "no_session_info") {
             expect(result.id).toBe("scout-a1b2c3d4");
+        } else {
+            expect.unreachable("expected no_session_info error");
         }
     });
 
@@ -155,9 +155,10 @@ describe("lookupSubagentSession", () => {
         const result = lookupSubagentSession(entries, "scout-a1b2c3d4");
 
         expect(result.found).toBe(false);
-        if (!result.found) {
-            expect(result.error).toBe("not_found");
+        if (!result.found && result.error === "not_found") {
             expect(result.availableIds).toEqual([]);
+        } else {
+            expect.unreachable("expected not_found error");
         }
     });
 
@@ -171,9 +172,10 @@ describe("lookupSubagentSession", () => {
         const result = lookupSubagentSession(entries, "nonexistent-id");
 
         expect(result.found).toBe(false);
-        if (!result.found) {
-            expect(result.error).toBe("not_found");
+        if (!result.found && result.error === "not_found") {
             expect(result.availableIds).toEqual(["scout-11111111"]);
+        } else {
+            expect.unreachable("expected not_found error");
         }
     });
 
@@ -226,7 +228,7 @@ describe("lookupSubagentSession", () => {
         const session = { dir: "/tmp/s/subagent", id: "scout-a1b2c3d4" };
         const entries: LookupEntry[] = [
             makeForegroundEntry(undefined, "scout"), // old entry without session
-            makeForegroundEntry(session, "scout"),   // newer entry with session
+            makeForegroundEntry(session, "scout"), // newer entry with session
         ];
 
         const result = lookupSubagentSession(entries, "scout-a1b2c3d4");

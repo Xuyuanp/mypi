@@ -11,8 +11,8 @@ import { describe, expect, it } from "vitest";
 import type { AgentConfig } from "../extensions/subagent/agents.js";
 import {
     buildAgentRows,
-    clamp,
     COL_GAP,
+    clamp,
     computeColumnWidths,
 } from "../extensions/subagent/command.js";
 

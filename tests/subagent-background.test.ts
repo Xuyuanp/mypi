@@ -10,16 +10,15 @@
  * - /subagent cancel with unknown ID reports error
  */
 
-import { describe, expect, it, vi } from "vitest";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import { describe, expect, it, vi } from "vitest";
+import { createBackgroundManager } from "../extensions/subagent/background.js";
 import {
     type BackgroundAgent,
     createZeroUsage,
 } from "../extensions/subagent/index.js";
-import { createBackgroundManager } from "../extensions/subagent/background.js";
-import type { BackgroundManager } from "../extensions/subagent/background.js";
-import { isSubagentError } from "../extensions/subagent/types.js";
 import type { AgentRunResult } from "../extensions/subagent/types.js";
+import { isSubagentError } from "../extensions/subagent/types.js";
 
 function makeFakeResult(overrides?: Partial<AgentRunResult>): AgentRunResult {
     return {
@@ -38,7 +37,13 @@ function makeFakeEntry(overrides?: Partial<BackgroundAgent>): BackgroundAgent {
     return {
         id: "scout-a1b2c3d4",
         description: "test",
-        agent: { name: "scout", description: "t", systemPrompt: "", source: "system" as const, filePath: "/f.md" },
+        agent: {
+            name: "scout",
+            description: "t",
+            systemPrompt: "",
+            source: "system" as const,
+            filePath: "/f.md",
+        },
         task: "do it",
         kill: () => {},
         promise: new Promise(() => {}) as any,
@@ -177,6 +182,25 @@ describe("background agent lifecycle", () => {
                 {
                     role: "assistant" as const,
                     content: [{ type: "text" as const, text: "Found 5 files" }],
+                    api: "anthropic-messages",
+                    provider: "anthropic",
+                    model: "claude-sonnet-4-20250514",
+                    usage: {
+                        input: 100,
+                        output: 50,
+                        cacheRead: 0,
+                        cacheWrite: 0,
+                        totalTokens: 150,
+                        cost: {
+                            input: 0,
+                            output: 0,
+                            cacheRead: 0,
+                            cacheWrite: 0,
+                            total: 0,
+                        },
+                    },
+                    stopReason: "stop",
+                    timestamp: Date.now(),
                 },
             ],
             stderr: "",
@@ -252,6 +276,25 @@ describe("background agent lifecycle", () => {
                 {
                     role: "assistant" as const,
                     content: [{ type: "text" as const, text: "done" }],
+                    api: "anthropic-messages",
+                    provider: "anthropic",
+                    model: "claude-sonnet-4-20250514",
+                    usage: {
+                        input: 0,
+                        output: 0,
+                        cacheRead: 0,
+                        cacheWrite: 0,
+                        totalTokens: 0,
+                        cost: {
+                            input: 0,
+                            output: 0,
+                            cacheRead: 0,
+                            cacheWrite: 0,
+                            total: 0,
+                        },
+                    },
+                    stopReason: "stop",
+                    timestamp: Date.now(),
                 },
             ],
             stderr: "",
@@ -277,7 +320,12 @@ describe("background agent lifecycle", () => {
             agent: "scout",
             agentSource: "system",
             task: "test",
-            outcome: { status: "error", exitCode: 1, stopReason: "error", message: "spawn ENOENT" },
+            outcome: {
+                status: "error",
+                exitCode: 1,
+                stopReason: "error",
+                message: "spawn ENOENT",
+            },
             messages: [] as any[],
             stderr: "",
             usage: createZeroUsage(),
@@ -325,7 +373,10 @@ describe("shutdown logic", () => {
                 promise: Promise.resolve({} as any),
                 startedAt: Date.now(),
                 toolCallCount: 0,
-                latestResult: makeFakeResult({ agent: name.split("-")[0], task: "do work" }),
+                latestResult: makeFakeResult({
+                    agent: name.split("-")[0],
+                    task: "do work",
+                }),
             };
             map.set(name, entry);
             killFns.push(killFn);
@@ -358,7 +409,6 @@ describe("shutdown logic", () => {
 describe("argument completions", () => {
     it("suggests 'cancel' when prefix is empty or partial match", () => {
         // Simulate getArgumentCompletions logic
-        const backgroundAgents = new Map<string, BackgroundAgent>();
         const prefix = "";
 
         let result: { label: string; value: string }[] | null = null;
@@ -412,7 +462,7 @@ describe("widget lifecycle (updateWidget logic)", () => {
     function createWidgetState() {
         let widgetActive = false;
         let widgetKey: string | undefined;
-        let statusKey: string | undefined;
+        let _statusKey: string | undefined;
         let statusValue: string | undefined;
         const backgroundAgents = new Map<string, BackgroundAgent>();
 
@@ -424,12 +474,12 @@ describe("widget lifecycle (updateWidget logic)", () => {
                     widgetKey = undefined;
                     widgetActive = false;
                 }
-                statusKey = undefined;
+                _statusKey = undefined;
                 statusValue = undefined;
                 return;
             }
 
-            statusKey = "subagent-bg";
+            _statusKey = "subagent-bg";
             statusValue = `\u25cb ${count} bg`;
 
             if (!widgetActive) {
@@ -481,8 +531,24 @@ describe("widget lifecycle (updateWidget logic)", () => {
 
     it("updates status count correctly with multiple agents", () => {
         const state = createWidgetState();
-        for (const id of ["scout-11111111", "worker-22222222", "reviewer-33333333"]) {
-            state.backgroundAgents.set(id, makeFakeEntry({ id, agent: { name: id.split("-")[0], description: "t", systemPrompt: "", source: "system" as const, filePath: "/f.md" } }));
+        for (const id of [
+            "scout-11111111",
+            "worker-22222222",
+            "reviewer-33333333",
+        ]) {
+            state.backgroundAgents.set(
+                id,
+                makeFakeEntry({
+                    id,
+                    agent: {
+                        name: id.split("-")[0],
+                        description: "t",
+                        systemPrompt: "",
+                        source: "system" as const,
+                        filePath: "/f.md",
+                    },
+                }),
+            );
         }
         state.updateWidget();
         expect(state.statusValue).toBe("\u25cb 3 bg");
@@ -491,7 +557,19 @@ describe("widget lifecycle (updateWidget logic)", () => {
     it("does not recreate widget when count goes from 2 -> 1", () => {
         const state = createWidgetState();
         for (const id of ["scout-11111111", "worker-22222222"]) {
-            state.backgroundAgents.set(id, makeFakeEntry({ id, agent: { name: id.split("-")[0], description: "t", systemPrompt: "", source: "system" as const, filePath: "/f.md" } }));
+            state.backgroundAgents.set(
+                id,
+                makeFakeEntry({
+                    id,
+                    agent: {
+                        name: id.split("-")[0],
+                        description: "t",
+                        systemPrompt: "",
+                        source: "system" as const,
+                        filePath: "/f.md",
+                    },
+                }),
+            );
         }
         state.updateWidget();
         expect(state.widgetActive).toBe(true);
@@ -534,10 +612,7 @@ describe("widget render width compliance", () => {
 
     const MAX_ENTRIES = 5;
 
-    function renderLines(
-        entries: BackgroundAgent[],
-        width: number,
-    ): string[] {
+    function renderLines(entries: BackgroundAgent[], width: number): string[] {
         const ICON_RUNNING = "\u25cb";
         const lines: string[] = [];
         const ICON_W = 2;
@@ -559,10 +634,7 @@ describe("widget render width compliance", () => {
 
             // Line 1: truncated to width (the fix)
             const line1 =
-                `${ICON_RUNNING} ` +
-                `${agentName}  ` +
-                `${shortId}  ` +
-                `${desc}`;
+                `${ICON_RUNNING} ` + `${agentName}  ` + `${shortId}  ` + `${desc}`;
             lines.push(truncateToWidth(line1, width));
 
             // Line 2: always truncated to width
@@ -574,7 +646,9 @@ describe("widget render width compliance", () => {
     }
 
     it("all lines fit within width for a narrow terminal (width=20)", () => {
-        const entry = makeFakeEntry({ description: "Explore authentication module deeply" });
+        const entry = makeFakeEntry({
+            description: "Explore authentication module deeply",
+        });
         const lines = renderLines([entry], 20);
         for (const line of lines) {
             expect(visibleWidth(line)).toBeLessThanOrEqual(20);
@@ -585,7 +659,13 @@ describe("widget render width compliance", () => {
         const entry = makeFakeEntry({
             id: "worker-e5f6g7h8",
             description: "Generate comprehensive test cases for the auth module",
-            agent: { name: "worker", description: "t", systemPrompt: "", source: "system" as const, filePath: "/f.md" },
+            agent: {
+                name: "worker",
+                description: "t",
+                systemPrompt: "",
+                source: "system" as const,
+                filePath: "/f.md",
+            },
         });
         const lines = renderLines([entry], 80);
         for (const line of lines) {
@@ -604,11 +684,13 @@ describe("widget render width compliance", () => {
     it("caps rendered entries at MAX_ENTRIES with overflow indicator", () => {
         const entries: BackgroundAgent[] = [];
         for (let i = 0; i < 8; i++) {
-            entries.push(makeFakeEntry({
-                id: `scout-${String(i).padStart(8, "0")}`,
-                description: `task ${i}`,
-                task: `task ${i}`,
-            }));
+            entries.push(
+                makeFakeEntry({
+                    id: `scout-${String(i).padStart(8, "0")}`,
+                    description: `task ${i}`,
+                    task: `task ${i}`,
+                }),
+            );
         }
 
         const lines = renderLines(entries, 80);
@@ -620,11 +702,13 @@ describe("widget render width compliance", () => {
     it("overflow indicator line respects narrow width", () => {
         const entries: BackgroundAgent[] = [];
         for (let i = 0; i < 7; i++) {
-            entries.push(makeFakeEntry({
-                id: `scout-${String(i).padStart(8, "0")}`,
-                description: `task ${i}`,
-                task: `task ${i}`,
-            }));
+            entries.push(
+                makeFakeEntry({
+                    id: `scout-${String(i).padStart(8, "0")}`,
+                    description: `task ${i}`,
+                    task: `task ${i}`,
+                }),
+            );
         }
 
         const lines = renderLines(entries, 5);

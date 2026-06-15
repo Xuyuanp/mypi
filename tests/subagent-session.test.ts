@@ -9,8 +9,8 @@
  */
 
 import { describe, expect, it, vi } from "vitest";
-import { createZeroUsage } from "../extensions/subagent/index.js";
 import { createBackgroundManager } from "../extensions/subagent/background.js";
+import { createZeroUsage } from "../extensions/subagent/index.js";
 import type {
     AgentRunResult,
     BackgroundSubagentDetails,
@@ -50,7 +50,10 @@ function makeMockCtx() {
 
 describe("foreground subagent session in details", () => {
     it("session field is populated in ForegroundSubagentDetails", () => {
-        const session = { dir: "/tmp/sessions/abc123/subagent", id: "scout-a1b2c3d4" };
+        const session = {
+            dir: "/tmp/sessions/abc123/subagent",
+            id: "scout-a1b2c3d4",
+        };
         const details: ForegroundSubagentDetails = {
             kind: "foreground",
             result: makeFakeResult(),
@@ -76,7 +79,10 @@ describe("foreground subagent session in details", () => {
 
 describe("background subagent session in details", () => {
     it("session field is populated in BackgroundSubagentDetails", () => {
-        const session = { dir: "/tmp/sessions/abc123/subagent", id: "worker-e5f6g7h8" };
+        const session = {
+            dir: "/tmp/sessions/abc123/subagent",
+            id: "worker-e5f6g7h8",
+        };
         const details: BackgroundSubagentDetails = {
             kind: "background",
             result: makeFakeResult(),
@@ -154,13 +160,11 @@ describe("background injectResult session header", () => {
         mgr.setSessionActive(true);
 
         const session = { dir: "/tmp/sessions/abc/subagent", id: "worker-e5f6g7h8" };
-        mgr.injectResult(
-            "worker-e5f6g7h8",
-            "completed",
-            "done",
-            makeFakeResult(),
-            { description: "bg task", cancelled: false, session },
-        );
+        mgr.injectResult("worker-e5f6g7h8", "completed", "done", makeFakeResult(), {
+            description: "bg task",
+            cancelled: false,
+            session,
+        });
 
         const [msg] = pi.sendMessage.mock.calls[0];
         expect(msg.details.session).toEqual(session);
@@ -173,13 +177,10 @@ describe("background injectResult session header", () => {
         mgr.setContext(ctx);
         mgr.setSessionActive(true);
 
-        mgr.injectResult(
-            "worker-e5f6g7h8",
-            "completed",
-            "done",
-            makeFakeResult(),
-            { description: "bg task", cancelled: false },
-        );
+        mgr.injectResult("worker-e5f6g7h8", "completed", "done", makeFakeResult(), {
+            description: "bg task",
+            cancelled: false,
+        });
 
         const [msg] = pi.sendMessage.mock.calls[0];
         expect(msg.details.session).toBeUndefined();

@@ -30,8 +30,8 @@ import {
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import workingMessage, {
     buildSweepFrames,
-    formatPhrase,
     FRAME_COUNT,
+    formatPhrase,
     parseFgAnsiToRgb,
     pickWorkingWords,
     SPINNER_GLYPHS,
@@ -45,7 +45,6 @@ const ACCENT = { r: 138, g: 190, b: 183 };
 
 // Strip every SGR sequence to recover the underlying plain text.
 function stripAnsi(s: string): string {
-    // biome-ignore lint/suspicious/noControlCharactersInRegex: matching ANSI escapes
     return s.replace(/\x1b\[[0-9;]*m/g, "");
 }
 
@@ -60,8 +59,7 @@ function brightestIndex(frame: string): number {
         const r = Number(m[1]);
         const g = Number(m[2]);
         const b = Number(m[3]);
-        const dist =
-            (r - PEAK.r) ** 2 + (g - PEAK.g) ** 2 + (b - PEAK.b) ** 2;
+        const dist = (r - PEAK.r) ** 2 + (g - PEAK.g) ** 2 + (b - PEAK.b) ** 2;
         if (dist < bestDist) {
             bestDist = dist;
             best = i;
@@ -129,8 +127,7 @@ describe("working-message helpers", () => {
         });
 
         it("colors every character with a truecolor foreground", () => {
-            const count = (frames[0].match(/\x1b\[38;2;\d+;\d+;\d+m/g) ?? [])
-                .length;
+            const count = (frames[0].match(/\x1b\[38;2;\d+;\d+;\d+m/g) ?? []).length;
             expect(count).toBe(text.length);
         });
 
@@ -151,9 +148,9 @@ describe("working-message helpers", () => {
         });
 
         it("returns a single empty frame for empty text", () => {
-            expect(
-                buildSweepFrames({ text: "", peak: PEAK, base: BASE }),
-            ).toEqual([""]);
+            expect(buildSweepFrames({ text: "", peak: PEAK, base: BASE })).toEqual([
+                "",
+            ]);
         });
 
         it("fully exits at both ends for the longest phrase (seamless loop)", () => {
@@ -208,9 +205,7 @@ describe("working-message helpers", () => {
         it("colors the spinner glyph with the accent color", () => {
             const accentSeq = `\x1b[38;2;${ACCENT.r};${ACCENT.g};${ACCENT.b}m`;
             const glyph = SPINNER_GLYPHS[0];
-            expect(frames[0].startsWith(`${accentSeq}${glyph}\x1b[0m `)).toBe(
-                true,
-            );
+            expect(frames[0].startsWith(`${accentSeq}${glyph}\x1b[0m `)).toBe(true);
         });
 
         it("still terminates every frame with a full reset", () => {
@@ -239,7 +234,7 @@ describe("working-message helpers", () => {
 type Handler = (event: unknown, ctx: unknown) => unknown;
 
 function makeCtx(hasUI: boolean) {
-        const calls: { method: string; arg: unknown }[] = [];
+    const calls: { method: string; arg: unknown }[] = [];
     const ctx = {
         hasUI,
         ui: {
@@ -264,8 +259,9 @@ function makeCtx(hasUI: boolean) {
 
 function loadHandlers() {
     const handlers = new Map<string, Handler>();
-    const pi = { on: (event: string, handler: Handler) => handlers.set(event, handler) };
-    // biome-ignore lint/suspicious/noExplicitAny: minimal fake ExtensionAPI
+    const pi = {
+        on: (event: string, handler: Handler) => handlers.set(event, handler),
+    };
     workingMessage(pi as any);
     return handlers;
 }

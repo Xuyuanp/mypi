@@ -6,11 +6,7 @@
  */
 
 import { describe, expect, it } from "vitest";
-import {
-    buildToolRows,
-    COL_GAP,
-    computeColumnWidths,
-} from "../extensions/tools.js";
+import { buildToolRows, COL_GAP, computeColumnWidths } from "../extensions/tools.js";
 
 type Tool = {
     name: string;
