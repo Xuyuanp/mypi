@@ -8,15 +8,15 @@
  */
 
 import { describe, expect, it } from "vitest";
-import type { AgentConfig } from "../extensions/subagent/agents.js";
 import {
     buildAgentRows,
     COL_GAP,
     clamp,
     computeColumnWidths,
 } from "../extensions/subagent/command.js";
+import type { AgentSpec } from "../extensions/subagent/types.js";
 
-const agent = (overrides: Partial<AgentConfig>): AgentConfig => ({
+const agent = (overrides: Partial<AgentSpec>): AgentSpec => ({
     name: "scout",
     description: "explore the codebase",
     systemPrompt: "",

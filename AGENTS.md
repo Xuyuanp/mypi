@@ -28,6 +28,10 @@
 - Use classes only for TUI components (implementing `Component` interface); prefer closures + plain objects elsewhere
 - Export internal helpers as named exports only when they need to be tested or reused (e.g. `buildFallbackTitle`, `postProcessTitle`)
 
+### Gotchas
+
+- `optional` vs `required | undefined`: In TypeScript, `field?: T` means the key can be absent, while `field: T | undefined` means the key must be present but can be `undefined`. When implementing an interface from the framework (e.g. `AgentToolResult`), if it declares `details: T`, you must always return `details` explicitly (use `details: undefined` when there is no value). Do NOT declare your local interface with `details?: T` — this makes it optional and breaks assignability to the framework type.
+
 ### TypeScript Conventions
 
 - ES module syntax with `import`/`export`; use `.js` extension for relative imports (e.g. `"./agents.js"`)

@@ -39,6 +39,7 @@ function makeResult(overrides?: Partial<AgentRunResult>): AgentRunResult {
         messages: [],
         stderr: "",
         usage: createZeroUsage(),
+        durationMs: 0,
         ...overrides,
     };
 }
@@ -128,8 +129,9 @@ describe("formatUsageStats", () => {
             model: "test-model",
             durationMs: 3500,
             contextWindow: 10000,
+            toolCallCount: 5,
         });
-        expect(result).toContain("2 turns");
+        expect(result).toContain("2 turns 5 tools");
         expect(result).toContain("\u21911.5k");
         expect(result).toContain("\u2193500");
         expect(result).toContain("R3.0k");
@@ -137,7 +139,7 @@ describe("formatUsageStats", () => {
         expect(result).toContain("CH");
         expect(result).toContain("ctx 46%");
         expect(result).toContain("$0.0040");
-        expect(result).toContain("3.5s");
+        expect(result).toContain("in 3.5s");
         expect(result).toContain("test-model");
     });
 
@@ -153,12 +155,27 @@ describe("formatUsageStats", () => {
         // cacheRead / (input + cacheRead + cacheWrite) = 1500/2000 = 75%
         expect(result).toContain("CH75%");
     });
+
+    it("renders turns and tool calls", () => {
+        const usage = { ...createZeroUsage(), turns: 3 };
+        expect(formatUsageStats(usage, { toolCallCount: 7 })).toContain(
+            "3 turns 7 tools",
+        );
+        expect(formatUsageStats(usage)).toContain("3 turns");
+        expect(formatUsageStats(usage)).not.toContain("tool");
+        expect(formatUsageStats(createZeroUsage(), { toolCallCount: 1 })).toContain(
+            "1 tool",
+        );
+        expect(
+            formatUsageStats(createZeroUsage(), { toolCallCount: 1 }),
+        ).not.toContain("tools");
+    });
 });
 
 // ── buildLastLine ────────────────────────────────────────────────────
 
 describe("buildLastLine", () => {
-    it("includes tool count and usage", () => {
+    it("includes tool count and turns in compact format", () => {
         const r = makeResult({
             usage: {
                 ...createZeroUsage(),
@@ -170,8 +187,8 @@ describe("buildLastLine", () => {
             durationMs: 2000,
         });
         const line = buildLastLine(r, 5);
-        expect(line).toContain("5 tools");
-        expect(line).toContain("1 turn");
+        expect(line).toContain("1 turn 5 tools");
+        expect(line).toContain("in 2.0s");
     });
 
     it("omits tool count when zero", () => {
@@ -179,8 +196,8 @@ describe("buildLastLine", () => {
             usage: { ...createZeroUsage(), inputTokens: 100, turns: 1 },
         });
         const line = buildLastLine(r, 0);
-        expect(line).not.toContain("tools");
         expect(line).toContain("1 turn");
+        expect(line).not.toContain("tool");
     });
 });
 
@@ -341,9 +358,10 @@ describe("AgentOutcome variants", () => {
         expect(outcome.stopReason).toBe("end_turn");
     });
 
-    it("running variant has no additional fields", () => {
-        const outcome: AgentOutcome = { status: "running" };
-        expect(outcome.status).toBe("running");
+    it("success variant with no stopReason", () => {
+        const outcome: AgentOutcome = { status: "success" };
+        expect(outcome.status).toBe("success");
+        expect(outcome.stopReason).toBeUndefined();
     });
 
     it("error variant requires exitCode and message", () => {
@@ -401,11 +419,11 @@ describe("isSubagentError", () => {
         ).toBe(false);
     });
 
-    it("returns false for running outcome", () => {
+    it("returns false for success outcome without stopReason", () => {
         expect(
             isSubagentError(
                 makeResult({
-                    outcome: { status: "running" },
+                    outcome: { status: "success" },
                 }),
             ),
         ).toBe(false);
@@ -612,11 +630,14 @@ describe("renderSubagentResult (background)", () => {
         expect(text).toContain("cancelled task");
     });
 
-    it("renders running state with model info", () => {
+    it("renders old serialized running state gracefully (backward compat)", () => {
+        // Old sessions may still have outcome.status === "running" in
+        // persisted data. The renderer handles this at runtime even
+        // though it's no longer in the AgentOutcome type.
         const details: BackgroundSubagentDetails = {
             kind: "background",
             result: makeResult({
-                outcome: { status: "running" },
+                outcome: { status: "running" } as any,
                 model: "deepseek/deepseek-v4-flash",
                 task: "explore codebase",
             }),
@@ -646,7 +667,7 @@ describe("accumulateUsage integration", () => {
 
         const r = makeResult({ usage, durationMs: 1000 });
         const line = buildLastLine(r, 2);
-        expect(line).toContain("2 tools");
+        expect(line).toContain("1 turn 2 tools");
         expect(line).toContain("\u2191100");
         expect(line).toContain("\u219350");
         expect(line).toContain("R200");

@@ -18,17 +18,21 @@ import {
     createZeroUsage,
 } from "../extensions/subagent/index.js";
 import type { AgentRunResult } from "../extensions/subagent/types.js";
-import { isSubagentError } from "../extensions/subagent/types.js";
+import {
+    createZeroProgress,
+    isSubagentError,
+} from "../extensions/subagent/types.js";
 
 function makeFakeResult(overrides?: Partial<AgentRunResult>): AgentRunResult {
     return {
         agent: "scout",
         agentSource: "system" as const,
         task: "do something",
-        outcome: { status: "running" },
+        outcome: { status: "success" },
         messages: [],
         stderr: "",
         usage: createZeroUsage(),
+        durationMs: 0,
         ...overrides,
     };
 }
@@ -37,19 +41,12 @@ function makeFakeEntry(overrides?: Partial<BackgroundAgent>): BackgroundAgent {
     return {
         id: "scout-a1b2c3d4",
         description: "test",
-        agent: {
-            name: "scout",
-            description: "t",
-            systemPrompt: "",
-            source: "system" as const,
-            filePath: "/f.md",
-        },
+        agentName: "scout",
         task: "do it",
         kill: () => {},
         promise: new Promise(() => {}) as any,
         startedAt: Date.now(),
-        toolCallCount: 0,
-        latestResult: makeFakeResult(),
+        progress: createZeroProgress(),
         ...overrides,
     };
 }
@@ -62,19 +59,12 @@ describe("cancel command logic", () => {
         return {
             id,
             description: "test task",
-            agent: {
-                name: "scout",
-                description: "test",
-                systemPrompt: "",
-                source: "system",
-                filePath: "/fake.md",
-            },
+            agentName: "scout",
             task: "do something",
             kill: vi.fn(() => controller.abort()),
             promise: new Promise(() => {}), // never resolves
             startedAt: Date.now(),
-            toolCallCount: 0,
-            latestResult: makeFakeResult(),
+            progress: createZeroProgress(),
         };
     }
 
@@ -139,19 +129,12 @@ describe("background agent lifecycle", () => {
         const entry: BackgroundAgent = {
             id: "worker-abcd1234",
             description: "test",
-            agent: {
-                name: "worker",
-                description: "test",
-                systemPrompt: "",
-                source: "system",
-                filePath: "/fake.md",
-            },
+            agentName: "worker",
             task: "do work",
             kill: () => controller.abort(),
             promise: promise as any,
             startedAt: Date.now(),
-            toolCallCount: 0,
-            latestResult: makeFakeResult({ agent: "worker", task: "do work" }),
+            progress: createZeroProgress(),
         };
         map.set(entry.id, entry);
 
@@ -219,6 +202,7 @@ describe("background agent lifecycle", () => {
                 },
                 turns: 1,
             },
+            durationMs: 0,
         };
 
         const promise = Promise.resolve(fakeResult);
@@ -226,19 +210,12 @@ describe("background agent lifecycle", () => {
         const entry: BackgroundAgent = {
             id: "scout-ef012345",
             description: "find files",
-            agent: {
-                name: "scout",
-                description: "test",
-                systemPrompt: "",
-                source: "system",
-                filePath: "/fake.md",
-            },
+            agentName: "scout",
             task: "find files",
             kill: () => {},
             promise: promise as any,
             startedAt: Date.now(),
-            toolCallCount: 0,
-            latestResult: makeFakeResult({ agent: "scout", task: "find files" }),
+            progress: createZeroProgress(),
         };
         map.set(entry.id, entry);
 
@@ -299,6 +276,7 @@ describe("background agent lifecycle", () => {
             ],
             stderr: "",
             usage: createZeroUsage(),
+            durationMs: 0,
         };
 
         const promise = Promise.resolve(fakeResult);
@@ -329,6 +307,7 @@ describe("background agent lifecycle", () => {
             messages: [] as any[],
             stderr: "",
             usage: createZeroUsage(),
+            durationMs: 0,
         };
 
         const promise = Promise.resolve(fakeResult);
@@ -361,22 +340,12 @@ describe("shutdown logic", () => {
             const entry: BackgroundAgent = {
                 id: name,
                 description: "test",
-                agent: {
-                    name: name.split("-")[0],
-                    description: "test",
-                    systemPrompt: "",
-                    source: "system",
-                    filePath: "/fake.md",
-                },
+                agentName: name.split("-")[0],
                 task: "do work",
                 kill: killFn,
                 promise: Promise.resolve({} as any),
                 startedAt: Date.now(),
-                toolCallCount: 0,
-                latestResult: makeFakeResult({
-                    agent: name.split("-")[0],
-                    task: "do work",
-                }),
+                progress: createZeroProgress(),
             };
             map.set(name, entry);
             killFns.push(killFn);
@@ -540,13 +509,7 @@ describe("widget lifecycle (updateWidget logic)", () => {
                 id,
                 makeFakeEntry({
                     id,
-                    agent: {
-                        name: id.split("-")[0],
-                        description: "t",
-                        systemPrompt: "",
-                        source: "system" as const,
-                        filePath: "/f.md",
-                    },
+                    agentName: id.split("-")[0],
                 }),
             );
         }
@@ -561,13 +524,7 @@ describe("widget lifecycle (updateWidget logic)", () => {
                 id,
                 makeFakeEntry({
                     id,
-                    agent: {
-                        name: id.split("-")[0],
-                        description: "t",
-                        systemPrompt: "",
-                        source: "system" as const,
-                        filePath: "/f.md",
-                    },
+                    agentName: id.split("-")[0],
                 }),
             );
         }
@@ -628,7 +585,7 @@ describe("widget render width compliance", () => {
                 lines.push(truncateToWidth(`  +${remaining} more`, width));
                 break;
             }
-            const agentName = entry.agent.name.padEnd(8).slice(0, 8);
+            const agentName = entry.agentName.padEnd(8).slice(0, 8);
             const shortId = entry.id.slice(entry.id.lastIndexOf("-") + 1);
             const desc = truncateToWidth(entry.description, descAvail, "\u2026");
 
@@ -659,13 +616,7 @@ describe("widget render width compliance", () => {
         const entry = makeFakeEntry({
             id: "worker-e5f6g7h8",
             description: "Generate comprehensive test cases for the auth module",
-            agent: {
-                name: "worker",
-                description: "t",
-                systemPrompt: "",
-                source: "system" as const,
-                filePath: "/f.md",
-            },
+            agentName: "worker",
         });
         const lines = renderLines([entry], 80);
         for (const line of lines) {

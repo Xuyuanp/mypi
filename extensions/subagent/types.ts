@@ -7,20 +7,61 @@
  */
 
 import type { Message } from "@earendil-works/pi-ai";
-import type { AgentConfig } from "./agents.js";
+
+// ── AgentSpec ────────────────────────────────────────────────────────
+
+/**
+ * Discovery template returned by `discoverAgents()`.
+ *
+ * Represents an agent definition as declared in a `.md` file. Fields
+ * like `skills` hold names (not paths), and `model` is optional
+ * (may inherit from the parent session at resolution time).
+ */
+export interface AgentSpec {
+    name: string;
+    description: string;
+    tools?: string[];
+    /** Skill names (not resolved paths). */
+    skills?: string[];
+    model?: string;
+    systemPrompt: string;
+    source: "user" | "system";
+    filePath: string;
+}
+
+// ── ResolvedAgent ────────────────────────────────────────────────────
+
+/**
+ * Fully resolved execution config passed to `runSubagent`.
+ *
+ * All optional resolution has been performed: model is required,
+ * skills are absolute filesystem paths (or undefined if none).
+ * Drops `description` and `filePath` — not needed at runtime.
+ */
+export interface ResolvedAgent {
+    name: string;
+    tools?: string[];
+    /** Resolved absolute filesystem paths for --skill flags. */
+    skillPaths?: string[];
+    /** Required — resolved from param override > agent default > parent model. */
+    model: string;
+    systemPrompt: string;
+    source: "user" | "system";
+}
 
 // ── AgentOutcome ─────────────────────────────────────────────────────
 
 /**
  * Discriminated union expressing the terminal state of a subagent run.
  *
- * - "running": subprocess in progress (replaces the old exitCode: -1 sentinel)
+ * Only terminal variants — "running" is a lifecycle state handled
+ * internally by `execute.ts`, never exposed on a completed result.
+ *
  * - "success": clean exit (exit code 0, no error stop reason)
  * - "error": non-zero exit or agent-reported error
  * - "aborted": cancelled via AbortSignal
  */
 export type AgentOutcome =
-    | { status: "running" }
     | { status: "success"; stopReason?: string }
     | {
           status: "error";
@@ -51,6 +92,14 @@ export interface UsageStats {
 
 // ── AgentRunResult ───────────────────────────────────────────────────
 
+/**
+ * Immutable execution record returned by `runSubagent`.
+ *
+ * `outcome` is always terminal (never "running").
+ * `durationMs` is always set.
+ * `contextWindow` is not included — it is a rendering concern resolved
+ * at the callsite via the model registry.
+ */
 export interface AgentRunResult {
     agent: string;
     agentSource: "user" | "system" | "unknown";
@@ -60,8 +109,23 @@ export interface AgentRunResult {
     stderr: string;
     usage: UsageStats;
     model?: string;
-    contextWindow?: number;
-    durationMs?: number;
+    durationMs: number;
+}
+
+// ── RunProgress ──────────────────────────────────────────────────────
+
+/**
+ * Lightweight mutable struct for background widget observation.
+ *
+ * Purpose-built for the progress display — not a full AgentRunResult.
+ * Background entries accumulate this via progress events instead of
+ * holding a live reference to the internal accumulator.
+ */
+export interface RunProgress {
+    usage: UsageStats;
+    model?: string;
+    toolCallCount: number;
+    turns: number;
 }
 
 // ── SubagentDetails ──────────────────────────────────────────────────
@@ -72,6 +136,8 @@ export interface ForegroundSubagentDetails {
     execStatuses: Record<string, boolean>;
     session?: { dir: string; id: string };
     resumedFrom?: string;
+    /** Model context window size for usage % display. Set at result time. */
+    contextWindow?: number;
 }
 
 export interface BackgroundSubagentDetails {
@@ -80,6 +146,8 @@ export interface BackgroundSubagentDetails {
     description: string;
     cancelled: boolean;
     session?: { dir: string; id: string };
+    /** Model context window size for usage % display. Set at result time. */
+    contextWindow?: number;
 }
 
 export type SubagentDetails = ForegroundSubagentDetails | BackgroundSubagentDetails;
@@ -89,27 +157,29 @@ export type SubagentDetails = ForegroundSubagentDetails | BackgroundSubagentDeta
 export interface BackgroundAgent {
     id: string;
     description: string;
-    agent: AgentConfig;
+    agentName: string;
     task: string;
     kill: () => void;
     promise: Promise<AgentRunResult>;
     startedAt: number;
-    latestResult: AgentRunResult;
-    toolCallCount: number;
+    progress: RunProgress;
 }
 
 // ── Progress events ──────────────────────────────────────────────────
 
+/**
+ * Event-based progress reporting from `runSubagent`.
+ *
+ * Each variant carries exactly what changed — consumers accumulate
+ * their own views from these atomic events.
+ */
 export type SubagentProgressEvent =
-    | { type: "message" }
+    | { type: "message"; message: Message; usage: UsageStats; model?: string }
     | { type: "tool_start"; toolCallId: string }
     | { type: "tool_end"; toolCallId: string; isError: boolean }
-    | { type: "tool_result" };
+    | { type: "tool_result"; message: Message };
 
-export type SubagentProgressCallback = (
-    result: AgentRunResult,
-    event: SubagentProgressEvent,
-) => void;
+export type SubagentProgressCallback = (event: SubagentProgressEvent) => void;
 
 // ── Value utilities ──────────────────────────────────────────────────
 
@@ -134,11 +204,20 @@ export const ZERO_USAGE: Readonly<UsageStats> = Object.freeze({
 
 /**
  * Returns true when the subagent result indicates a failure.
- * Positively matches error/aborted variants (future-proof if new
- * non-error variants are added).
+ * Positively matches error/aborted variants.
  */
 export function isSubagentError(r: AgentRunResult): r is AgentRunResult & {
     outcome: { status: "error" | "aborted" };
 } {
     return r.outcome.status === "error" || r.outcome.status === "aborted";
+}
+
+/** Create a fresh zero-initialized RunProgress. */
+export function createZeroProgress(): RunProgress {
+    return {
+        usage: createZeroUsage(),
+        model: undefined,
+        toolCallCount: 0,
+        turns: 0,
+    };
 }

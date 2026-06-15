@@ -131,11 +131,11 @@ export function createBackgroundManager(pi: ExtensionAPI): BackgroundManager {
                                 );
                                 break;
                             }
-                            const r = entry.latestResult;
+                            const p = entry.progress;
                             const elapsed = Date.now() - entry.startedAt;
 
                             // Line 1: icon + agent + id + description
-                            const agentName = entry.agent.name.padEnd(8).slice(0, 8);
+                            const agentName = entry.agentName.padEnd(8).slice(0, 8);
                             const shortId = entry.id.slice(
                                 entry.id.lastIndexOf("-") + 1,
                             );
@@ -151,14 +151,14 @@ export function createBackgroundManager(pi: ExtensionAPI): BackgroundManager {
                                 `${theme.fg("muted", desc)}`;
                             lines.push(truncateToWidth(line1, width));
 
-                            // Line 2: usage
+                            // Line 2: usage summary
                             const usageLine = buildLastLine(
                                 {
-                                    ...r,
+                                    usage: p.usage,
+                                    model: p.model,
                                     durationMs: elapsed,
-                                    contextWindow: undefined,
                                 },
-                                entry.toolCallCount,
+                                p.toolCallCount,
                             );
                             const line2 = `  ${theme.fg("dim", usageLine)}`;
                             lines.push(truncateToWidth(line2, width));
@@ -264,6 +264,7 @@ export function createBackgroundManager(pi: ExtensionAPI): BackgroundManager {
                         description: details?.description ?? "(unknown)",
                         cancelled: details?.cancelled ?? false,
                         session: details?.session,
+                        contextWindow: details?.contextWindow,
                     },
                 },
                 {

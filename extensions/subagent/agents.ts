@@ -6,23 +6,13 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { getAgentDir, parseFrontmatter } from "@earendil-works/pi-coding-agent";
+import type { AgentSpec } from "./types.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const SYSTEM_AGENTS_DIR = path.join(__dirname, "agents");
 
-export interface AgentConfig {
-    name: string;
-    description: string;
-    tools?: string[];
-    skills?: string[];
-    model?: string;
-    systemPrompt: string;
-    source: "user" | "system";
-    filePath: string;
-}
-
 export interface AgentDiscoveryResult {
-    agents: AgentConfig[];
+    agents: AgentSpec[];
 }
 
 function parseCommaSeparated(value: string | undefined): string[] | undefined {
@@ -33,8 +23,8 @@ function parseCommaSeparated(value: string | undefined): string[] | undefined {
     return items && items.length > 0 ? items : undefined;
 }
 
-function loadAgentsFromDir(dir: string, source: "user" | "system"): AgentConfig[] {
-    const agents: AgentConfig[] = [];
+function loadAgentsFromDir(dir: string, source: "user" | "system"): AgentSpec[] {
+    const agents: AgentSpec[] = [];
 
     if (!fs.existsSync(dir)) {
         return agents;
@@ -87,7 +77,7 @@ export function discoverAgents(): AgentDiscoveryResult {
     const systemAgents = loadAgentsFromDir(SYSTEM_AGENTS_DIR, "system");
     const userAgents = loadAgentsFromDir(userDir, "user");
 
-    const agentMap = new Map<string, AgentConfig>();
+    const agentMap = new Map<string, AgentSpec>();
 
     // System agents have lowest priority (overridden by user)
     for (const agent of systemAgents) agentMap.set(agent.name, agent);
@@ -97,7 +87,7 @@ export function discoverAgents(): AgentDiscoveryResult {
 }
 
 export function formatAgentList(
-    agents: AgentConfig[],
+    agents: AgentSpec[],
     maxItems: number,
 ): { text: string; remaining: number } {
     if (agents.length === 0) return { text: "none", remaining: 0 };

@@ -1,12 +1,8 @@
 /**
  * Subagent Tool - Task delegation to specialized agents.
  *
- * Discovers agent definitions (system + user) from .md files with
- * YAML frontmatter, each specifying allowed tools, model, and a
- * system prompt body. Spawns an isolated `pi` subprocess per
- * invocation (--mode json, no extensions/skills) and streams
- * structured JSON events (message_end, tool_execution_start/end,
- * tool_result_end) back in real-time.
+ * Thin wiring layer: tool registration, event subscriptions, and
+ * delegation to execute.ts / background.ts / render.ts.
  *
  * Key capabilities:
  * - Concurrent execution: no executionMode declared, so the agent
@@ -15,117 +11,53 @@
  * - Abort support: SIGTERM on signal, SIGKILL after 5s timeout.
  * - TUI rendering: collapsed/expanded views with tool-specific
  *   formatting, status icons, and usage stats (tokens/cost/time).
- * - Token tracking: accumulates input, output, cache read/write,
- *   cost, and context tokens across all turns.
  */
 
-import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import * as fs from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
 import type { Message } from "@earendil-works/pi-ai";
 
-import {
-    type ExtensionAPI,
-    type ExtensionContext,
-    type Skill,
-    withFileMutationQueue,
+import type {
+    ExtensionAPI,
+    ExtensionContext,
+    Skill,
 } from "@earendil-works/pi-coding-agent";
 import { Container, Spacer, Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
-import { type AgentConfig, discoverAgents } from "./agents.js";
+import { discoverAgents } from "./agents.js";
 import type { BackgroundManager } from "./background.js";
 import { BACKGROUND_RESULT_TYPE, createBackgroundManager } from "./background.js";
 import { registerSubagentCommand } from "./command.js";
+import { runSubagent } from "./execute.js";
 import { getFinalOutput, renderSubagentResult } from "./render.js";
 import { lookupSubagentSession } from "./resume.js";
 import type {
-    AgentOutcome,
     AgentRunResult,
+    AgentSpec,
     BackgroundAgent,
     BackgroundSubagentDetails,
     ForegroundSubagentDetails,
+    ResolvedAgent,
     SubagentDetails,
     SubagentProgressCallback,
     UsageStats,
 } from "./types.js";
-import { createZeroUsage, isSubagentError, ZERO_USAGE } from "./types.js";
+import {
+    createZeroProgress,
+    createZeroUsage,
+    isSubagentError,
+    ZERO_USAGE,
+} from "./types.js";
 
 // ── Re-exports for backward compatibility ────────────────────────────
 export type { BackgroundAgent } from "./types.js";
 export { createZeroUsage } from "./types.js";
 
-// ── Local constants & helpers ────────────────────────────────────────
-
-const SUBAGENT_PREAMBLE = `${[
-    "You are now running as a subagent.",
-    "All the `user` messages are sent by the main agent.",
-    "The main agent cannot see your context,",
-    "it can only see your last message when you finish the task.",
-    "You must treat the parent agent as your caller.",
-    "Do not directly ask the end user questions.",
-    "If something is unclear,",
-    "explain the ambiguity in your final summary to the parent agent.",
-].join(" ")}
-`;
+// ── Local helpers ────────────────────────────────────────────────────
 
 function escapeXml(str: string): string {
     return str.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-}
-
-function parseModelStr(
-    modelStr: string,
-): { provider: string; id: string; thinkingLevel?: string } | null {
-    const slash = modelStr.indexOf("/");
-    if (slash === -1) return null;
-    const provider = modelStr.slice(0, slash);
-    const rest = modelStr.slice(slash + 1);
-    const match = rest.match(/^(.+):([a-z]+)$/);
-    if (match) return { provider, id: match[1], thinkingLevel: match[2] };
-    return { provider, id: rest };
-}
-
-function resolveContextWindow(
-    modelStr: string | undefined,
-    ctx: ExtensionContext,
-): number | undefined {
-    if (!modelStr) return ctx.model?.contextWindow;
-    const parsed = parseModelStr(modelStr);
-    if (!parsed) return ctx.model?.contextWindow;
-    const model = ctx.modelRegistry.find(parsed.provider, parsed.id);
-    return model?.contextWindow ?? ctx.model?.contextWindow;
-}
-
-function accumulateUsage(
-    target: UsageStats,
-    source: {
-        input?: number;
-        output?: number;
-        cacheRead?: number;
-        cacheWrite?: number;
-        totalTokens?: number;
-        cost?: {
-            input?: number;
-            output?: number;
-            cacheRead?: number;
-            cacheWrite?: number;
-            total?: number;
-        };
-    },
-): void {
-    target.inputTokens += source.input || 0;
-    target.outputTokens += source.output || 0;
-    target.cacheReadTokens += source.cacheRead || 0;
-    target.cacheWriteTokens += source.cacheWrite || 0;
-    const cost = source.cost;
-    if (cost) {
-        target.cost.input += cost.input || 0;
-        target.cost.output += cost.output || 0;
-        target.cost.cacheRead += cost.cacheRead || 0;
-        target.cost.cacheWrite += cost.cacheWrite || 0;
-        target.cost.total += cost.total || 0;
-    }
 }
 
 function sanitizeAgentName(name: string): string {
@@ -136,496 +68,21 @@ function sanitizeAgentName(name: string): string {
     );
 }
 
-async function writePromptToTempFile(
-    agentName: string,
-    prompt: string,
-): Promise<string> {
-    const safeName = sanitizeAgentName(agentName);
-    const filePath = path.join(
-        os.tmpdir(),
-        `pi-subagent-${safeName}-${randomUUID()}.md`,
-    );
-    await withFileMutationQueue(filePath, async () => {
-        await fs.promises.writeFile(filePath, prompt, {
-            encoding: "utf-8",
-            mode: 0o600,
-        });
-    });
-    return filePath;
-}
-
-function getPiInvocation(args: string[]): {
-    command: string;
-    args: string[];
-} {
-    const currentScript = process.argv[1];
-    const isBunVirtualScript = currentScript?.startsWith("/$bunfs/root/");
-    if (currentScript && !isBunVirtualScript && fs.existsSync(currentScript)) {
-        return {
-            command: process.execPath,
-            args: [currentScript, ...args],
-        };
-    }
-
-    const execName = path.basename(process.execPath).toLowerCase();
-    const isGenericRuntime = /^(node|bun)(\.exe)?$/.test(execName);
-    if (!isGenericRuntime) {
-        return { command: process.execPath, args };
-    }
-
-    return { command: "pi", args };
-}
-
-/**
- * Build an AgentOutcome from subprocess exit state.
- *
- * This is the single point where exitCode + stopReason + errorMessage
- * are reconciled into a discriminated union variant.
- */
-function buildOutcome(
-    exitCode: number,
-    wasAborted: boolean,
-    latestStopReason: string | undefined,
-    latestErrorMessage: string | undefined,
-    stderr: string,
-): AgentOutcome {
-    if (wasAborted) {
-        return { status: "aborted" };
-    }
-    if (exitCode !== 0) {
-        return {
-            status: "error",
-            exitCode,
-            stopReason: latestStopReason,
-            message:
-                latestErrorMessage ||
-                stderr ||
-                `(subprocess exited with code ${exitCode})`,
-        };
-    }
-    if (latestStopReason === "error") {
-        return {
-            status: "error",
-            exitCode: 0,
-            stopReason: "error",
-            message: latestErrorMessage || stderr || "(agent error)",
-        };
-    }
-    if (latestStopReason === "aborted") {
-        return { status: "aborted", message: latestErrorMessage };
-    }
-    return { status: "success", stopReason: latestStopReason };
-}
-
-// ── Backward compatibility shims ─────────────────────────────────────
-
-/**
- * Normalize an AgentOutcome from a possibly old-format result.
- *
- * Old format stored exitCode/stopReason/errorMessage as top-level fields.
- * New format uses a single `outcome` discriminated union.
- */
-function normalizeOutcome(r: Record<string, unknown>): AgentOutcome {
-    // New format: already has outcome
-    if (r.outcome && typeof r.outcome === "object") {
-        return r.outcome as AgentOutcome;
-    }
-    // Old format: reconstruct from legacy fields via buildOutcome.
-    // Special case: exitCode -1 was the old "running" sentinel.
-    const exitCode = (r.exitCode as number | undefined) ?? 0;
-    if (exitCode === -1) return { status: "running" };
-    return buildOutcome(
-        exitCode,
-        false, // wasAborted cannot be inferred from serialized data
-        r.stopReason as string | undefined,
-        r.errorMessage as string | undefined,
-        "", // stderr not stored in old details
-    );
-}
-
-/**
- * Normalize UsageStats from a possibly old-format shape.
- *
- * Old format: { input, output, cacheRead, cacheWrite, totalTokens, ... }
- * New format: { inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens, ... }
- */
-function normalizeUsage(raw: Record<string, unknown>): UsageStats {
-    // New format detection: has `inputTokens`
-    if ("inputTokens" in raw) return raw as unknown as UsageStats;
-    // Old format: map field names
-    return {
-        inputTokens: (raw.input as number) || 0,
-        outputTokens: (raw.output as number) || 0,
-        cacheReadTokens: (raw.cacheRead as number) || 0,
-        cacheWriteTokens: (raw.cacheWrite as number) || 0,
-        contextTokens: (raw.contextTokens as number) || 0,
-        cost: (raw.cost as UsageStats["cost"]) || {
-            input: 0,
-            output: 0,
-            cacheRead: 0,
-            cacheWrite: 0,
-            total: 0,
-        },
-        turns: (raw.turns as number) || 0,
-    };
-}
-
-/**
- * Normalize SubagentDetails from a possibly old-format shape.
- *
- * Old format: { result: { exitCode, ... }, background?, description?, cancelled?, execStatuses? }
- * New format: { kind: "foreground"|"background", result: { outcome, ... }, ... }
- */
-function normalizeDetails(raw: unknown): SubagentDetails | undefined {
-    if (!raw || typeof raw !== "object") return undefined;
-    const d = raw as Record<string, unknown>;
-    // New-format detection: has `kind` field
-    if (d.kind === "foreground" || d.kind === "background") {
-        return raw as SubagentDetails;
-    }
-    // Old-format: map to new shape
-    const rawResult = d.result as Record<string, unknown> | undefined;
-    if (!rawResult) return undefined;
-    const outcome = normalizeOutcome(rawResult);
-    const usage = rawResult.usage
-        ? normalizeUsage(rawResult.usage as Record<string, unknown>)
-        : createZeroUsage();
-    const newResult: AgentRunResult = {
-        agent: (rawResult.agent as string) || "",
-        agentSource:
-            (rawResult.agentSource as AgentRunResult["agentSource"]) || "unknown",
-        task: (rawResult.task as string) || "",
-        outcome,
-        messages: (rawResult.messages as Message[]) || [],
-        stderr: (rawResult.stderr as string) || "",
-        usage,
-        model: rawResult.model as string | undefined,
-        contextWindow: rawResult.contextWindow as number | undefined,
-        durationMs: rawResult.durationMs as number | undefined,
-    };
-    if (d.background || d.description != null || d.cancelled != null) {
-        return {
-            kind: "background",
-            result: newResult,
-            description: (d.description as string) || "(unknown)",
-            cancelled: (d.cancelled as boolean) || false,
-        };
-    }
-    return {
-        kind: "foreground",
-        result: newResult,
-        execStatuses: (d.execStatuses as Record<string, boolean>) || {},
-    };
-}
-
-// ── Subprocess execution ─────────────────────────────────────────────
-
-async function runSubagent(
-    agent: AgentConfig,
-    task: string,
-    cwd: string,
-    signal: AbortSignal | undefined,
-    onProgress: SubagentProgressCallback | undefined,
-    session: { dir: string; id: string } | undefined,
+/** Resolve the context window for a model string via the model registry. */
+function resolveContextWindow(
+    modelStr: string | undefined,
     ctx: ExtensionContext,
-    resume?: boolean,
-): Promise<AgentRunResult> {
-    const args: string[] = [
-        "--mode",
-        "json",
-        "--no-extensions",
-        "--no-context-files",
-        "--offline",
-        "--print",
-    ];
-
-    if (session) {
-        args.push("--session", path.join(session.dir, `${session.id}.jsonl`));
-    } else {
-        args.push("--no-session");
-    }
-    // --no-skills disables auto-discovered skills;
-    // --skill re-adds specific ones (resolved file paths).
-    args.push("--no-skills");
-    if (agent.skills?.length) {
-        for (const skill of agent.skills) {
-            args.push("--skill", skill);
-        }
-    }
-    const modelArg = agent.model;
-    if (modelArg) args.push("--model", modelArg);
-    // Disable thinking unless the model name includes a thinking level
-    // (e.g., "anthropic/claude-sonnet:high")
-    const hasThinkingLevel = modelArg && parseModelStr(modelArg)?.thinkingLevel;
-    if (!hasThinkingLevel) args.push("--thinking", "off");
-    if (agent.tools && agent.tools.length > 0)
-        args.push("--tools", agent.tools.join(","));
-
-    let tmpPromptPath: string | null = null;
-
-    const contextWindow = resolveContextWindow(agent.model, ctx);
-
-    const currentResult: AgentRunResult = {
-        agent: agent.name,
-        agentSource: agent.source,
-        task,
-        outcome: { status: "running" },
-        messages: [],
-        stderr: "",
-        usage: createZeroUsage(),
-        model: modelArg,
-        contextWindow,
-    };
-
-    const startTime = Date.now();
-
-    // Local variables for streaming state — NOT stored on outcome
-    // during streaming. Merged into the single outcome assignment
-    // at completion.
-    let latestStopReason: string | undefined;
-    let latestErrorMessage: string | undefined;
-
-    try {
-        const fullSystemPrompt = agent.systemPrompt.trim()
-            ? `${SUBAGENT_PREAMBLE}\n${agent.systemPrompt}`
-            : SUBAGENT_PREAMBLE.trim();
-        tmpPromptPath = await writePromptToTempFile(agent.name, fullSystemPrompt);
-        args.push("--append-system-prompt", tmpPromptPath);
-
-        args.push(resume ? task : `Task: ${task}`);
-        let wasAborted = false;
-
-        const exitCode = await new Promise<number>((resolve) => {
-            const invocation = getPiInvocation(args);
-            const proc = spawn(invocation.command, invocation.args, {
-                cwd,
-                shell: false,
-                stdio: ["ignore", "pipe", "pipe"],
-                env: {
-                    ...process.env,
-                    PI_SUBAGENT: "1",
-                    PI_SUBAGENT_NAME: agent.name,
-                },
-            });
-            let buffer = "";
-
-            const processLine = (line: string) => {
-                if (!line.trim()) return;
-                let event: any;
-                try {
-                    event = JSON.parse(line);
-                } catch {
-                    return;
-                }
-
-                if (event.type === "message_end" && event.message) {
-                    const msg = event.message as Message;
-                    currentResult.messages.push(msg);
-
-                    if (msg.role === "assistant") {
-                        currentResult.usage.turns++;
-                        if (msg.usage) {
-                            accumulateUsage(currentResult.usage, msg.usage);
-                            // Context size is the latest turn's prompt, not a
-                            // running total, so overwrite rather than accumulate.
-                            currentResult.usage.contextTokens =
-                                (msg.usage.input || 0) +
-                                (msg.usage.cacheRead || 0) +
-                                (msg.usage.cacheWrite || 0);
-                        }
-                        if (!currentResult.model && msg.model) {
-                            currentResult.model = msg.model;
-                            currentResult.contextWindow = resolveContextWindow(
-                                msg.model,
-                                ctx,
-                            );
-                        }
-                        if (msg.stopReason) latestStopReason = msg.stopReason;
-                        if (msg.errorMessage) latestErrorMessage = msg.errorMessage;
-                    }
-                    onProgress?.(currentResult, { type: "message" });
-                }
-
-                if (event.type === "tool_execution_start" && event.toolCallId) {
-                    onProgress?.(currentResult, {
-                        type: "tool_start",
-                        toolCallId: event.toolCallId,
-                    });
-                }
-
-                if (event.type === "tool_execution_end" && event.toolCallId) {
-                    onProgress?.(currentResult, {
-                        type: "tool_end",
-                        toolCallId: event.toolCallId,
-                        isError: !!event.isError,
-                    });
-                }
-
-                if (event.type === "tool_result_end" && event.message) {
-                    currentResult.messages.push(event.message as Message);
-                    onProgress?.(currentResult, {
-                        type: "tool_result",
-                    });
-                }
-            };
-
-            proc.stdout.on("data", (data) => {
-                buffer += data.toString();
-                const lines = buffer.split("\n");
-                buffer = lines.pop() || "";
-                for (const line of lines) processLine(line);
-            });
-
-            proc.stderr.on("data", (data) => {
-                currentResult.stderr += data.toString();
-            });
-
-            proc.on("close", (code) => {
-                if (buffer.trim()) processLine(buffer);
-                resolve(code ?? 0);
-            });
-
-            proc.on("error", () => {
-                resolve(1);
-            });
-
-            if (signal) {
-                let exited = false;
-                proc.on("close", () => {
-                    exited = true;
-                });
-                const killProc = () => {
-                    wasAborted = true;
-                    proc.kill("SIGTERM");
-                    setTimeout(() => {
-                        if (!exited) proc.kill("SIGKILL");
-                    }, 5000);
-                };
-                if (signal.aborted) killProc();
-                else
-                    signal.addEventListener("abort", killProc, {
-                        once: true,
-                    });
-            }
-        });
-
-        currentResult.durationMs = Date.now() - startTime;
-        currentResult.outcome = buildOutcome(
-            exitCode,
-            wasAborted,
-            latestStopReason,
-            latestErrorMessage,
-            currentResult.stderr,
-        );
-        if (wasAborted) throw new Error("Subagent was aborted");
-        return currentResult;
-    } finally {
-        if (tmpPromptPath)
-            try {
-                fs.unlinkSync(tmpPromptPath);
-            } catch {
-                /* ignore */
-            }
-    }
+): number | undefined {
+    if (!modelStr) return ctx.model?.contextWindow;
+    const slash = modelStr.indexOf("/");
+    if (slash === -1) return ctx.model?.contextWindow;
+    const provider = modelStr.slice(0, slash);
+    const rest = modelStr.slice(slash + 1);
+    const match = rest.match(/^(.+):([a-z]+)$/);
+    const id = match ? match[1] : rest;
+    const model = ctx.modelRegistry.find(provider, id);
+    return model?.contextWindow ?? ctx.model?.contextWindow;
 }
-
-// ── Tool schema & description ────────────────────────────────────────
-
-// ── Subagent tool params & types ─────────────────────────────────────
-
-interface SubagentToolParams {
-    agent: string;
-    description: string;
-    task: string;
-    model?: string;
-    cwd?: string;
-    skills?: string[];
-    background?: boolean;
-}
-
-interface ToolResult {
-    content: { type: "text"; text: string }[];
-    details: ForegroundSubagentDetails | BackgroundSubagentDetails;
-    isError?: boolean;
-}
-
-const SubagentParams = Type.Object({
-    agent: Type.String({
-        description:
-            "Name of an available agent. Must match a <name> from the agent list.",
-    }),
-    description: Type.String({
-        description: "A short (3-5 word) summary of the delegated task.",
-    }),
-    task: Type.String({
-        description:
-            "Self-contained task description. The subagent has NO access to your conversation history -- include all necessary context, file paths, constraints, and expected output format. Be explicit about whether to write code or only research.",
-    }),
-    model: Type.Optional(
-        Type.String({
-            description: 'Model override, e.g. "anthropic/claude-sonnet:high".',
-        }),
-    ),
-    cwd: Type.Optional(
-        Type.String({
-            description: "Working directory override for the subprocess.",
-        }),
-    ),
-    skills: Type.Optional(
-        Type.Array(Type.String(), {
-            description:
-                "Skill names to attach. Replaces the agent's default skills.",
-        }),
-    ),
-    background: Type.Optional(
-        Type.Boolean({
-            description: "Run as a fire-and-forget background task.",
-        }),
-    ),
-});
-
-function buildToolDescription(agents: AgentConfig[]): string {
-    const agentList =
-        agents.length > 0
-            ? agents
-                  .map(
-                      (a) =>
-                          `<agent>\n  <name>${escapeXml(a.name)}</name>\n  <description>${escapeXml(a.description)}</description>\n</agent>`,
-                  )
-                  .join("\n")
-            : "(none)";
-
-    return `Spawn an agent to work on a focused task in an isolated context with its own tool set.
-
-The result is only visible to you. If the user should see it, summarize it yourself.
-
-<available_agents>
-${agentList}
-</available_agents>
-
-**Writing the \`task\`**
-- The agent starts with zero context — it has not seen this conversation. Brief it like a colleague who just walked into the room: state the goal, list what you already know, hand over the specifics.
-- Lookups (read this file, run that test): put the exact path or command in the prompt. The agent should not have to search for things you already know.
-- Investigations (figure out X, find why Y): give the question, not prescribed steps — fixed steps become dead weight when the premise is wrong.
-- Do not delegate understanding. If the task hinges on a file path or line number, find it yourself first and write it into the prompt.
-
-**Usage of Optional Parameters**
-
-- \`model\`: Set only when the user explicitly requests a specific model; otherwise omit to use the agent default.
-- \`cwd\`: Set when the task targets a different project root than the current working directory.
-- \`skills\`: Attach specialized skills by name. Use when the task requires domain knowledge not built into the agent.
-- \`background\`: Set to true for fire-and-forget work whose result you do not need to continue your current turn. Multiple foreground agents already run in parallel within a single turn -- prefer foreground unless you truly do not need the result.
-
-**When NOT to Use**
-
-- Reading a known file path
-- Searching a small number of known files
-- Tasks that can be completed in one or two direct tool calls
-
-Each completed subagent can be resumed via subagent_resume using the subagent ID shown in the result.`;
-}
-
-// ── Execute helpers ──────────────────────────────────────────────────
 
 /** Extract a human-readable error/output string from a completed agent result. */
 function getResultOutput(result: AgentRunResult): string {
@@ -671,21 +128,116 @@ function resolveSkills(
     return { paths: skillNames.map((name) => skillCache.get(name)!.filePath) };
 }
 
+// ── Subagent tool params ─────────────────────────────────────────────
+
+interface SubagentToolParams {
+    agent: string;
+    description: string;
+    task: string;
+    model?: string;
+    cwd?: string;
+    skills?: string[];
+    background?: boolean;
+}
+
+interface ToolResult {
+    content: { type: "text"; text: string }[];
+    details: ForegroundSubagentDetails | BackgroundSubagentDetails | undefined;
+    isError?: boolean;
+}
+
+const SubagentParams = Type.Object({
+    agent: Type.String({
+        description:
+            "Name of an available agent. Must match a <name> from the agent list.",
+    }),
+    description: Type.String({
+        description: "A short (3-5 word) summary of the delegated task.",
+    }),
+    task: Type.String({
+        description:
+            "Self-contained task description. The subagent has NO access to your conversation history -- include all necessary context, file paths, constraints, and expected output format. Be explicit about whether to write code or only research.",
+    }),
+    model: Type.Optional(
+        Type.String({
+            description: 'Model override, e.g. "anthropic/claude-sonnet:high".',
+        }),
+    ),
+    cwd: Type.Optional(
+        Type.String({
+            description: "Working directory override for the subprocess.",
+        }),
+    ),
+    skills: Type.Optional(
+        Type.Array(Type.String(), {
+            description:
+                "Skill names to attach. Replaces the agent's default skills.",
+        }),
+    ),
+    background: Type.Optional(
+        Type.Boolean({
+            description: "Run as a fire-and-forget background task.",
+        }),
+    ),
+});
+
+function buildToolDescription(agents: AgentSpec[]): string {
+    const agentList =
+        agents.length > 0
+            ? agents
+                  .map(
+                      (a) =>
+                          `<agent>\n  <name>${escapeXml(a.name)}</name>\n  <description>${escapeXml(a.description)}</description>\n</agent>`,
+                  )
+                  .join("\n")
+            : "(none)";
+
+    return `Spawn an agent to work on a focused task in an isolated context with its own tool set.
+
+The result is only visible to you. If the user should see it, summarize it yourself.
+
+<available_agents>
+${agentList}
+</available_agents>
+
+**Writing the \`task\`**
+- The agent starts with zero context — it has not seen this conversation. Brief it like a colleague who just walked into the room: state the goal, list what you already know, hand over the specifics.
+- Lookups (read this file, run that test): put the exact path or command in the prompt. The agent should not have to search for things you already know.
+- Investigations (figure out X, find why Y): give the question, not prescribed steps — fixed steps become dead weight when the premise is wrong.
+- Do not delegate understanding. If the task hinges on a file path or line number, find it yourself first and write it into the prompt.
+
+**Usage of Optional Parameters**
+
+- \`model\`: Set only when the user explicitly requests a specific model; otherwise omit to use the agent default.
+- \`cwd\`: Set when the task targets a different project root than the current working directory.
+- \`skills\`: Attach specialized skills by name. Use when the task requires domain knowledge not built into the agent.
+- \`background\`: Set to true for fire-and-forget work whose result you do not need to continue your current turn. Multiple foreground agents already run in parallel within a single turn -- prefer foreground unless you truly do not need the result.
+
+**When NOT to Use**
+
+- Reading a known file path
+- Searching a small number of known files
+- Tasks that can be completed in one or two direct tool calls
+
+Each completed subagent can be resumed via subagent_resume using the subagent ID shown in the result.`;
+}
+
+// ── Resolution logic ─────────────────────────────────────────────────
+
 type ResolveResult =
     | { error: ToolResult; agent?: never; session?: never }
     | {
           error?: never;
-          agent: AgentConfig;
+          agent: ResolvedAgent;
           session: { dir: string; id: string } | undefined;
       };
 
 /**
- * Validate params and resolve the final AgentConfig + session path.
- * Returns either a ready-to-use config or an early-error tool result.
+ * Validate params and resolve the final ResolvedAgent + session path.
  */
 function resolveAgentConfig(
     params: SubagentToolParams,
-    agents: AgentConfig[],
+    agents: AgentSpec[],
     skillCache: Map<string, Skill>,
     ctx: ExtensionContext,
 ): ResolveResult {
@@ -704,6 +256,7 @@ function resolveAgentConfig(
                 messages: [],
                 stderr: msg,
                 usage: ZERO_USAGE,
+                durationMs: 0,
             },
             execStatuses: {},
         },
@@ -726,15 +279,26 @@ function resolveAgentConfig(
     const parentModel = ctx.model
         ? `${ctx.model.provider}/${ctx.model.id}`
         : undefined;
+    const resolvedModel = (params.model || undefined) ?? agent.model ?? parentModel;
+    if (!resolvedModel) {
+        return {
+            error: makeErrorResult(
+                "No model available: agent has no default model and no parent model is set.",
+                agent.source,
+            ),
+        };
+    }
 
-    const resolvedAgent: AgentConfig = {
-        ...agent,
-        model: (params.model || undefined) ?? agent.model ?? parentModel,
-        skills: skillResult.paths,
+    const resolvedAgent: ResolvedAgent = {
+        name: agent.name,
+        tools: agent.tools,
+        skillPaths: skillResult.paths,
+        model: resolvedModel,
+        systemPrompt: agent.systemPrompt,
+        source: agent.source,
     };
 
     // Persist subagent session alongside the parent session.
-    // Layout: <parent-session-without-ext>/subagent/<name>-<uuid8>.jsonl
     let session: { dir: string; id: string } | undefined;
     const parentSessionFile = ctx.sessionManager.getSessionFile();
     if (parentSessionFile) {
@@ -750,9 +314,11 @@ function resolveAgentConfig(
     return { agent: resolvedAgent, session };
 }
 
+// ── Execute helpers ──────────────────────────────────────────────────
+
 /** Execute a subagent in background (fire-and-forget) mode. */
 function executeBackground(
-    resolvedAgent: AgentConfig,
+    resolvedAgent: ResolvedAgent,
     params: SubagentToolParams,
     session: { dir: string; id: string } | undefined,
     bgManager: BackgroundManager,
@@ -763,47 +329,39 @@ function executeBackground(
         `${sanitizeAgentName(resolvedAgent.name)}-${randomUUID().slice(0, 8)}`;
 
     const controller = new AbortController();
+    const progress = createZeroProgress();
+    progress.model = resolvedAgent.model;
+    const contextWindow = resolveContextWindow(resolvedAgent.model, ctx);
 
-    let entry: BackgroundAgent | undefined;
-
-    const bgOnProgress: SubagentProgressCallback = (result, event) => {
-        if (!entry) return;
-        entry.latestResult = result;
-        if (event.type === "tool_start") {
-            entry.toolCallCount++;
+    const bgOnProgress: SubagentProgressCallback = (event) => {
+        if (event.type === "message") {
+            progress.usage = event.usage;
+            progress.model = event.model ?? progress.model;
+            progress.turns = event.usage.turns;
+        } else if (event.type === "tool_start") {
+            progress.toolCallCount++;
         }
     };
 
-    const promise = runSubagent(
-        resolvedAgent,
-        params.task,
-        params.cwd ?? ctx.cwd,
-        controller.signal,
-        bgOnProgress,
-        session,
-        ctx,
-    );
+    const sessionFile = session
+        ? path.join(session.dir, `${session.id}.jsonl`)
+        : undefined;
 
-    entry = {
+    const promise = runSubagent(resolvedAgent, params.task, params.cwd ?? ctx.cwd, {
+        signal: controller.signal,
+        onProgress: bgOnProgress,
+        sessionFile,
+    });
+
+    const entry: BackgroundAgent = {
         id,
         description: params.description,
-        agent: resolvedAgent,
+        agentName: resolvedAgent.name,
         task: params.task,
         kill: () => controller.abort(),
         promise,
         startedAt: Date.now(),
-        toolCallCount: 0,
-        latestResult: {
-            agent: resolvedAgent.name,
-            agentSource: resolvedAgent.source,
-            task: params.task,
-            outcome: { status: "running" },
-            messages: [],
-            stderr: "",
-            usage: createZeroUsage(),
-            model: resolvedAgent.model,
-            contextWindow: resolveContextWindow(resolvedAgent.model, ctx),
-        },
+        progress,
     };
     bgManager.register(entry);
 
@@ -820,7 +378,12 @@ function executeBackground(
                     "cancelled",
                     "(cancelled by user)",
                     result,
-                    { description: params.description, cancelled: true, session },
+                    {
+                        description: params.description,
+                        cancelled: true,
+                        session,
+                        contextWindow,
+                    },
                 );
                 return;
             }
@@ -830,7 +393,12 @@ function executeBackground(
                 isSubagentError(result) ? "failed" : "completed",
                 getResultOutput(result),
                 result,
-                { description: params.description, cancelled: false, session },
+                {
+                    description: params.description,
+                    cancelled: false,
+                    session,
+                    contextWindow,
+                },
             );
         })
         .catch((err: unknown) => {
@@ -843,13 +411,26 @@ function executeBackground(
                     id,
                     "cancelled",
                     "(cancelled by user)",
-                    entry!.latestResult,
-                    { description: params.description, cancelled: true, session },
+                    {
+                        agent: params.agent,
+                        agentSource: resolvedAgent.source,
+                        task: params.task,
+                        outcome: { status: "aborted" },
+                        messages: [],
+                        stderr: "",
+                        usage: ZERO_USAGE,
+                        durationMs: 0,
+                    },
+                    {
+                        description: params.description,
+                        cancelled: true,
+                        session,
+                        contextWindow,
+                    },
                 );
                 return;
             }
 
-            // Pre-spawn or unexpected failure — notify the LLM.
             const errMsg = err instanceof Error ? err.message : "unknown error";
             bgManager.injectResult(
                 id,
@@ -867,8 +448,14 @@ function executeBackground(
                     messages: [],
                     stderr: errMsg,
                     usage: ZERO_USAGE,
+                    durationMs: 0,
                 },
-                { description: params.description, cancelled: false, session },
+                {
+                    description: params.description,
+                    cancelled: false,
+                    session,
+                    contextWindow,
+                },
             );
         });
 
@@ -879,19 +466,13 @@ function executeBackground(
                 text: `Background agent started: ${id}`,
             },
         ],
-        details: {
-            kind: "background",
-            result: entry.latestResult,
-            description: params.description,
-            cancelled: false,
-            session,
-        },
+        details: undefined,
     };
 }
 
 /** Execute a subagent in foreground (blocking) mode. */
 async function executeForeground(
-    resolvedAgent: AgentConfig,
+    resolvedAgent: ResolvedAgent,
     params: SubagentToolParams,
     session: { dir: string; id: string } | undefined,
     signal: AbortSignal | undefined,
@@ -904,37 +485,63 @@ async function executeForeground(
     ctx: ExtensionContext,
 ): Promise<ToolResult> {
     const execStatusMap = new Map<string, boolean>();
+    const messages: Message[] = [];
+    const contextWindow = resolveContextWindow(resolvedAgent.model, ctx);
 
     const makeDetails = (result: AgentRunResult): ForegroundSubagentDetails => ({
         kind: "foreground",
         result,
         execStatuses: Object.fromEntries(execStatusMap),
         session,
+        contextWindow,
     });
 
+    let latestUsage: UsageStats = createZeroUsage();
+    let latestModel: string | undefined = resolvedAgent.model;
+
     const onProgress: SubagentProgressCallback | undefined = onUpdate
-        ? (result, event) => {
+        ? (event) => {
               if (event.type === "tool_end") {
                   execStatusMap.set(event.toolCallId, event.isError);
               }
-              // Only push updates on events that change rendered state
+              if (event.type === "message") {
+                  messages.push(event.message);
+                  latestUsage = event.usage;
+                  if (event.model) latestModel = event.model;
+              }
+              if (event.type === "tool_result") {
+                  messages.push(event.message);
+              }
+              // Push update on events that change rendered state
               if (event.type === "tool_end" || event.type === "message") {
+                  const partialResult: AgentRunResult = {
+                      agent: resolvedAgent.name,
+                      agentSource: resolvedAgent.source,
+                      task: params.task,
+                      outcome: { status: "success" },
+                      messages: [...messages],
+                      stderr: "",
+                      usage: latestUsage,
+                      model: latestModel,
+                      durationMs: 0,
+                  };
                   onUpdate({
                       content: [{ type: "text", text: "" }],
-                      details: makeDetails(result),
+                      details: makeDetails(partialResult),
                   });
               }
           }
+        : undefined;
+
+    const sessionFile = session
+        ? path.join(session.dir, `${session.id}.jsonl`)
         : undefined;
 
     const result = await runSubagent(
         resolvedAgent,
         params.task,
         params.cwd ?? ctx.cwd,
-        signal,
-        onProgress,
-        session,
-        ctx,
+        { signal, onProgress, sessionFile },
     );
 
     const sessionHeader = session ? `[subagent: ${session.id}]\n\n` : "";
@@ -966,17 +573,11 @@ async function executeForeground(
 // ── Extension entry point ────────────────────────────────────────────
 
 export default function (pi: ExtensionAPI) {
-    // Pre-load agents at registration time so the LLM
-    // knows which agents are available from the tool description.
     const knownAgents = discoverAgents().agents;
-
-    // Background agent lifecycle manager
     const bgManager = createBackgroundManager(pi);
 
     registerSubagentCommand(pi, bgManager);
 
-    // Cache loaded skills from the parent session so we can resolve
-    // skill names to filesystem paths for --skill flags.
     let skillCache = new Map<string, Skill>();
 
     pi.on("session_start", (_event, ctx) => {
@@ -997,9 +598,14 @@ export default function (pi: ExtensionAPI) {
     pi.registerMessageRenderer<SubagentDetails>(
         BACKGROUND_RESULT_TYPE,
         (message, { expanded }, theme) => {
-            // Normalize details from possibly old session format
-            const details = normalizeDetails(message.details);
-            const bgDetails = details?.kind === "background" ? details : undefined;
+            const details = message.details;
+            const bgDetails =
+                details &&
+                typeof details === "object" &&
+                "kind" in details &&
+                details.kind === "background"
+                    ? (details as BackgroundSubagentDetails)
+                    : undefined;
             if (!bgDetails) {
                 const contentText =
                     typeof message.content === "string"
@@ -1063,9 +669,8 @@ export default function (pi: ExtensionAPI) {
         },
 
         renderResult(result, { expanded }, theme, _context) {
-            // Normalize details from possibly old session format
-            const details = normalizeDetails(result.details);
-            if (!details) {
+            const details = result.details;
+            if (!details || typeof details !== "object" || !("kind" in details)) {
                 const text = result.content[0];
                 return new Text(
                     text?.type === "text"
@@ -1075,10 +680,9 @@ export default function (pi: ExtensionAPI) {
                     0,
                 );
             }
-            // Background tool result ("started") — renderCall
-            // already provides the header, just show model + task.
-            if (details.kind === "background") {
-                const r = details.result;
+            const typed = details as SubagentDetails;
+            if (typed.kind === "background") {
+                const r = typed.result;
                 const modelLine = r.model ? theme.fg("muted", r.model) : "";
                 const contentText = result.content[0];
                 const msg =
@@ -1105,8 +709,7 @@ export default function (pi: ExtensionAPI) {
                 }
                 return new Text(parts, 0, 0);
             }
-            // Foreground result — no header (renderCall provides it)
-            return renderSubagentResult(details, expanded, theme);
+            return renderSubagentResult(typed, expanded, theme);
         },
     });
 
@@ -1150,7 +753,6 @@ export default function (pi: ExtensionAPI) {
                 );
             }
 
-            // Lookup session in message history
             const entries = ctx.sessionManager.getEntries() as any[];
             const lookup = lookupSubagentSession(entries, id);
 
@@ -1182,7 +784,6 @@ export default function (pi: ExtensionAPI) {
                 return errorResult(`Agent "${agentName}" is no longer available.`);
             }
 
-            // Resolve skills and model for the resumed agent
             const skillResult = resolveSkills(agent.skills, skillCache);
             if (skillResult.error) {
                 return errorResult(skillResult.error);
@@ -1191,15 +792,30 @@ export default function (pi: ExtensionAPI) {
             const parentModel = ctx.model
                 ? `${ctx.model.provider}/${ctx.model.id}`
                 : undefined;
-            const resolvedAgent: AgentConfig = {
-                ...agent,
-                skills: skillResult.paths,
-                model: matchedDetails.result.model ?? agent.model ?? parentModel,
+            const resumeModel =
+                matchedDetails.result.model ?? agent.model ?? parentModel;
+            if (!resumeModel) {
+                return errorResult(
+                    "No model available for resume: agent has no default model and no parent model is set.",
+                );
+            }
+
+            const resolvedAgent: ResolvedAgent = {
+                name: agent.name,
+                tools: agent.tools,
+                skillPaths: skillResult.paths,
+                model: resumeModel,
+                systemPrompt: agent.systemPrompt,
+                source: agent.source,
             };
 
-            // Execute resumed subagent
             const execStatusMap = new Map<string, boolean>();
+            const progressMessages: Message[] = [];
 
+            const resumeContextWindow = resolveContextWindow(
+                resolvedAgent.model,
+                ctx,
+            );
             const makeDetails = (
                 result: AgentRunResult,
             ): ForegroundSubagentDetails => ({
@@ -1208,32 +824,51 @@ export default function (pi: ExtensionAPI) {
                 execStatuses: Object.fromEntries(execStatusMap),
                 session,
                 resumedFrom: id,
+                contextWindow: resumeContextWindow,
             });
 
+            let resumeLatestUsage: UsageStats = createZeroUsage();
+            let resumeLatestModel: string | undefined = resolvedAgent.model;
+
             const onProgress: SubagentProgressCallback | undefined = onUpdate
-                ? (result, event) => {
+                ? (event) => {
                       if (event.type === "tool_end") {
                           execStatusMap.set(event.toolCallId, event.isError);
                       }
+                      if (event.type === "message") {
+                          progressMessages.push(event.message);
+                          resumeLatestUsage = event.usage;
+                          if (event.model) resumeLatestModel = event.model;
+                      }
+                      if (event.type === "tool_result") {
+                          progressMessages.push(event.message);
+                      }
                       if (event.type === "tool_end" || event.type === "message") {
+                          const partialResult: AgentRunResult = {
+                              agent: resolvedAgent.name,
+                              agentSource: resolvedAgent.source,
+                              task: follow_up,
+                              outcome: { status: "success" },
+                              messages: [...progressMessages],
+                              stderr: "",
+                              usage: resumeLatestUsage,
+                              model: resumeLatestModel,
+                              durationMs: 0,
+                          };
                           onUpdate({
                               content: [{ type: "text", text: "" }],
-                              details: makeDetails(result),
+                              details: makeDetails(partialResult),
                           });
                       }
                   }
                 : undefined;
 
-            const result = await runSubagent(
-                resolvedAgent,
-                follow_up,
-                ctx.cwd,
+            const result = await runSubagent(resolvedAgent, follow_up, ctx.cwd, {
                 signal,
                 onProgress,
-                session,
-                ctx,
-                true, // resume mode: no "Task: " prefix
-            );
+                sessionFile,
+                resume: true,
+            });
 
             const sessionHeader = `[subagent: ${session.id}]\n\n`;
 
@@ -1279,8 +914,13 @@ export default function (pi: ExtensionAPI) {
         },
 
         renderResult(result, { expanded }, theme, _context) {
-            const details = normalizeDetails(result.details);
-            if (!details || details.kind !== "foreground") {
+            const details = result.details;
+            if (
+                !details ||
+                typeof details !== "object" ||
+                !("kind" in details) ||
+                details.kind !== "foreground"
+            ) {
                 const text = result.content[0];
                 return new Text(
                     text?.type === "text"
@@ -1290,7 +930,11 @@ export default function (pi: ExtensionAPI) {
                     0,
                 );
             }
-            return renderSubagentResult(details, expanded, theme);
+            return renderSubagentResult(
+                details as ForegroundSubagentDetails,
+                expanded,
+                theme,
+            );
         },
     });
 }

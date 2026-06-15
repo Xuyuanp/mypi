@@ -42,10 +42,11 @@ import {
     truncateToWidth,
     visibleWidth,
 } from "@earendil-works/pi-tui";
-import { type AgentConfig, discoverAgents } from "./agents.js";
+import { discoverAgents } from "./agents.js";
 import type { BackgroundManager } from "./background.js";
+import type { AgentSpec } from "./types.js";
 
-interface AgentRow {
+export interface AgentRow {
     name: string;
     source: string;
     model: string;
@@ -99,7 +100,7 @@ function flattenDescription(desc: string | undefined): string {
 }
 
 /** Build display rows from the discovered agents, preserving their order. */
-export function buildAgentRows(agents: AgentConfig[]): AgentRow[] {
+export function buildAgentRows(agents: AgentSpec[]): AgentRow[] {
     return agents.map((a) => ({
         name: a.name,
         source: a.source,

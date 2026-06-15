@@ -26,6 +26,16 @@ import type {
 } from "./types.js";
 import { isSubagentError } from "./types.js";
 
+// ── buildLastLine input type ─────────────────────────────────────────
+
+/** Minimal shape needed by buildLastLine — decoupled from AgentRunResult. */
+export interface BuildLastLineInput {
+    usage: UsageStats;
+    model?: string;
+    durationMs?: number;
+    contextWindow?: number;
+}
+
 // ── Presentation-only types (moved from types.ts) ────────────────────
 
 export type ToolCallStatus = "success" | "error" | "pending";
@@ -43,6 +53,7 @@ export interface FormatUsageOpts {
     model?: string;
     durationMs?: number;
     contextWindow?: number;
+    toolCallCount?: number;
 }
 
 // ── Local type aliases ───────────────────────────────────────────────
@@ -80,9 +91,11 @@ export function formatDuration(ms: number): string {
 
 /** Build a space-separated usage summary string. */
 export function formatUsageStats(usage: UsageStats, opts?: FormatUsageOpts): string {
-    const { model, durationMs, contextWindow } = opts ?? {};
+    const { model, durationMs, contextWindow, toolCallCount } = opts ?? {};
     const parts: string[] = [];
     if (usage.turns) parts.push(`${usage.turns} turn${usage.turns > 1 ? "s" : ""}`);
+    if (toolCallCount)
+        parts.push(`${toolCallCount} tool${toolCallCount > 1 ? "s" : ""}`);
     if (usage.inputTokens) parts.push(`\u2191${formatTokens(usage.inputTokens)}`);
     if (usage.outputTokens) parts.push(`\u2193${formatTokens(usage.outputTokens)}`);
     if (usage.cacheReadTokens) parts.push(`R${formatTokens(usage.cacheReadTokens)}`);
@@ -101,20 +114,23 @@ export function formatUsageStats(usage: UsageStats, opts?: FormatUsageOpts): str
         parts.push(`ctx ${pct}%`);
     }
     if (usage.cost.total) parts.push(`$${usage.cost.total.toFixed(4)}`);
-    if (durationMs !== undefined) parts.push(formatDuration(durationMs));
     if (model) parts.push(model);
-    return parts.join(" ");
+    const base = parts.join(" ");
+    if (durationMs)
+        return base
+            ? `${base} in ${formatDuration(durationMs)}`
+            : `in ${formatDuration(durationMs)}`;
+    return base;
 }
 
 /** Build the summary line showing tool count and usage stats. */
-export function buildLastLine(r: AgentRunResult, toolCallCount: number): string {
-    const countStr = toolCallCount > 0 ? `${toolCallCount} tools` : "";
-    const usageStr = formatUsageStats(r.usage, {
+export function buildLastLine(r: BuildLastLineInput, toolCallCount: number): string {
+    return formatUsageStats(r.usage, {
         model: r.model,
         durationMs: r.durationMs,
         contextWindow: r.contextWindow,
+        toolCallCount,
     });
-    return [countStr, usageStr].filter(Boolean).join(" ");
 }
 
 // ── Tool call formatting ─────────────────────────────────────────────
@@ -501,7 +517,9 @@ export function renderSubagentResult(
     const isForeground = details.kind === "foreground";
     const isCancelled =
         !isForeground && (details as BackgroundSubagentDetails).cancelled;
-    const isRunning = r.outcome.status === "running";
+    // "running" is no longer a valid AgentOutcome variant, but old
+    // serialized sessions may still contain it. Guard at runtime.
+    const isRunning = (r.outcome as { status: string }).status === "running";
     const isError = !isRunning && !isCancelled && isSubagentError(r);
 
     // ── Shared data ──────────────────────────────────────────────────
@@ -515,7 +533,10 @@ export function renderSubagentResult(
     const toolCallItems = displayItems.filter(
         (i) => i.type === "toolCall",
     ) as (DisplayItem & { type: "toolCall" })[];
-    const rawLastLine = buildLastLine(r, toolCallItems.length);
+    const rawLastLine = buildLastLine(
+        { ...r, contextWindow: details.contextWindow },
+        toolCallItems.length,
+    );
     const lastLine = agentId ? `${agentId} ${rawLastLine}` : rawLastLine;
     const finalOutput = getFinalOutput(r.messages);
 
@@ -576,7 +597,7 @@ export function renderSubagentResult(
     }
 
     // ── Foreground collapsed ─────────────────────────────────────────
-    const isCompleted = !isRunning && !isError;
+    const isCompleted = !isError;
     let text =
         isCompleted && finalOutput
             ? buildOutputPreview(finalOutput, theme)

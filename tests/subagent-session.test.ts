@@ -26,6 +26,7 @@ function makeFakeResult(overrides?: Partial<AgentRunResult>): AgentRunResult {
         messages: [],
         stderr: "",
         usage: createZeroUsage(),
+        durationMs: 0,
         ...overrides,
     };
 }
