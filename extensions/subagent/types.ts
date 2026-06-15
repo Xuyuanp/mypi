@@ -49,6 +49,13 @@ export interface ResolvedAgent {
     source: "user" | "system";
 }
 
+/**
+ * Lightweight variant of ResolvedAgent for persistence in session details.
+ * Omits systemPrompt to avoid bloating session files (prompts are 2-10KB).
+ * The prompt can be re-resolved from the agent registry at resume time.
+ */
+export type PersistedResolvedAgent = Omit<ResolvedAgent, "systemPrompt">;
+
 // ── AgentOutcome ─────────────────────────────────────────────────────
 
 /**
@@ -123,7 +130,6 @@ export interface AgentRunResult {
  */
 export interface RunProgress {
     usage: UsageStats;
-    model?: string;
     toolCallCount: number;
     turns: number;
 }
@@ -136,6 +142,8 @@ export interface ForegroundSubagentDetails {
     execStatuses: Record<string, boolean>;
     session?: { dir: string; id: string };
     resumedFrom?: string;
+    /** Resolved agent config (sans systemPrompt) for rendering and resume. */
+    resolvedAgent?: PersistedResolvedAgent;
     /** Model context window size for usage % display. Set at result time. */
     contextWindow?: number;
 }
@@ -146,6 +154,8 @@ export interface BackgroundSubagentDetails {
     description: string;
     cancelled: boolean;
     session?: { dir: string; id: string };
+    /** Resolved agent config (sans systemPrompt) for rendering and resume. */
+    resolvedAgent?: PersistedResolvedAgent;
     /** Model context window size for usage % display. Set at result time. */
     contextWindow?: number;
 }
@@ -216,7 +226,6 @@ export function isSubagentError(r: AgentRunResult): r is AgentRunResult & {
 export function createZeroProgress(): RunProgress {
     return {
         usage: createZeroUsage(),
-        model: undefined,
         toolCallCount: 0,
         turns: 0,
     };

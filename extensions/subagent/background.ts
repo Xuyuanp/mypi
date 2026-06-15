@@ -155,7 +155,6 @@ export function createBackgroundManager(pi: ExtensionAPI): BackgroundManager {
                             const usageLine = buildLastLine(
                                 {
                                     usage: p.usage,
-                                    model: p.model,
                                     durationMs: elapsed,
                                 },
                                 p.toolCallCount,
@@ -264,6 +263,7 @@ export function createBackgroundManager(pi: ExtensionAPI): BackgroundManager {
                         description: details?.description ?? "(unknown)",
                         cancelled: details?.cancelled ?? false,
                         session: details?.session,
+                        resolvedAgent: details?.resolvedAgent,
                         contextWindow: details?.contextWindow,
                     },
                 },

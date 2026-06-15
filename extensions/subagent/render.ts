@@ -31,7 +31,6 @@ import { isSubagentError } from "./types.js";
 /** Minimal shape needed by buildLastLine — decoupled from AgentRunResult. */
 export interface BuildLastLineInput {
     usage: UsageStats;
-    model?: string;
     durationMs?: number;
     contextWindow?: number;
 }
@@ -50,7 +49,6 @@ export type DisplayItem =
       };
 
 export interface FormatUsageOpts {
-    model?: string;
     durationMs?: number;
     contextWindow?: number;
     toolCallCount?: number;
@@ -91,7 +89,7 @@ export function formatDuration(ms: number): string {
 
 /** Build a space-separated usage summary string. */
 export function formatUsageStats(usage: UsageStats, opts?: FormatUsageOpts): string {
-    const { model, durationMs, contextWindow, toolCallCount } = opts ?? {};
+    const { durationMs, contextWindow, toolCallCount } = opts ?? {};
     const parts: string[] = [];
     if (usage.turns) parts.push(`${usage.turns} turn${usage.turns > 1 ? "s" : ""}`);
     if (toolCallCount)
@@ -114,7 +112,6 @@ export function formatUsageStats(usage: UsageStats, opts?: FormatUsageOpts): str
         parts.push(`ctx ${pct}%`);
     }
     if (usage.cost.total) parts.push(`$${usage.cost.total.toFixed(4)}`);
-    if (model) parts.push(model);
     const base = parts.join(" ");
     if (durationMs)
         return base
@@ -126,7 +123,6 @@ export function formatUsageStats(usage: UsageStats, opts?: FormatUsageOpts): str
 /** Build the summary line showing tool count and usage stats. */
 export function buildLastLine(r: BuildLastLineInput, toolCallCount: number): string {
     return formatUsageStats(r.usage, {
-        model: r.model,
         durationMs: r.durationMs,
         contextWindow: r.contextWindow,
         toolCallCount,
@@ -441,7 +437,7 @@ function buildRecentToolCallsText(
     return text;
 }
 
-/** Render the background-running state (header + model + optional task). */
+/** Render the background-running state (header + optional task). */
 function renderBackgroundRunning(
     headerText: string,
     result: AgentRunResult,
@@ -451,10 +447,6 @@ function renderBackgroundRunning(
 ): Box | Container {
     const box = makeContainer(bgFn);
     box.addChild(new Text(headerText, 0, 0));
-    if (result.model) {
-        box.addChild(new Spacer(1));
-        box.addChild(new Text(theme.fg("muted", result.model), 0, 0));
-    }
     if (expanded && result.task) {
         box.addChild(new Spacer(1));
         box.addChild(
@@ -478,6 +470,7 @@ function buildBackgroundHeader(
     theme: RenderTheme,
 ): string {
     const agentName = details.result.agent || "...";
+    const model = details.result.model;
     const statusLabel = isRunning
         ? "running"
         : isCancelled
@@ -496,6 +489,7 @@ function buildBackgroundHeader(
     return (
         theme.fg("toolTitle", theme.bold("background agent ")) +
         theme.fg("text", agentName) +
+        (model ? theme.fg("muted", ` ${model}`) : "") +
         theme.fg(statusColor, ` [${statusLabel}]`) +
         theme.fg("dim", ` ${desc}`)
     );
@@ -598,8 +592,12 @@ export function renderSubagentResult(
 
     // ── Foreground collapsed ─────────────────────────────────────────
     const isCompleted = !isError;
+    // Show output preview only after execution finishes (durationMs > 0).
+    // During streaming (durationMs === 0), prefer showing recent tool calls
+    // so progress is visible even when an early text message sets finalOutput.
+    const isFinished = isCompleted && r.durationMs > 0;
     let text =
-        isCompleted && finalOutput
+        isFinished && finalOutput
             ? buildOutputPreview(finalOutput, theme)
             : buildRecentToolCallsText(toolCallItems, theme);
 

@@ -126,7 +126,6 @@ describe("formatUsageStats", () => {
             turns: 2,
         };
         const result = formatUsageStats(usage, {
-            model: "test-model",
             durationMs: 3500,
             contextWindow: 10000,
             toolCallCount: 5,
@@ -140,7 +139,8 @@ describe("formatUsageStats", () => {
         expect(result).toContain("ctx 46%");
         expect(result).toContain("$0.0040");
         expect(result).toContain("in 3.5s");
-        expect(result).toContain("test-model");
+        // Model is no longer in usage stats (moved to tool call header)
+        expect(result).not.toContain("test-model");
     });
 
     it("calculates cache hit ratio correctly", () => {
@@ -183,7 +183,6 @@ describe("buildLastLine", () => {
                 outputTokens: 50,
                 turns: 1,
             },
-            model: "m",
             durationMs: 2000,
         });
         const line = buildLastLine(r, 5);
@@ -650,7 +649,44 @@ describe("renderSubagentResult (background)", () => {
         const text = rendered.join("\n");
         expect(text).toContain("background agent");
         expect(text).toContain("[running]");
+        // Model now in header line (not separate line below)
         expect(text).toContain("deepseek/deepseek-v4-flash");
+    });
+
+    it("includes model in background header, not in last line", () => {
+        const details: BackgroundSubagentDetails = {
+            kind: "background",
+            result: makeResult({
+                model: "anthropic/claude-sonnet",
+                messages: [
+                    {
+                        role: "assistant",
+                        content: [{ type: "text", text: "result" }],
+                    },
+                ] as Message[],
+                usage: {
+                    ...createZeroUsage(),
+                    inputTokens: 100,
+                    turns: 1,
+                },
+                durationMs: 2000,
+            }),
+            description: "do work",
+            cancelled: false,
+        };
+
+        const component = renderSubagentResult(details, false, makeTheme());
+        const rendered = component.render(80);
+        const text = rendered.join("\n");
+        // Model appears in header area (before status/description)
+        expect(text).toContain("anthropic/claude-sonnet");
+        const modelIdx = text.indexOf("anthropic/claude-sonnet");
+        const statusIdx = text.indexOf("[completed]");
+        expect(modelIdx).toBeLessThan(statusIdx);
+        // Last non-empty line has stats but NOT model
+        const lastNonEmpty = rendered.filter((l) => l.trim().length > 0).pop() || "";
+        expect(lastNonEmpty).toContain("1 turn");
+        expect(lastNonEmpty).not.toContain("anthropic/claude-sonnet");
     });
 });
 
