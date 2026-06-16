@@ -202,7 +202,8 @@ const SubagentParams = Type.Object({
 function buildToolDescription(agents: AgentSpec[]): string {
     const agentList =
         agents.length > 0
-            ? agents
+            ? [...agents]
+                  .sort((a, b) => a.name.localeCompare(b.name))
                   .map(
                       (a) =>
                           `<agent>\n  <name>${escapeXml(a.name)}</name>\n  <description>${escapeXml(a.description)}</description>\n</agent>`,
@@ -288,7 +289,8 @@ function resolveAgentConfig(
         return { error: makeErrorResult(msg, "unknown") };
     }
 
-    const skillNames = params.skills !== undefined ? params.skills : agent.skills;
+    const skillNames =
+        params.skills !== undefined ? params.skills : agent.skillNames;
     const skillResult = resolveSkills(skillNames, skillCache);
     if (skillResult.error) {
         return { error: makeErrorResult(skillResult.error, agent.source) };
@@ -606,7 +608,7 @@ async function executeForeground(
 // ── Extension entry point ────────────────────────────────────────────
 
 export default function (pi: ExtensionAPI) {
-    const knownAgents = discoverAgents().agents;
+    const knownAgents = discoverAgents();
     const bgManager = createBackgroundManager(pi);
 
     registerSubagentCommand(pi, bgManager);
@@ -661,7 +663,7 @@ export default function (pi: ExtensionAPI) {
         async execute(_toolCallId, params, signal, onUpdate, ctx) {
             const resolved = resolveAgentConfig(
                 params,
-                discoverAgents().agents,
+                knownAgents,
                 skillCache,
                 ctx,
             );

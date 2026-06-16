@@ -25,7 +25,7 @@ import type {
 export const BACKGROUND_RESULT_TYPE = "subagent_background_result";
 
 /** TUI widget and status bar key. */
-export const BG_WIDGET_KEY = "subagent-bg";
+const BG_WIDGET_KEY = "subagent-bg";
 
 const MAX_ENTRIES = 5;
 

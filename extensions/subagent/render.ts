@@ -29,7 +29,7 @@ import { isSubagentError } from "./types.js";
 // ── buildLastLine input type ─────────────────────────────────────────
 
 /** Minimal shape needed by buildLastLine — decoupled from AgentRunResult. */
-export interface BuildLastLineInput {
+interface BuildLastLineInput {
     usage: UsageStats;
     durationMs?: number;
     contextWindow?: number;
@@ -37,7 +37,7 @@ export interface BuildLastLineInput {
 
 // ── Presentation-only types (moved from types.ts) ────────────────────
 
-export type ToolCallStatus = "success" | "error" | "pending";
+type ToolCallStatus = "success" | "error" | "pending";
 
 export type DisplayItem =
     | { type: "text"; text: string }
@@ -48,7 +48,7 @@ export type DisplayItem =
           status: ToolCallStatus;
       };
 
-export interface FormatUsageOpts {
+interface FormatUsageOpts {
     durationMs?: number;
     contextWindow?: number;
     toolCallCount?: number;
@@ -64,8 +64,8 @@ type ThemeBgFn = Theme["bg"];
 // ── Constants ────────────────────────────────────────────────────────
 
 export const ICON_RUNNING = "\u25cb";
-export const ICON_SUCCESS = "\u25cf";
-export const ICON_ERROR = "\u25cf";
+const ICON_SUCCESS = "\u25cf";
+const ICON_ERROR = "\u25cf";
 
 // ── Formatting helpers ───────────────────────────────────────────────
 
@@ -138,7 +138,7 @@ function shortenPath(p: string): string {
 }
 
 /** Format a tool call with TUI theme colors. */
-export function formatToolCall(
+function formatToolCall(
     toolName: string,
     args: Record<string, unknown>,
     themeFg: ThemeFg,
@@ -246,10 +246,7 @@ export function formatToolCallPlain(
 // ── Status icons ─────────────────────────────────────────────────────
 
 /** Themed status icon for a tool call. */
-export function toolStatusIcon(
-    status: ToolCallStatus,
-    theme: { fg: ThemeFg },
-): string {
+function toolStatusIcon(status: ToolCallStatus, theme: { fg: ThemeFg }): string {
     switch (status) {
         case "success":
             return theme.fg("dim", ICON_SUCCESS);
@@ -257,18 +254,6 @@ export function toolStatusIcon(
             return ICON_ERROR;
         case "pending":
             return theme.fg("dim", ICON_RUNNING);
-    }
-}
-
-/** Plain-text status icon for a tool call. */
-export function toolStatusIconPlain(status: ToolCallStatus): string {
-    switch (status) {
-        case "success":
-            return ICON_SUCCESS;
-        case "error":
-            return ICON_ERROR;
-        case "pending":
-            return ICON_RUNNING;
     }
 }
 

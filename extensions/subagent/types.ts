@@ -21,8 +21,7 @@ export interface AgentSpec {
     name: string;
     description: string;
     tools?: string[];
-    /** Skill names (not resolved paths). */
-    skills?: string[];
+    skillNames?: string[];
     model?: string;
     systemPrompt: string;
     source: "user" | "system";

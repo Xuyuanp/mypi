@@ -11,10 +11,6 @@ import type { AgentSpec } from "./types.js";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const SYSTEM_AGENTS_DIR = path.join(__dirname, "agents");
 
-export interface AgentDiscoveryResult {
-    agents: AgentSpec[];
-}
-
 function parseCommaSeparated(value: string | undefined): string[] | undefined {
     const items = value
         ?.split(",")
@@ -60,7 +56,7 @@ function loadAgentsFromDir(dir: string, source: "user" | "system"): AgentSpec[] 
             name: frontmatter.name,
             description: frontmatter.description,
             tools: parseCommaSeparated(frontmatter.tools),
-            skills: parseCommaSeparated(frontmatter.skills),
+            skillNames: parseCommaSeparated(frontmatter.skills),
             model: frontmatter.model,
             systemPrompt: body,
             source,
@@ -71,7 +67,7 @@ function loadAgentsFromDir(dir: string, source: "user" | "system"): AgentSpec[] 
     return agents;
 }
 
-export function discoverAgents(): AgentDiscoveryResult {
+export function discoverAgents(): AgentSpec[] {
     const userDir = path.join(getAgentDir(), "agents");
 
     const systemAgents = loadAgentsFromDir(SYSTEM_AGENTS_DIR, "system");
@@ -83,20 +79,5 @@ export function discoverAgents(): AgentDiscoveryResult {
     for (const agent of systemAgents) agentMap.set(agent.name, agent);
     for (const agent of userAgents) agentMap.set(agent.name, agent);
 
-    return { agents: Array.from(agentMap.values()) };
-}
-
-export function formatAgentList(
-    agents: AgentSpec[],
-    maxItems: number,
-): { text: string; remaining: number } {
-    if (agents.length === 0) return { text: "none", remaining: 0 };
-    const listed = agents.slice(0, maxItems);
-    const remaining = agents.length - listed.length;
-    return {
-        text: listed
-            .map((a) => `${a.name} (${a.source}): ${a.description}`)
-            .join("; "),
-        remaining,
-    };
+    return Array.from(agentMap.values());
 }
