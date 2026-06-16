@@ -96,6 +96,16 @@ const SubagentParams = Type.Object({
     ),
 });
 
+const ResumeParams = Type.Object({
+    id: Type.String({
+        description: "Session ID of the completed subagent to resume.",
+    }),
+    follow_up: Type.String({
+        description:
+            "New message to send to the subagent, continuing its conversation.",
+    }),
+});
+
 function buildToolDescription(agents: AgentSpec[]): string {
     const agentList =
         agents.length > 0
@@ -293,18 +303,6 @@ export default function (pi: ExtensionAPI) {
 
     // ── subagent_resume tool ──────────────────────────────────────────
 
-    const ResumeParams = Type.Object({
-        id: Type.String({
-            description: "Session ID of the completed subagent to resume.",
-        }),
-        follow_up: Type.String({
-            description:
-                "New message to send to the subagent, continuing its conversation.",
-        }),
-    });
-
-    type ResumeToolParams = { id: string; follow_up: string };
-
     pi.registerTool({
         name: "subagent_resume",
         label: "Subagent Resume",
@@ -316,7 +314,7 @@ export default function (pi: ExtensionAPI) {
             "Always executes in foreground (blocking).",
         parameters: ResumeParams,
 
-        async execute(_toolCallId, params: ResumeToolParams, signal, onUpdate, ctx) {
+        async execute(_toolCallId, params, signal, onUpdate, ctx) {
             const { id, follow_up } = params;
 
             const errorResult = (text: string) => ({
