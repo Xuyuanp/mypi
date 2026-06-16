@@ -197,6 +197,26 @@ export type SubagentProgressEvent =
 
 export type SubagentProgressCallback = (event: SubagentProgressEvent) => void;
 
+// ── Tool execution types ────────────────────────────────────────────
+
+/** Parameters accepted by the subagent tool. */
+export interface SubagentToolParams {
+    agent: string;
+    description: string;
+    task: string;
+    model?: string;
+    cwd?: string;
+    skills?: string[];
+    background?: boolean;
+}
+
+/** Return type for the subagent tool execute handler. */
+export interface ToolResult {
+    content: { type: "text"; text: string }[];
+    details: SubagentDetails | undefined;
+    isError?: boolean;
+}
+
 // ── Value utilities ──────────────────────────────────────────────────
 
 /** Create a fresh zero-initialized UsageStats object. */
