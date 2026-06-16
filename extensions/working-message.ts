@@ -258,7 +258,6 @@ const FALLBACK_PEAK: Rgb = { r: 212, g: 212, b: 212 }; // #D4D4D4 text
 const FALLBACK_BASE: Rgb = { r: 107, g: 114, b: 128 }; // #6B7280 gray
 const FALLBACK_ACCENT: Rgb = { r: 138, g: 190, b: 183 }; // #8ABEB7 accent
 
-// biome-ignore lint/suspicious/noControlCharactersInRegex: matching the ESC in an ANSI SGR sequence
 const FG_RGB_PATTERN = /\x1b\[38;2;(\d{1,3});(\d{1,3});(\d{1,3})m/;
 const RESET = "\x1b[0m";
 
