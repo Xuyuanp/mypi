@@ -10,8 +10,8 @@ import type {
     ExtensionAPI,
     ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
-import { truncateToWidth } from "@earendil-works/pi-tui";
-import { buildLastLine, ICON_RUNNING } from "./render.js";
+import { Container, TruncatedText } from "@earendil-works/pi-tui";
+import { ICON_RUNNING, renderSubagentResult } from "./render.js";
 import type { AgentRunResult, BackgroundAgent, SubagentDetails } from "./types.js";
 
 // ── Constants ────────────────────────────────────────────────────────
@@ -105,12 +105,7 @@ export function createBackgroundManager(pi: ExtensionAPI): BackgroundManager {
                 const interval = setInterval(() => tui.requestRender(), 1000);
                 return {
                     render(width: number): string[] {
-                        const lines: string[] = [];
-                        const ICON_W = 2; // "X "
-                        const NAME_W = 10; // agent name + padding
-                        const ID_W = 10; // short uuid + spacing
-                        const FIXED_W = ICON_W + NAME_W + ID_W;
-                        const descAvail = Math.max(8, width - FIXED_W);
+                        const container = new Container();
 
                         // Snapshot to avoid partial iteration if mutated
                         const entries = [...agents.values()];
@@ -118,47 +113,39 @@ export function createBackgroundManager(pi: ExtensionAPI): BackgroundManager {
                         for (const entry of entries) {
                             if (rendered >= MAX_ENTRIES) {
                                 const remaining = entries.length - MAX_ENTRIES;
-                                lines.push(
-                                    truncateToWidth(
+                                container.addChild(
+                                    new TruncatedText(
                                         theme.fg("muted", `  +${remaining} more`),
-                                        width,
                                     ),
                                 );
                                 break;
                             }
-                            const p = entry.tracker;
-                            const elapsed = Date.now() - entry.startedAt;
-
-                            // Line 1: icon + agent + id + description
-                            const agentName = entry.agentName.padEnd(8).slice(0, 8);
-                            const shortId = entry.id.slice(
-                                entry.id.lastIndexOf("-") + 1,
-                            );
-                            const desc = truncateToWidth(
-                                entry.description,
-                                descAvail,
-                                "\u2026",
-                            );
-                            const line1 =
-                                `${theme.fg("accent", ICON_RUNNING)} ` +
-                                `${theme.fg("muted", agentName)}  ` +
-                                `${theme.fg("dim", shortId)}  ` +
-                                `${theme.fg("muted", desc)}`;
-                            lines.push(truncateToWidth(line1, width));
-
-                            // Line 2: usage summary
-                            const usageLine = buildLastLine(
-                                {
-                                    usage: p.usage,
-                                    durationMs: elapsed,
+                            const details: SubagentDetails = {
+                                kind: "background",
+                                description: entry.description,
+                                cancelled: false,
+                                execStatuses: Object.fromEntries(
+                                    entry.tracker.execStatuses,
+                                ),
+                                result: {
+                                    agent: entry.agentName,
+                                    agentSource: "user",
+                                    task: entry.task,
+                                    outcome: {
+                                        status: "running",
+                                    } as unknown as AgentRunResult["outcome"],
+                                    messages: entry.tracker.messages,
+                                    stderr: "",
+                                    usage: entry.tracker.usage,
+                                    durationMs: Date.now() - entry.startedAt,
                                 },
-                                p.toolStartCount,
+                            };
+                            container.addChild(
+                                renderSubagentResult(details, false, theme),
                             );
-                            const line2 = `  ${theme.fg("dim", usageLine)}`;
-                            lines.push(truncateToWidth(line2, width));
                             rendered++;
                         }
-                        return lines;
+                        return container.render(width - 1).map((line) => ` ${line}`);
                     },
                     invalidate(): void {
                         /* no-op: render is stateless */

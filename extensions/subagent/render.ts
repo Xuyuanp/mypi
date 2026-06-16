@@ -421,6 +421,8 @@ function renderBackgroundRunning(
     headerText: string,
     result: AgentRunResult,
     expanded: boolean,
+    toolCallItems: (DisplayItem & { type: "toolCall" })[],
+    lastLine: string,
     bgFn: ((t: string) => string) | undefined,
     theme: RenderTheme,
 ): Box | Container {
@@ -436,6 +438,15 @@ function renderBackgroundRunning(
             ),
         );
         box.addChild(new Text(theme.fg("dim", result.task), 0, 0));
+    }
+    const recentTools = buildRecentToolCallsText(toolCallItems, theme);
+    if (recentTools || lastLine) {
+        let text = recentTools;
+        if (lastLine) {
+            if (text) text += "\n";
+            text += theme.fg("dim", lastLine);
+        }
+        box.addChild(new Text(text, 0, 0));
     }
     return box;
 }
@@ -520,7 +531,15 @@ export function renderSubagentResult(
         );
 
         if (isRunning) {
-            return renderBackgroundRunning(headerText, r, expanded, bgFn, theme);
+            return renderBackgroundRunning(
+                headerText,
+                r,
+                expanded,
+                toolCallItems,
+                lastLine,
+                undefined,
+                theme,
+            );
         }
 
         if (expanded) {
