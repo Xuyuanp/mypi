@@ -374,10 +374,11 @@ export default function (pi: ExtensionAPI) {
             return executeForeground(
                 resolvedAgent,
                 {
-                    agent: resolvedAgent.name,
                     description: "",
+                    ...lookup.originalParams,
+                    agent: resolvedAgent.name,
                     task: follow_up,
-                    cwd: ctx.cwd,
+                    background: false,
                 },
                 session,
                 signal,

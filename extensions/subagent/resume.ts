@@ -6,12 +6,18 @@
  */
 
 import { BACKGROUND_RESULT_TYPE } from "./background.js";
-import type { SubagentDetails } from "./types.js";
+import type { SubagentDetails, SubagentToolParams } from "./types.js";
 
 // ── Types ────────────────────────────────────────────────────────────
 
 export type LookupResult =
-    | { found: true; details: SubagentDetails; session: { dir: string; id: string } }
+    | {
+          found: true;
+          details: SubagentDetails;
+          session: { dir: string; id: string };
+          /** The original subagent tool call params, if recoverable. */
+          originalParams?: SubagentToolParams;
+      }
     | { found: false; error: "not_found"; availableIds: string[] }
     | { found: false; error: "no_session_info"; id: string };
 
@@ -25,7 +31,13 @@ export type LookupResult =
 export type LookupEntry =
     | {
           type: "message";
-          message: { role: string; toolName?: string; details?: unknown };
+          message: {
+              role: string;
+              toolCallId?: string;
+              toolName?: string;
+              content?: unknown;
+              details?: unknown;
+          };
       }
     | { type: "custom_message"; customType: string; details?: unknown }
     | { type: string };
@@ -48,6 +60,7 @@ export function lookupSubagentSession(
     const availableIds = new Set<string>();
     let matchedDetails: SubagentDetails | undefined;
     let matchedSession: { dir: string; id: string } | undefined;
+    let matchedToolCallId: string | undefined;
     let noSessionCandidate = false;
 
     for (const entry of entries) {
@@ -67,6 +80,7 @@ export function lookupSubagentSession(
                 if (session.id === targetId) {
                     matchedDetails = details;
                     matchedSession = session;
+                    matchedToolCallId = msg.toolCallId;
                 }
             } else if (
                 details.result?.agent &&
@@ -96,7 +110,33 @@ export function lookupSubagentSession(
     }
 
     if (matchedDetails && matchedSession) {
-        return { found: true, details: matchedDetails, session: matchedSession };
+        // Recover params from the original subagent tool call.
+        let originalParams: SubagentToolParams | undefined;
+        if (matchedToolCallId) {
+            for (const entry of entries) {
+                if (entry.type !== "message" || !("message" in entry)) continue;
+                const msg = entry.message;
+                if (msg.role !== "assistant" || !Array.isArray(msg.content))
+                    continue;
+                for (const block of msg.content as any[]) {
+                    if (
+                        block.type === "toolCall" &&
+                        block.id === matchedToolCallId
+                    ) {
+                        originalParams = block.arguments;
+                        break;
+                    }
+                }
+                if (originalParams) break;
+            }
+        }
+
+        return {
+            found: true,
+            details: matchedDetails,
+            session: matchedSession,
+            originalParams,
+        };
     }
 
     if (noSessionCandidate) {
