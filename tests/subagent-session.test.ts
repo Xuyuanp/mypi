@@ -13,8 +13,7 @@ import { createBackgroundManager } from "../extensions/subagent/background.js";
 import { createZeroUsage } from "../extensions/subagent/index.js";
 import type {
     AgentRunResult,
-    BackgroundSubagentDetails,
-    ForegroundSubagentDetails,
+    SubagentDetails,
 } from "../extensions/subagent/types.js";
 
 function makeFakeResult(overrides?: Partial<AgentRunResult>): AgentRunResult {
@@ -50,12 +49,12 @@ function makeMockCtx() {
 }
 
 describe("foreground subagent session in details", () => {
-    it("session field is populated in ForegroundSubagentDetails", () => {
+    it("session field is populated in SubagentDetails", () => {
         const session = {
             dir: "/tmp/sessions/abc123/subagent",
             id: "scout-a1b2c3d4",
         };
-        const details: ForegroundSubagentDetails = {
+        const details: SubagentDetails = {
             kind: "foreground",
             result: makeFakeResult(),
             execStatuses: {},
@@ -68,7 +67,7 @@ describe("foreground subagent session in details", () => {
     });
 
     it("session field is optional and defaults to undefined", () => {
-        const details: ForegroundSubagentDetails = {
+        const details: SubagentDetails = {
             kind: "foreground",
             result: makeFakeResult(),
             execStatuses: {},
@@ -79,12 +78,12 @@ describe("foreground subagent session in details", () => {
 });
 
 describe("background subagent session in details", () => {
-    it("session field is populated in BackgroundSubagentDetails", () => {
+    it("session field is populated in SubagentDetails", () => {
         const session = {
             dir: "/tmp/sessions/abc123/subagent",
             id: "worker-e5f6g7h8",
         };
-        const details: BackgroundSubagentDetails = {
+        const details: SubagentDetails = {
             kind: "background",
             result: makeFakeResult(),
             description: "test task",
@@ -98,7 +97,7 @@ describe("background subagent session in details", () => {
     });
 
     it("session field is optional and defaults to undefined", () => {
-        const details: BackgroundSubagentDetails = {
+        const details: SubagentDetails = {
             kind: "background",
             result: makeFakeResult(),
             description: "test task",

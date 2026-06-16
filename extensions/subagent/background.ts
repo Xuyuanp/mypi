@@ -12,12 +12,7 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth } from "@earendil-works/pi-tui";
 import { buildLastLine, ICON_RUNNING } from "./render.js";
-import type {
-    AgentRunResult,
-    BackgroundAgent,
-    BackgroundSubagentDetails,
-    SubagentDetails,
-} from "./types.js";
+import type { AgentRunResult, BackgroundAgent, SubagentDetails } from "./types.js";
 
 // ── Constants ────────────────────────────────────────────────────────
 
@@ -71,7 +66,7 @@ export interface BackgroundManager {
         status: "completed" | "failed" | "cancelled",
         output: string,
         result: AgentRunResult,
-        details?: Omit<BackgroundSubagentDetails, "result" | "kind">,
+        details?: Omit<SubagentDetails, "result" | "kind">,
     ): void;
 }
 
@@ -131,7 +126,7 @@ export function createBackgroundManager(pi: ExtensionAPI): BackgroundManager {
                                 );
                                 break;
                             }
-                            const p = entry.progress;
+                            const p = entry.tracker;
                             const elapsed = Date.now() - entry.startedAt;
 
                             // Line 1: icon + agent + id + description
@@ -157,7 +152,7 @@ export function createBackgroundManager(pi: ExtensionAPI): BackgroundManager {
                                     usage: p.usage,
                                     durationMs: elapsed,
                                 },
-                                p.toolCallCount,
+                                p.toolStartCount,
                             );
                             const line2 = `  ${theme.fg("dim", usageLine)}`;
                             lines.push(truncateToWidth(line2, width));
@@ -245,7 +240,7 @@ export function createBackgroundManager(pi: ExtensionAPI): BackgroundManager {
             status: "completed" | "failed" | "cancelled",
             output: string,
             result: AgentRunResult,
-            details?: Omit<BackgroundSubagentDetails, "result" | "kind">,
+            details?: Omit<SubagentDetails, "result" | "kind">,
         ): void {
             if (!active) return;
             const sessionHeader = details?.session
@@ -262,6 +257,7 @@ export function createBackgroundManager(pi: ExtensionAPI): BackgroundManager {
                         result,
                         description: details?.description ?? "(unknown)",
                         cancelled: details?.cancelled ?? false,
+                        execStatuses: details?.execStatuses ?? {},
                         session: details?.session,
                         resolvedAgent: details?.resolvedAgent,
                         contextWindow: details?.contextWindow,

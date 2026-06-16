@@ -23,8 +23,7 @@ import {
 import type {
     AgentOutcome,
     AgentRunResult,
-    BackgroundSubagentDetails,
-    ForegroundSubagentDetails,
+    SubagentDetails,
 } from "../extensions/subagent/types.js";
 import { createZeroUsage, isSubagentError } from "../extensions/subagent/types.js";
 
@@ -431,9 +430,9 @@ describe("isSubagentError", () => {
 
 // ── SubagentDetails discriminated union ──────────────────────────────
 
-describe("SubagentDetails discriminated union", () => {
-    it("foreground has kind='foreground' and non-optional execStatuses", () => {
-        const details: ForegroundSubagentDetails = {
+describe("SubagentDetails unified shape", () => {
+    it("foreground has kind='foreground' with execStatuses", () => {
+        const details: SubagentDetails = {
             kind: "foreground",
             result: makeResult(),
             execStatuses: { tc1: false, tc2: true },
@@ -443,7 +442,7 @@ describe("SubagentDetails discriminated union", () => {
     });
 
     it("background has kind='background', description, cancelled", () => {
-        const details: BackgroundSubagentDetails = {
+        const details: SubagentDetails = {
             kind: "background",
             result: makeResult(),
             description: "find auth files",
@@ -515,7 +514,7 @@ describe("renderSubagentResult", () => {
             },
         ] as Message[];
 
-        const details: ForegroundSubagentDetails = {
+        const details: SubagentDetails = {
             kind: "foreground",
             result: makeResult({
                 messages,
@@ -561,7 +560,7 @@ describe("renderSubagentResult", () => {
             },
         ] as Message[];
 
-        const details: ForegroundSubagentDetails = {
+        const details: SubagentDetails = {
             kind: "foreground",
             result: makeResult({
                 outcome: {
@@ -596,12 +595,13 @@ describe("renderSubagentResult (background)", () => {
             },
         ] as Message[];
 
-        const details: BackgroundSubagentDetails = {
+        const details: SubagentDetails = {
             kind: "background",
             result: makeResult({
                 messages,
                 usage: { ...createZeroUsage(), inputTokens: 200, turns: 1 },
             }),
+            execStatuses: {},
             description: "find files",
             cancelled: false,
         };
@@ -615,9 +615,10 @@ describe("renderSubagentResult (background)", () => {
     });
 
     it("renders cancelled result without requiring output", () => {
-        const details: BackgroundSubagentDetails = {
+        const details: SubagentDetails = {
             kind: "background",
             result: makeResult({ outcome: { status: "success" }, messages: [] }),
+            execStatuses: {},
             description: "cancelled task",
             cancelled: true,
         };
@@ -633,13 +634,14 @@ describe("renderSubagentResult (background)", () => {
         // Old sessions may still have outcome.status === "running" in
         // persisted data. The renderer handles this at runtime even
         // though it's no longer in the AgentOutcome type.
-        const details: BackgroundSubagentDetails = {
+        const details: SubagentDetails = {
             kind: "background",
             result: makeResult({
                 outcome: { status: "running" } as any,
                 model: "deepseek/deepseek-v4-flash",
                 task: "explore codebase",
             }),
+            execStatuses: {},
             description: "find files",
             cancelled: false,
         };
@@ -654,7 +656,7 @@ describe("renderSubagentResult (background)", () => {
     });
 
     it("includes model in background header, not in last line", () => {
-        const details: BackgroundSubagentDetails = {
+        const details: SubagentDetails = {
             kind: "background",
             result: makeResult({
                 model: "anthropic/claude-sonnet",
@@ -671,6 +673,7 @@ describe("renderSubagentResult (background)", () => {
                 },
                 durationMs: 2000,
             }),
+            execStatuses: {},
             description: "do work",
             cancelled: false,
         };

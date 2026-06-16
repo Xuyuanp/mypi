@@ -17,13 +17,7 @@ import {
     type ThemeColor,
 } from "@earendil-works/pi-coding-agent";
 import { Box, Container, Markdown, Spacer, Text } from "@earendil-works/pi-tui";
-import type {
-    AgentRunResult,
-    BackgroundSubagentDetails,
-    ForegroundSubagentDetails,
-    SubagentDetails,
-    UsageStats,
-} from "./types.js";
+import type { AgentRunResult, SubagentDetails, UsageStats } from "./types.js";
 import { isSubagentError } from "./types.js";
 
 // ── buildLastLine input type ─────────────────────────────────────────
@@ -448,7 +442,7 @@ function renderBackgroundRunning(
 
 /** Build background header text line. */
 function buildBackgroundHeader(
-    details: BackgroundSubagentDetails,
+    details: SubagentDetails,
     isRunning: boolean,
     isCancelled: boolean,
     isError: boolean,
@@ -494,8 +488,7 @@ export function renderSubagentResult(
 ): Container | Box | Text {
     const r = details.result;
     const isForeground = details.kind === "foreground";
-    const isCancelled =
-        !isForeground && (details as BackgroundSubagentDetails).cancelled;
+    const isCancelled = !isForeground && (details.cancelled ?? false);
     // "running" is no longer a valid AgentOutcome variant, but old
     // serialized sessions may still contain it. Guard at runtime.
     const isRunning = (r.outcome as { status: string }).status === "running";
@@ -503,11 +496,7 @@ export function renderSubagentResult(
 
     // ── Shared data ──────────────────────────────────────────────────
     const agentId = details.session?.id;
-    const execStatusMap = isForeground
-        ? new Map(
-              Object.entries((details as ForegroundSubagentDetails).execStatuses),
-          )
-        : undefined;
+    const execStatusMap = new Map(Object.entries(details.execStatuses ?? {}));
     const displayItems = getDisplayItems(r.messages, execStatusMap);
     const toolCallItems = displayItems.filter(
         (i) => i.type === "toolCall",
@@ -523,7 +512,7 @@ export function renderSubagentResult(
     if (!isForeground) {
         const bgFn = resolveBgFn(isCancelled, isError, theme);
         const headerText = buildBackgroundHeader(
-            details as BackgroundSubagentDetails,
+            details,
             isRunning,
             isCancelled,
             isError,

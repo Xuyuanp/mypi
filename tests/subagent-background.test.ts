@@ -17,11 +17,9 @@ import {
     type BackgroundAgent,
     createZeroUsage,
 } from "../extensions/subagent/index.js";
+import { createProgressTracker } from "../extensions/subagent/tracker.js";
 import type { AgentRunResult } from "../extensions/subagent/types.js";
-import {
-    createZeroProgress,
-    isSubagentError,
-} from "../extensions/subagent/types.js";
+import { isSubagentError } from "../extensions/subagent/types.js";
 
 function makeFakeResult(overrides?: Partial<AgentRunResult>): AgentRunResult {
     return {
@@ -46,7 +44,7 @@ function makeFakeEntry(overrides?: Partial<BackgroundAgent>): BackgroundAgent {
         kill: () => {},
         promise: new Promise(() => {}) as any,
         startedAt: Date.now(),
-        progress: createZeroProgress(),
+        tracker: createProgressTracker(),
         ...overrides,
     };
 }
@@ -64,7 +62,7 @@ describe("cancel command logic", () => {
             kill: vi.fn(() => controller.abort()),
             promise: new Promise(() => {}), // never resolves
             startedAt: Date.now(),
-            progress: createZeroProgress(),
+            tracker: createProgressTracker(),
         };
     }
 
@@ -134,7 +132,7 @@ describe("background agent lifecycle", () => {
             kill: () => controller.abort(),
             promise: promise as any,
             startedAt: Date.now(),
-            progress: createZeroProgress(),
+            tracker: createProgressTracker(),
         };
         map.set(entry.id, entry);
 
@@ -215,7 +213,7 @@ describe("background agent lifecycle", () => {
             kill: () => {},
             promise: promise as any,
             startedAt: Date.now(),
-            progress: createZeroProgress(),
+            tracker: createProgressTracker(),
         };
         map.set(entry.id, entry);
 
@@ -345,7 +343,7 @@ describe("shutdown logic", () => {
                 kill: killFn,
                 promise: Promise.resolve({} as any),
                 startedAt: Date.now(),
-                progress: createZeroProgress(),
+                tracker: createProgressTracker(),
             };
             map.set(name, entry);
             killFns.push(killFn);
@@ -819,7 +817,7 @@ describe("createBackgroundManager", () => {
         expect(pi.sendMessage).not.toHaveBeenCalled();
     });
 
-    it("injectResult constructs BackgroundSubagentDetails with kind='background'", () => {
+    it("injectResult constructs SubagentDetails with kind='background'", () => {
         const pi = makeMockPi();
         const mgr = createBackgroundManager(pi);
         const ctx = makeMockCtx();

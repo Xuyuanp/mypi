@@ -16,7 +16,6 @@
 import { randomUUID } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import type { Message } from "@earendil-works/pi-ai";
 
 import type {
     ExtensionAPI,
@@ -32,24 +31,16 @@ import { registerSubagentCommand } from "./command.js";
 import { runSubagent } from "./execute.js";
 import { getFinalOutput, renderSubagentResult } from "./render.js";
 import { lookupSubagentSession } from "./resume.js";
+import { createProgressTracker } from "./tracker.js";
 import type {
     AgentRunResult,
     AgentSpec,
     BackgroundAgent,
-    BackgroundSubagentDetails,
-    ForegroundSubagentDetails,
     PersistedResolvedAgent,
     ResolvedAgent,
     SubagentDetails,
-    SubagentProgressCallback,
-    UsageStats,
 } from "./types.js";
-import {
-    createZeroProgress,
-    createZeroUsage,
-    isSubagentError,
-    ZERO_USAGE,
-} from "./types.js";
+import { isSubagentError, ZERO_USAGE } from "./types.js";
 
 // ── Re-exports for backward compatibility ────────────────────────────
 export type { BackgroundAgent } from "./types.js";
@@ -160,7 +151,7 @@ interface SubagentToolParams {
 
 interface ToolResult {
     content: { type: "text"; text: string }[];
-    details: ForegroundSubagentDetails | BackgroundSubagentDetails | undefined;
+    details: SubagentDetails | undefined;
     isError?: boolean;
 }
 
@@ -335,7 +326,7 @@ function executeBackground(
     onUpdate:
         | ((update: {
               content: { type: "text"; text: string }[];
-              details: BackgroundSubagentDetails;
+              details: SubagentDetails;
           }) => void)
         | undefined,
     ctx: ExtensionContext,
@@ -345,18 +336,10 @@ function executeBackground(
         `${sanitizeAgentName(resolvedAgent.name)}-${randomUUID().slice(0, 8)}`;
 
     const controller = new AbortController();
-    const progress = createZeroProgress();
+    const tracker = createProgressTracker({
+        onChange: () => bgManager.updateWidget(),
+    });
     const contextWindow = resolveContextWindow(resolvedAgent.model, ctx);
-
-    const bgOnProgress: SubagentProgressCallback = (event) => {
-        if (event.type === "message") {
-            progress.usage = event.usage;
-
-            progress.turns = event.usage.turns;
-        } else if (event.type === "tool_start") {
-            progress.toolCallCount++;
-        }
-    };
 
     const sessionFile = session
         ? path.join(session.dir, `${session.id}.jsonl`)
@@ -364,7 +347,7 @@ function executeBackground(
 
     const promise = runSubagent(resolvedAgent, params.task, params.cwd ?? ctx.cwd, {
         signal: controller.signal,
-        onProgress: bgOnProgress,
+        onProgress: tracker.onProgress,
         sessionFile,
     });
 
@@ -376,13 +359,16 @@ function executeBackground(
         kill: () => controller.abort(),
         promise,
         startedAt: Date.now(),
-        progress,
+        tracker,
     };
     bgManager.register(entry);
 
-    const bgDetails = (cancelled: boolean) => ({
+    const bgDetails = (
+        cancelled: boolean,
+    ): Omit<SubagentDetails, "result" | "kind"> => ({
         description: params.description,
         cancelled,
+        execStatuses: Object.fromEntries(tracker.execStatuses),
         session,
         resolvedAgent: persistAgent(resolvedAgent),
         contextWindow,
@@ -489,7 +475,8 @@ function executeBackground(
     // Emit a preliminary update so renderResult populates shared state
     // before the final render. Without this, renderCall on the final
     // render would see empty state (render order: call before result).
-    onUpdate?.(toolResult as { content: any; details: BackgroundSubagentDetails });
+    if (toolResult.details)
+        onUpdate?.({ ...toolResult, details: toolResult.details });
 
     return toolResult;
 }
@@ -503,51 +490,37 @@ async function executeForeground(
     onUpdate:
         | ((update: {
               content: { type: "text"; text: string }[];
-              details: ForegroundSubagentDetails;
+              details: SubagentDetails;
           }) => void)
         | undefined,
     ctx: ExtensionContext,
+    opts?: { resumedFrom?: string; resume?: boolean },
 ): Promise<ToolResult> {
-    const execStatusMap = new Map<string, boolean>();
-    const messages: Message[] = [];
     const contextWindow = resolveContextWindow(resolvedAgent.model, ctx);
+    const resumedFrom = opts?.resumedFrom;
 
-    const makeDetails = (result: AgentRunResult): ForegroundSubagentDetails => ({
+    const makeDetails = (result: AgentRunResult): SubagentDetails => ({
         kind: "foreground",
         result,
-        execStatuses: Object.fromEntries(execStatusMap),
+        execStatuses: Object.fromEntries(tracker.execStatuses),
         session,
         resolvedAgent: persistAgent(resolvedAgent),
         contextWindow,
+        ...(resumedFrom ? { resumedFrom } : {}),
     });
 
-    let latestUsage: UsageStats = createZeroUsage();
-    let latestModel: string | undefined = resolvedAgent.model;
-
-    const onProgress: SubagentProgressCallback | undefined = onUpdate
-        ? (event) => {
-              if (event.type === "tool_end") {
-                  execStatusMap.set(event.toolCallId, event.isError);
-              }
-              if (event.type === "message") {
-                  messages.push(event.message);
-                  latestUsage = event.usage;
-                  if (event.model) latestModel = event.model;
-              }
-              if (event.type === "tool_result") {
-                  messages.push(event.message);
-              }
-              // Push update on events that change rendered state
-              if (event.type === "tool_end" || event.type === "message") {
+    const tracker = createProgressTracker({
+        onChange: onUpdate
+            ? () => {
                   const partialResult: AgentRunResult = {
                       agent: resolvedAgent.name,
                       agentSource: resolvedAgent.source,
                       task: params.task,
                       outcome: { status: "success" },
-                      messages: [...messages],
+                      messages: [...tracker.messages],
                       stderr: "",
-                      usage: latestUsage,
-                      model: latestModel,
+                      usage: tracker.usage,
+                      model: resolvedAgent.model,
                       durationMs: 0,
                   };
                   onUpdate({
@@ -555,8 +528,8 @@ async function executeForeground(
                       details: makeDetails(partialResult),
                   });
               }
-          }
-        : undefined;
+            : undefined,
+    });
 
     const sessionFile = session
         ? path.join(session.dir, `${session.id}.jsonl`)
@@ -566,7 +539,12 @@ async function executeForeground(
         resolvedAgent,
         params.task,
         params.cwd ?? ctx.cwd,
-        { signal, onProgress, sessionFile },
+        {
+            signal,
+            onProgress: tracker.onProgress,
+            sessionFile,
+            resume: opts?.resume,
+        },
     );
 
     const sessionHeader = session ? `[subagent: ${session.id}]\n\n` : "";
@@ -629,7 +607,7 @@ export default function (pi: ExtensionAPI) {
                 typeof details === "object" &&
                 "kind" in details &&
                 details.kind === "background"
-                    ? (details as BackgroundSubagentDetails)
+                    ? (details as SubagentDetails)
                     : undefined;
             if (!bgDetails) {
                 const contentText =
@@ -830,92 +808,20 @@ export default function (pi: ExtensionAPI) {
                 systemPrompt: agent.systemPrompt,
             };
 
-            const execStatusMap = new Map<string, boolean>();
-            const progressMessages: Message[] = [];
-
-            const resumeContextWindow = resolveContextWindow(
-                resolvedAgent.model,
-                ctx,
-            );
-            const makeDetails = (
-                result: AgentRunResult,
-            ): ForegroundSubagentDetails => ({
-                kind: "foreground",
-                result,
-                execStatuses: Object.fromEntries(execStatusMap),
+            return executeForeground(
+                resolvedAgent,
+                {
+                    agent: resolvedAgent.name,
+                    description: "",
+                    task: follow_up,
+                    cwd: ctx.cwd,
+                },
                 session,
-                resumedFrom: id,
-                resolvedAgent: persistAgent(resolvedAgent),
-                contextWindow: resumeContextWindow,
-            });
-
-            let resumeLatestUsage: UsageStats = createZeroUsage();
-            let resumeLatestModel: string | undefined = resolvedAgent.model;
-
-            const onProgress: SubagentProgressCallback | undefined = onUpdate
-                ? (event) => {
-                      if (event.type === "tool_end") {
-                          execStatusMap.set(event.toolCallId, event.isError);
-                      }
-                      if (event.type === "message") {
-                          progressMessages.push(event.message);
-                          resumeLatestUsage = event.usage;
-                          if (event.model) resumeLatestModel = event.model;
-                      }
-                      if (event.type === "tool_result") {
-                          progressMessages.push(event.message);
-                      }
-                      if (event.type === "tool_end" || event.type === "message") {
-                          const partialResult: AgentRunResult = {
-                              agent: resolvedAgent.name,
-                              agentSource: resolvedAgent.source,
-                              task: follow_up,
-                              outcome: { status: "success" },
-                              messages: [...progressMessages],
-                              stderr: "",
-                              usage: resumeLatestUsage,
-                              model: resumeLatestModel,
-                              durationMs: 0,
-                          };
-                          onUpdate({
-                              content: [{ type: "text", text: "" }],
-                              details: makeDetails(partialResult),
-                          });
-                      }
-                  }
-                : undefined;
-
-            const result = await runSubagent(resolvedAgent, follow_up, ctx.cwd, {
                 signal,
-                onProgress,
-                sessionFile,
-                resume: true,
-            });
-
-            const sessionHeader = `[subagent: ${session.id}]\n\n`;
-
-            if (isSubagentError(result)) {
-                return {
-                    content: [
-                        {
-                            type: "text",
-                            text: `${sessionHeader}Agent failed: ${getResultOutput(result)}`,
-                        },
-                    ],
-                    details: makeDetails(result),
-                    isError: true,
-                };
-            }
-
-            return {
-                content: [
-                    {
-                        type: "text",
-                        text: `${sessionHeader}${getFinalOutput(result.messages) || "(no output)"}`,
-                    },
-                ],
-                details: makeDetails(result),
-            };
+                onUpdate,
+                ctx,
+                { resumedFrom: id, resume: true },
+            );
         },
 
         renderCall(args, theme, context) {
@@ -958,8 +864,8 @@ export default function (pi: ExtensionAPI) {
                 );
             }
             // Publish resolved agent to shared state for renderCall
+            const typed = details as SubagentDetails;
             const state = context.state as SubagentRenderState;
-            const typed = details as ForegroundSubagentDetails;
             if (typed.resolvedAgent) state.resolvedAgent = typed.resolvedAgent;
 
             return renderSubagentResult(typed, expanded, theme);

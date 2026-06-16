@@ -16,8 +16,7 @@ import {
 } from "../extensions/subagent/resume.js";
 import type {
     AgentRunResult,
-    BackgroundSubagentDetails,
-    ForegroundSubagentDetails,
+    SubagentDetails,
 } from "../extensions/subagent/types.js";
 
 // ── Helpers ──────────────────────────────────────────────────────────
@@ -40,7 +39,7 @@ function makeForegroundEntry(
     session?: { dir: string; id: string },
     agentName = "scout",
 ): LookupEntry {
-    const details: ForegroundSubagentDetails = {
+    const details: SubagentDetails = {
         kind: "foreground",
         result: makeFakeResult({ agent: agentName }),
         execStatuses: {},
@@ -60,7 +59,7 @@ function makeBackgroundEntry(
     session?: { dir: string; id: string },
     agentName = "worker",
 ): LookupEntry {
-    const details: BackgroundSubagentDetails = {
+    const details: SubagentDetails = {
         kind: "background",
         result: makeFakeResult({ agent: agentName }),
         description: "test task",

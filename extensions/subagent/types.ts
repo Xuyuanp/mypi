@@ -118,48 +118,55 @@ export interface AgentRunResult {
     durationMs: number;
 }
 
-// ── RunProgress ──────────────────────────────────────────────────────
-
-/**
- * Lightweight mutable struct for background widget observation.
- *
- * Purpose-built for the progress display — not a full AgentRunResult.
- * Background entries accumulate this via progress events instead of
- * holding a live reference to the internal accumulator.
- */
-export interface RunProgress {
-    usage: UsageStats;
-    toolCallCount: number;
-    turns: number;
-}
-
 // ── SubagentDetails ──────────────────────────────────────────────────
 
-export interface ForegroundSubagentDetails {
-    kind: "foreground";
+/**
+ * Unified subagent detail record — replaces the old discriminated union
+ * (ForegroundSubagentDetails | BackgroundSubagentDetails).
+ *
+ * Fields that are kind-specific (description, cancelled, resumedFrom)
+ * are optional. Consumers dispatch on `kind` at runtime.
+ */
+export interface SubagentDetails {
+    kind: "foreground" | "background";
     result: AgentRunResult;
-    execStatuses: Record<string, boolean>;
+    /**
+     * Tool call execution statuses (toolCallId → isError).
+     * Always set for newly-written details. May be absent at runtime when
+     * deserializing old persisted entries that predate this field.
+     */
+    execStatuses?: Record<string, boolean>;
     session?: { dir: string; id: string };
+    resolvedAgent?: PersistedResolvedAgent;
+    contextWindow?: number;
+    // background-specific (undefined for foreground)
+    description?: string;
+    cancelled?: boolean;
+    // resume-specific (undefined for non-resume)
     resumedFrom?: string;
-    /** Resolved agent config (sans systemPrompt) for rendering and resume. */
-    resolvedAgent?: PersistedResolvedAgent;
-    /** Model context window size for usage % display. Set at result time. */
-    contextWindow?: number;
 }
 
-export interface BackgroundSubagentDetails {
-    kind: "background";
-    result: AgentRunResult;
-    description: string;
-    cancelled: boolean;
-    session?: { dir: string; id: string };
-    /** Resolved agent config (sans systemPrompt) for rendering and resume. */
-    resolvedAgent?: PersistedResolvedAgent;
-    /** Model context window size for usage % display. Set at result time. */
-    contextWindow?: number;
-}
+// ── ProgressTracker ──────────────────────────────────────────────────
 
-export type SubagentDetails = ForegroundSubagentDetails | BackgroundSubagentDetails;
+/**
+ * Mutable progress accumulator shared by all three execution paths
+ * (foreground, background, resume).
+ *
+ * The factory function lives in tracker.ts; this interface is the
+ * dependency-free leaf so BackgroundAgent can reference it.
+ */
+export interface ProgressTracker {
+    /** Pass to runSubagent's onProgress option. */
+    readonly onProgress: SubagentProgressCallback;
+    /** Accumulated assistant + toolResult messages. */
+    readonly messages: Message[];
+    /** Tool call ID → isError map (populated on tool_end). */
+    readonly execStatuses: Map<string, boolean>;
+    /** Running usage totals (snapshot from latest message event). */
+    readonly usage: UsageStats;
+    /** Number of tools started (increments on tool_start, before completion). */
+    readonly toolStartCount: number;
+}
 
 // ── BackgroundAgent ──────────────────────────────────────────────────
 
@@ -171,7 +178,7 @@ export interface BackgroundAgent {
     kill: () => void;
     promise: Promise<AgentRunResult>;
     startedAt: number;
-    progress: RunProgress;
+    tracker: ProgressTracker;
 }
 
 // ── Progress events ──────────────────────────────────────────────────
@@ -219,13 +226,4 @@ export function isSubagentError(r: AgentRunResult): r is AgentRunResult & {
     outcome: { status: "error" | "aborted" };
 } {
     return r.outcome.status === "error" || r.outcome.status === "aborted";
-}
-
-/** Create a fresh zero-initialized RunProgress. */
-export function createZeroProgress(): RunProgress {
-    return {
-        usage: createZeroUsage(),
-        toolCallCount: 0,
-        turns: 0,
-    };
 }
