@@ -243,35 +243,20 @@ Each completed subagent can be resumed via subagent_resume using the subagent ID
 
 // ── Resolution logic ─────────────────────────────────────────────────
 
-type ResolveResult =
-    | { error: ToolResult; agent?: never; session?: never }
-    | {
-          error?: never;
-          agent: ResolvedAgent;
-          session: { dir: string; id: string } | undefined;
-      };
-
-/**
- * Validate params and resolve the final ResolvedAgent + session path.
- */
-function resolveAgentConfig(
-    params: SubagentToolParams,
-    agents: AgentSpec[],
-    skillCache: Map<string, Skill>,
-    ctx: ExtensionContext,
-): ResolveResult {
-    const makeErrorResult = (
-        msg: string,
-        agentSource: AgentRunResult["agentSource"],
-    ): ToolResult => ({
+function makeErrorToolResult(msg: string, params: SubagentToolParams): ToolResult {
+    return {
         content: [{ type: "text", text: msg }],
         details: {
             kind: "foreground",
             result: {
                 agent: params.agent,
-                agentSource,
+                agentSource: "unknown",
                 task: params.task,
-                outcome: { status: "error", exitCode: 1, message: msg },
+                outcome: {
+                    status: "error",
+                    exitCode: 1,
+                    message: msg,
+                },
                 messages: [],
                 stderr: msg,
                 usage: ZERO_USAGE,
@@ -280,20 +265,30 @@ function resolveAgentConfig(
             execStatuses: {},
         },
         isError: true,
-    });
+    };
+}
 
+/**
+ * Validate params and resolve the final ResolvedAgent.
+ * Returns a ResolvedAgent on success, or an error string on failure.
+ */
+function resolveAgentConfig(
+    params: SubagentToolParams,
+    agents: AgentSpec[],
+    skillCache: Map<string, Skill>,
+    ctx: ExtensionContext,
+): ResolvedAgent | string {
     const agent = agents.find((a) => a.name === params.agent);
     if (!agent) {
         const available = agents.map((a) => `"${a.name}"`).join(", ") || "none";
-        const msg = `Unknown agent: "${params.agent}". Available agents: ${available}.`;
-        return { error: makeErrorResult(msg, "unknown") };
+        return `Unknown agent: "${params.agent}". Available agents: ${available}.`;
     }
 
     const skillNames =
         params.skills !== undefined ? params.skills : agent.skillNames;
     const skillResult = resolveSkills(skillNames, skillCache);
     if (skillResult.error) {
-        return { error: makeErrorResult(skillResult.error, agent.source) };
+        return skillResult.error;
     }
 
     const parentModel = ctx.model
@@ -301,15 +296,10 @@ function resolveAgentConfig(
         : undefined;
     const resolvedModel = (params.model || undefined) ?? agent.model ?? parentModel;
     if (!resolvedModel) {
-        return {
-            error: makeErrorResult(
-                "No model available: agent has no default model and no parent model is set.",
-                agent.source,
-            ),
-        };
+        return "No model available: agent has no default model and no parent model is set.";
     }
 
-    const resolvedAgent: ResolvedAgent = {
+    return {
         name: agent.name,
         tools: agent.tools,
         skillPaths: skillResult.paths,
@@ -317,21 +307,21 @@ function resolveAgentConfig(
         systemPrompt: agent.systemPrompt,
         source: agent.source,
     };
+}
 
-    // Persist subagent session alongside the parent session.
-    let session: { dir: string; id: string } | undefined;
+function deriveSessionPath(
+    agentName: string,
+    ctx: ExtensionContext,
+): { dir: string; id: string } | undefined {
     const parentSessionFile = ctx.sessionManager.getSessionFile();
-    if (parentSessionFile) {
-        const dir = path.resolve(
-            parentSessionFile.slice(0, -".jsonl".length),
-            "subagent",
-        );
-        const safeName = sanitizeAgentName(resolvedAgent.name);
-        const id = `${safeName}-${randomUUID().slice(0, 8)}`;
-        session = { dir, id };
-    }
-
-    return { agent: resolvedAgent, session };
+    if (!parentSessionFile) return undefined;
+    const dir = path.resolve(
+        parentSessionFile.slice(0, -".jsonl".length),
+        "subagent",
+    );
+    const safeName = sanitizeAgentName(agentName);
+    const id = `${safeName}-${randomUUID().slice(0, 8)}`;
+    return { dir, id };
 }
 
 // ── Execute helpers ──────────────────────────────────────────────────
@@ -667,9 +657,12 @@ export default function (pi: ExtensionAPI) {
                 skillCache,
                 ctx,
             );
-            if (resolved.error) return resolved.error;
+            if (typeof resolved === "string") {
+                return makeErrorToolResult(resolved, params);
+            }
 
-            const { agent: resolvedAgent, session } = resolved;
+            const resolvedAgent = resolved;
+            const session = deriveSessionPath(resolvedAgent.name, ctx);
 
             if (params.background) {
                 return executeBackground(
