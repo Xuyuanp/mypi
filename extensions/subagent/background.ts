@@ -124,6 +124,7 @@ export function createBackgroundManager(pi: ExtensionAPI): BackgroundManager {
                                 kind: "background",
                                 description: entry.description,
                                 cancelled: false,
+                                session: entry.session,
                                 execStatuses: Object.fromEntries(
                                     entry.tracker.execStatuses,
                                 ),

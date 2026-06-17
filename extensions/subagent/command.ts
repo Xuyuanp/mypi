@@ -46,7 +46,7 @@ import { discoverAgents } from "./agents.js";
 import type { BackgroundManager } from "./background.js";
 import type { AgentSpec } from "./types.js";
 
-export interface AgentRow {
+interface AgentRow {
     name: string;
     source: string;
     model: string;
@@ -110,7 +110,7 @@ export function buildAgentRows(agents: AgentSpec[]): AgentRow[] {
     }));
 }
 
-export interface ColumnWidths {
+interface ColumnWidths {
     name: number;
     source: number;
     model: number;

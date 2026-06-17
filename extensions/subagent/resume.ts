@@ -10,7 +10,7 @@ import type { SubagentDetails, SubagentToolParams } from "./types.js";
 
 // ── Types ────────────────────────────────────────────────────────────
 
-export type LookupResult =
+type LookupResult =
     | {
           found: true;
           details: SubagentDetails;

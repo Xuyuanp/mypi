@@ -1,8 +1,8 @@
 /**
  * Tests for extracted rendering/formatting helpers in render.ts.
  *
- * Covers: formatTokens, formatDuration, formatUsageStats, buildLastLine,
- * formatToolCallPlain, getDisplayItems, getFinalOutput, countToolCalls,
+ * Covers: formatTokens, formatDuration, formatUsageStats,
+ * getDisplayItems, getFinalOutput,
  * renderSubagentResult (foreground + background),
  * AgentOutcome variants, isSubagentError, SubagentDetails discriminated union.
  */
@@ -10,11 +10,8 @@
 import type { Message } from "@earendil-works/pi-ai";
 import { describe, expect, it } from "vitest";
 import {
-    buildLastLine,
-    countToolCalls,
     formatDuration,
     formatTokens,
-    formatToolCallPlain,
     formatUsageStats,
     getDisplayItems,
     getFinalOutput,
@@ -107,7 +104,7 @@ describe("formatUsageStats", () => {
         expect(formatUsageStats(createZeroUsage())).toBe("");
     });
 
-    it("includes all fields when present", () => {
+    it("includes all token and cost fields when present", () => {
         const usage = {
             ...createZeroUsage(),
             inputTokens: 1500,
@@ -124,22 +121,16 @@ describe("formatUsageStats", () => {
             },
             turns: 2,
         };
-        const result = formatUsageStats(usage, {
-            durationMs: 3500,
-            contextWindow: 10000,
-            toolCallCount: 5,
-        });
-        expect(result).toContain("2 turns 5 tools");
+        const result = formatUsageStats(usage, 10000);
         expect(result).toContain("\u21911.5k");
         expect(result).toContain("\u2193500");
         expect(result).toContain("R3.0k");
         expect(result).toContain("W100");
         expect(result).toContain("CH");
-        expect(result).toContain("ctx 46%");
+        expect(result).toContain("ctx 46%/10k");
         expect(result).toContain("$0.0040");
-        expect(result).toContain("in 3.5s");
-        // Model is no longer in usage stats (moved to tool call header)
-        expect(result).not.toContain("test-model");
+        expect(result).not.toContain("turn");
+        expect(result).not.toContain("tool");
     });
 
     it("calculates cache hit ratio correctly", () => {
@@ -155,47 +146,12 @@ describe("formatUsageStats", () => {
         expect(result).toContain("CH75%");
     });
 
-    it("renders turns and tool calls", () => {
-        const usage = { ...createZeroUsage(), turns: 3 };
-        expect(formatUsageStats(usage, { toolCallCount: 7 })).toContain(
-            "3 turns 7 tools",
-        );
-        expect(formatUsageStats(usage)).toContain("3 turns");
-        expect(formatUsageStats(usage)).not.toContain("tool");
-        expect(formatUsageStats(createZeroUsage(), { toolCallCount: 1 })).toContain(
-            "1 tool",
-        );
-        expect(
-            formatUsageStats(createZeroUsage(), { toolCallCount: 1 }),
-        ).not.toContain("tools");
-    });
-});
-
-// ── buildLastLine ────────────────────────────────────────────────────
-
-describe("buildLastLine", () => {
-    it("includes tool count and turns in compact format", () => {
-        const r = makeResult({
-            usage: {
-                ...createZeroUsage(),
-                inputTokens: 100,
-                outputTokens: 50,
-                turns: 1,
-            },
-            durationMs: 2000,
-        });
-        const line = buildLastLine(r, 5);
-        expect(line).toContain("1 turn 5 tools");
-        expect(line).toContain("in 2.0s");
-    });
-
-    it("omits tool count when zero", () => {
-        const r = makeResult({
-            usage: { ...createZeroUsage(), inputTokens: 100, turns: 1 },
-        });
-        const line = buildLastLine(r, 0);
-        expect(line).toContain("1 turn");
-        expect(line).not.toContain("tool");
+    it("does not include turns or tool counts", () => {
+        const usage = { ...createZeroUsage(), inputTokens: 100, turns: 3 };
+        const result = formatUsageStats(usage);
+        expect(result).toContain("\u2191100");
+        expect(result).not.toContain("turn");
+        expect(result).not.toContain("tool");
     });
 });
 
@@ -284,66 +240,6 @@ describe("getFinalOutput", () => {
             },
         ] as Message[];
         expect(getFinalOutput(messages)).toBe("final answer");
-    });
-});
-
-// ── countToolCalls ───────────────────────────────────────────────────
-
-describe("countToolCalls", () => {
-    it("counts tool calls across multiple messages", () => {
-        const messages: Message[] = [
-            {
-                role: "assistant",
-                content: [
-                    { type: "toolCall", id: "a", name: "bash", arguments: {} },
-                    { type: "toolCall", id: "b", name: "read", arguments: {} },
-                ],
-            },
-            {
-                role: "assistant",
-                content: [
-                    { type: "text", text: "hi" },
-                    { type: "toolCall", id: "c", name: "write", arguments: {} },
-                ],
-            },
-        ] as Message[];
-        expect(countToolCalls(messages)).toBe(3);
-    });
-});
-
-// ── formatToolCallPlain ──────────────────────────────────────────────
-
-describe("formatToolCallPlain", () => {
-    it("formats bash with command preview", () => {
-        const result = formatToolCallPlain("bash", { command: "echo hello" });
-        expect(result).toBe("bash echo hello");
-    });
-
-    it("truncates long bash commands to 60 chars", () => {
-        const longCmd = "x".repeat(80);
-        const result = formatToolCallPlain("bash", { command: longCmd });
-        expect(result).toBe(`bash ${"x".repeat(60)}...`);
-    });
-
-    it("formats read with path (omits ranges)", () => {
-        const result = formatToolCallPlain("read", {
-            path: "/some/file.ts",
-            offset: 10,
-            limit: 20,
-        });
-        expect(result).toBe("read /some/file.ts");
-    });
-
-    it("formats default tool with JSON preview", () => {
-        const result = formatToolCallPlain("custom_tool", { key: "value" });
-        expect(result).toBe('custom_tool {"key":"value"}');
-    });
-
-    it("truncates long JSON args to 50 chars", () => {
-        const longVal = "v".repeat(60);
-        const result = formatToolCallPlain("tool", { key: longVal });
-        const expected = `${JSON.stringify({ key: longVal }).slice(0, 50)}...`;
-        expect(result).toBe(`tool ${expected}`);
     });
 });
 
@@ -698,15 +594,12 @@ describe("renderSubagentResult (background)", () => {
 describe("accumulateUsage integration", () => {
     it("createZeroUsage followed by manual accumulation produces correct totals", () => {
         const usage = createZeroUsage();
-        // Simulate what accumulateUsage does (tested via buildLastLine)
         usage.inputTokens += 100;
         usage.outputTokens += 50;
         usage.cacheReadTokens += 200;
         usage.turns = 1;
 
-        const r = makeResult({ usage, durationMs: 1000 });
-        const line = buildLastLine(r, 2);
-        expect(line).toContain("1 turn 2 tools");
+        const line = formatUsageStats(usage);
         expect(line).toContain("\u2191100");
         expect(line).toContain("\u219350");
         expect(line).toContain("R200");

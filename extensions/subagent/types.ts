@@ -179,6 +179,7 @@ export interface BackgroundAgent {
     promise: Promise<AgentRunResult>;
     startedAt: number;
     tracker: ProgressTracker;
+    session?: { dir: string; id: string };
 }
 
 // ── Progress events ──────────────────────────────────────────────────

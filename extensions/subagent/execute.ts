@@ -24,7 +24,7 @@ import { createZeroUsage } from "./types.js";
 
 // ── Constants ────────────────────────────────────────────────────────
 
-export const SUBAGENT_PREAMBLE = `${[
+const SUBAGENT_PREAMBLE = `${[
     "You are now running as a subagent.",
     "All the `user` messages are sent by the main agent.",
     "The main agent cannot see your context,",
@@ -38,7 +38,7 @@ export const SUBAGENT_PREAMBLE = `${[
 
 // ── Helpers ──────────────────────────────────────────────────────────
 
-export function accumulateUsage(
+function accumulateUsage(
     target: UsageStats,
     source: {
         input?: number;
@@ -77,7 +77,7 @@ function sanitizeAgentName(name: string): string {
     );
 }
 
-export async function writePromptToTempFile(
+async function writePromptToTempFile(
     agentName: string,
     prompt: string,
 ): Promise<string> {
@@ -107,7 +107,7 @@ function parseModelStr(
     return { provider, id: rest };
 }
 
-export function getPiInvocation(args: string[]): {
+function getPiInvocation(args: string[]): {
     command: string;
     args: string[];
 } {
@@ -135,7 +135,7 @@ export function getPiInvocation(args: string[]): {
  * This is the single point where exitCode + stopReason + errorMessage
  * are reconciled into a discriminated union variant.
  */
-export function buildOutcome(
+function buildOutcome(
     exitCode: number,
     wasAborted: boolean,
     latestStopReason: string | undefined,
@@ -172,7 +172,7 @@ export function buildOutcome(
 
 // ── RunSubagent options ──────────────────────────────────────────────
 
-export interface RunSubagentOptions {
+interface RunSubagentOptions {
     signal?: AbortSignal;
     onProgress?: SubagentProgressCallback;
     sessionFile?: string;

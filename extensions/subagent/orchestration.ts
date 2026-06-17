@@ -224,6 +224,7 @@ export function executeBackground(
         promise,
         startedAt: Date.now(),
         tracker,
+        session,
     };
     bgManager.register(entry);
 

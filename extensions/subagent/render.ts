@@ -20,20 +20,11 @@ import { Box, Container, Markdown, Spacer, Text } from "@earendil-works/pi-tui";
 import type { AgentRunResult, SubagentDetails, UsageStats } from "./types.js";
 import { isSubagentError } from "./types.js";
 
-// ── buildLastLine input type ─────────────────────────────────────────
-
-/** Minimal shape needed by buildLastLine — decoupled from AgentRunResult. */
-interface BuildLastLineInput {
-    usage: UsageStats;
-    durationMs?: number;
-    contextWindow?: number;
-}
-
 // ── Presentation-only types (moved from types.ts) ────────────────────
 
 type ToolCallStatus = "success" | "error" | "pending";
 
-export type DisplayItem =
+type DisplayItem =
     | { type: "text"; text: string }
     | {
           type: "toolCall";
@@ -41,12 +32,6 @@ export type DisplayItem =
           args: Record<string, unknown>;
           status: ToolCallStatus;
       };
-
-interface FormatUsageOpts {
-    durationMs?: number;
-    contextWindow?: number;
-    toolCallCount?: number;
-}
 
 // ── Local type aliases ───────────────────────────────────────────────
 // ThemeFg and ThemeBg are not public exports of @earendil-works/pi-coding-agent.
@@ -81,46 +66,51 @@ export function formatDuration(ms: number): string {
     return `${minutes}m${remainingSec}s`;
 }
 
-/** Build a space-separated usage summary string. */
-export function formatUsageStats(usage: UsageStats, opts?: FormatUsageOpts): string {
-    const { durationMs, contextWindow, toolCallCount } = opts ?? {};
-    const parts: string[] = [];
-    if (usage.turns) parts.push(`${usage.turns} turn${usage.turns > 1 ? "s" : ""}`);
-    if (toolCallCount)
-        parts.push(`${toolCallCount} tool${toolCallCount > 1 ? "s" : ""}`);
-    if (usage.inputTokens) parts.push(`\u2191${formatTokens(usage.inputTokens)}`);
-    if (usage.outputTokens) parts.push(`\u2193${formatTokens(usage.outputTokens)}`);
-    if (usage.cacheReadTokens) parts.push(`R${formatTokens(usage.cacheReadTokens)}`);
+/** Format token usage and cost into a pipe-separated string. */
+export function formatUsageStats(usage: UsageStats, contextWindow?: number): string {
+    const sections: string[] = [];
+
+    // Token usage
+    const tokens: string[] = [];
+    if (usage.inputTokens) tokens.push(`\u2191${formatTokens(usage.inputTokens)}`);
+    if (usage.outputTokens) tokens.push(`\u2193${formatTokens(usage.outputTokens)}`);
+    if (usage.cacheReadTokens)
+        tokens.push(`R${formatTokens(usage.cacheReadTokens)}`);
     if (usage.cacheWriteTokens)
-        parts.push(`W${formatTokens(usage.cacheWriteTokens)}`);
+        tokens.push(`W${formatTokens(usage.cacheWriteTokens)}`);
     const promptTokens =
         usage.inputTokens + usage.cacheReadTokens + usage.cacheWriteTokens;
     if (
         (usage.cacheReadTokens > 0 || usage.cacheWriteTokens > 0) &&
         promptTokens > 0
     ) {
-        parts.push(`CH${Math.round((usage.cacheReadTokens / promptTokens) * 100)}%`);
+        tokens.push(
+            `CH${Math.round((usage.cacheReadTokens / promptTokens) * 100)}%`,
+        );
     }
     if (contextWindow && usage.contextTokens) {
         const pct = Math.round((usage.contextTokens / contextWindow) * 100);
-        parts.push(`ctx ${pct}%`);
+        tokens.push(`ctx ${pct}%/${formatTokens(contextWindow)}`);
     }
-    if (usage.cost.total) parts.push(`$${usage.cost.total.toFixed(4)}`);
-    const base = parts.join(" ");
-    if (durationMs)
-        return base
-            ? `${base} in ${formatDuration(durationMs)}`
-            : `in ${formatDuration(durationMs)}`;
-    return base;
+    if (tokens.length) sections.push(tokens.join(" "));
+
+    // Cost
+    if (usage.cost.total) sections.push(`$${usage.cost.total.toFixed(4)}`);
+
+    return sections.join(" | ");
 }
 
-/** Build the summary line showing tool count and usage stats. */
-export function buildLastLine(r: BuildLastLineInput, toolCallCount: number): string {
-    return formatUsageStats(r.usage, {
-        durationMs: r.durationMs,
-        contextWindow: r.contextWindow,
-        toolCallCount,
-    });
+/** Format turns and tool count into a short activity summary. */
+export function formatActivity(turns: number, toolCount: number): string {
+    const parts: string[] = [];
+    if (turns) parts.push(`${turns} turn${turns > 1 ? "s" : ""}`);
+    if (toolCount) parts.push(`${toolCount} tool${toolCount > 1 ? "s" : ""}`);
+    return parts.join(" ");
+}
+
+/** Compose the summary footer line for a subagent result. */
+function buildLastLine(parts: (string | undefined)[]): string {
+    return parts.filter(Boolean).join(" | ");
 }
 
 // ── Tool call formatting ─────────────────────────────────────────────
@@ -204,39 +194,6 @@ function formatToolCall(
     }
 }
 
-/** Format a tool call as plain text (no theme colors). */
-export function formatToolCallPlain(
-    toolName: string,
-    args: Record<string, unknown>,
-): string {
-    switch (toolName) {
-        case "bash": {
-            const command = (args.command as string) || "...";
-            const preview =
-                command.length > 60 ? `${command.slice(0, 60)}...` : command;
-            return `bash ${preview}`;
-        }
-        case "read": {
-            const rawPath = (args.file_path || args.path || "...") as string;
-            return `read ${shortenPath(rawPath)}`;
-        }
-        case "write": {
-            const rawPath = (args.file_path || args.path || "...") as string;
-            return `write ${shortenPath(rawPath)}`;
-        }
-        case "edit": {
-            const rawPath = (args.file_path || args.path || "...") as string;
-            return `edit ${shortenPath(rawPath)}`;
-        }
-        default: {
-            const argsStr = JSON.stringify(args);
-            const preview =
-                argsStr.length > 50 ? `${argsStr.slice(0, 50)}...` : argsStr;
-            return `${toolName} ${preview}`;
-        }
-    }
-}
-
 // ── Status icons ─────────────────────────────────────────────────────
 
 /** Themed status icon for a tool call. */
@@ -301,19 +258,6 @@ export function getFinalOutput(messages: Message[]): string {
         }
     }
     return "";
-}
-
-/** Count tool calls in a message array (single pass, no allocation). */
-export function countToolCalls(messages: Message[]): number {
-    let count = 0;
-    for (const msg of messages) {
-        if (msg.role === "assistant") {
-            for (const part of msg.content) {
-                if (part.type === "toolCall") count++;
-            }
-        }
-    }
-    return count;
 }
 
 // ── Result renderer ──────────────────────────────────────────────────
@@ -512,11 +456,12 @@ export function renderSubagentResult(
     const toolCallItems = displayItems.filter(
         (i) => i.type === "toolCall",
     ) as (DisplayItem & { type: "toolCall" })[];
-    const rawLastLine = buildLastLine(
-        { ...r, contextWindow: details.contextWindow },
-        toolCallItems.length,
-    );
-    const lastLine = agentId ? `${agentId} ${rawLastLine}` : rawLastLine;
+    const lastLine = buildLastLine([
+        agentId,
+        formatActivity(r.usage.turns, toolCallItems.length),
+        formatUsageStats(r.usage, details.contextWindow),
+        r.durationMs ? formatDuration(r.durationMs) : undefined,
+    ]);
     const finalOutput = getFinalOutput(r.messages);
 
     // ── Background agent ─────────────────────────────────────────────

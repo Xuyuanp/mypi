@@ -19,7 +19,7 @@ import { createZeroUsage } from "./types.js";
 
 // ── Factory options ──────────────────────────────────────────────────
 
-export interface CreateProgressTrackerOpts {
+interface CreateProgressTrackerOpts {
     /** Called on every state-changing event (message, tool_start, tool_end). */
     onChange?: () => void;
 }
