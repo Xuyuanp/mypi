@@ -85,7 +85,6 @@ export default function (pi: ExtensionAPI) {
 
     pi.on("tool_result", (event) => {
         s.toolCalls++;
-        if (event.toolName !== "subagent") return;
         const details = event.details as
             | { result?: { usage?: { cost?: { total?: number } } } }
             | undefined;
