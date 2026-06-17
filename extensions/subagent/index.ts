@@ -154,7 +154,7 @@ export default function (pi: ExtensionAPI) {
     const knownAgents = discoverAgents();
     const bgManager = createBackgroundManager(pi);
 
-    registerSubagentCommand(pi, bgManager);
+    registerSubagentCommand(pi, bgManager, knownAgents);
 
     let skillCache = new Map<string, Skill>();
 

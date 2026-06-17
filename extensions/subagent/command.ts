@@ -42,7 +42,6 @@ import {
     truncateToWidth,
     visibleWidth,
 } from "@earendil-works/pi-tui";
-import { discoverAgents } from "./agents.js";
 import type { BackgroundManager } from "./background.js";
 import type { AgentSpec } from "./types.js";
 
@@ -476,6 +475,7 @@ class AgentsListView implements Component {
 export function registerSubagentCommand(
     pi: ExtensionAPI,
     bgManager: BackgroundManager,
+    agents: AgentSpec[],
 ): void {
     pi.registerCommand("subagent", {
         description: "List agents or cancel a background agent",
@@ -511,7 +511,7 @@ export function registerSubagentCommand(
             // Default: show agent list (TUI-only)
             if (ctx.mode !== "tui") return;
 
-            const rows = buildAgentRows(discoverAgents().agents);
+            const rows = buildAgentRows(agents);
             await ctx.ui.custom<void>((tui, theme, _kb, done) => {
                 return new AgentsListView(tui, theme, rows, done);
             });
