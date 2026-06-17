@@ -10,9 +10,12 @@
 import { describe, expect, it } from "vitest";
 import {
     buildAgentRows,
+    buildTmuxArgs,
     COL_GAP,
     clamp,
     computeColumnWidths,
+    type PaneDirection,
+    shellQuote,
 } from "../extensions/subagent/command.js";
 import type { AgentSpec } from "../extensions/subagent/types.js";
 
@@ -130,5 +133,103 @@ describe("computeColumnWidths", () => {
         expect(w.name).toBe(20);
         expect(w.source).toBe("system".length);
         expect(w.model).toBe(28);
+    });
+});
+
+// ── shellQuote tests ────────────────────────────────────────────────
+
+describe("shellQuote", () => {
+    it("wraps a simple string in single quotes", () => {
+        expect(shellQuote("hello")).toBe("'hello'");
+    });
+
+    it("safely quotes spaces", () => {
+        expect(shellQuote("/path/to/my file")).toBe("'/path/to/my file'");
+    });
+
+    it("escapes embedded single quotes", () => {
+        expect(shellQuote("it's")).toBe("'it'\\''s'");
+    });
+
+    it("handles strings with both spaces and single quotes", () => {
+        const input = "file's name here";
+        const quoted = shellQuote(input);
+        expect(quoted).toBe("'file'\\''s name here'");
+    });
+
+    it("handles empty string", () => {
+        expect(shellQuote("")).toBe("''");
+    });
+
+    it("handles double quotes without escaping", () => {
+        // Double quotes are safe inside single quotes
+        expect(shellQuote('say "hi"')).toBe("'say \"hi\"'");
+    });
+
+    it("handles special shell characters", () => {
+        const input = "$HOME;rm -rf /";
+        expect(shellQuote(input)).toBe("'$HOME;rm -rf /'");
+    });
+});
+
+// ── buildTmuxArgs tests ─────────────────────────────────────────────
+
+describe("buildTmuxArgs", () => {
+    const cwd = "/project/root";
+    const cmd = "pi --session /tmp/session.jsonl";
+
+    it("maps 'right' to split-window -h", () => {
+        const args = buildTmuxArgs("right", cwd, cmd);
+        expect(args).toEqual(["split-window", "-h", "-c", cwd, cmd]);
+    });
+
+    it("maps 'bottom' to split-window -v", () => {
+        const args = buildTmuxArgs("bottom", cwd, cmd);
+        expect(args).toEqual(["split-window", "-v", "-c", cwd, cmd]);
+    });
+
+    it("maps 'left' to split-window -hb", () => {
+        const args = buildTmuxArgs("left", cwd, cmd);
+        expect(args).toEqual(["split-window", "-hb", "-c", cwd, cmd]);
+    });
+
+    it("maps 'top' to split-window -vb", () => {
+        const args = buildTmuxArgs("top", cwd, cmd);
+        expect(args).toEqual(["split-window", "-vb", "-c", cwd, cmd]);
+    });
+
+    it("maps 'new-window' to new-window", () => {
+        const args = buildTmuxArgs("new-window", cwd, cmd);
+        expect(args).toEqual(["new-window", "-c", cwd, cmd]);
+    });
+
+    it("includes -c cwd in all directions", () => {
+        const directions: PaneDirection[] = [
+            "right",
+            "bottom",
+            "left",
+            "top",
+            "new-window",
+        ];
+        for (const dir of directions) {
+            const args = buildTmuxArgs(dir, "/custom/dir", cmd);
+            const cwdIdx = args.indexOf("-c");
+            expect(cwdIdx).toBeGreaterThan(-1);
+            expect(args[cwdIdx + 1]).toBe("/custom/dir");
+        }
+    });
+
+    it("places the shell command as the last argument", () => {
+        const directions: PaneDirection[] = [
+            "right",
+            "bottom",
+            "left",
+            "top",
+            "new-window",
+        ];
+        for (const dir of directions) {
+            const args = buildTmuxArgs(dir, cwd, cmd);
+            expect(args[args.length - 1]).toBe(cmd);
+        }
     });
 });

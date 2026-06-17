@@ -1,10 +1,11 @@
 /**
- * Tests for subagent_resume tool (issue #13).
+ * Tests for subagent_resume tool (issue #13) and listCompletedSubagents.
  *
  * Tests cover:
  * - Lookup function: found in foreground, found in background, not found, missing session field
  * - Error messages for each error case
  * - Session ID collection for "available sessions" hint
+ * - listCompletedSubagents: terminal session collection, filtering, deduplication, params recovery
  */
 
 import { describe, expect, it } from "vitest";
@@ -12,6 +13,7 @@ import { BACKGROUND_RESULT_TYPE } from "../extensions/subagent/background.js";
 import { createZeroUsage } from "../extensions/subagent/index.js";
 import {
     type LookupEntry,
+    listCompletedSubagents,
     lookupSubagentSession,
 } from "../extensions/subagent/resume.js";
 import type {
@@ -237,5 +239,231 @@ describe("lookupSubagentSession", () => {
         if (result.found) {
             expect(result.session).toEqual(session);
         }
+    });
+});
+
+// ── listCompletedSubagents tests ─────────────────────────────────
+
+/** Build a fake assistant tool call message entry. */
+function makeAssistantToolCall(
+    toolCallId: string,
+    params: SubagentToolParams,
+): LookupEntry {
+    return {
+        type: "message",
+        message: {
+            role: "assistant",
+            content: [
+                {
+                    type: "toolCall",
+                    toolName: "subagent",
+                    id: toolCallId,
+                    arguments: params,
+                },
+            ],
+        },
+    };
+}
+
+/** Build a foreground tool result with a toolCallId for param recovery. */
+function makeForegroundEntryWithToolCallId(
+    session: { dir: string; id: string },
+    toolCallId: string,
+    agentName = "scout",
+): LookupEntry {
+    const details: SubagentDetails = {
+        kind: "foreground",
+        result: makeFakeResult({ agent: agentName }),
+        execStatuses: {},
+        session,
+    };
+    return {
+        type: "message",
+        message: {
+            role: "toolResult",
+            toolName: "subagent",
+            toolCallId,
+            details,
+        },
+    };
+}
+
+/** Build a background START tool result (not terminal). */
+function makeBackgroundStartEntry(
+    session: { dir: string; id: string },
+    toolCallId: string,
+    agentName = "worker",
+): LookupEntry {
+    const details: SubagentDetails = {
+        kind: "background",
+        result: makeFakeResult({ agent: agentName }),
+        description: "running task",
+        cancelled: false,
+        session,
+    };
+    return {
+        type: "message",
+        message: {
+            role: "toolResult",
+            toolName: "subagent",
+            toolCallId,
+            details,
+        },
+    };
+}
+
+import type { SubagentToolParams } from "../extensions/subagent/types.js";
+
+describe("listCompletedSubagents", () => {
+    it("collects foreground and terminal background sessions", () => {
+        const fgSession = {
+            dir: "/tmp/s/subagent",
+            id: "scout-11111111",
+        };
+        const bgSession = {
+            dir: "/tmp/s/subagent",
+            id: "worker-22222222",
+        };
+        const entries: LookupEntry[] = [
+            makeForegroundEntry(fgSession, "scout"),
+            makeBackgroundEntry(bgSession, "worker"),
+        ];
+
+        const result = listCompletedSubagents(entries);
+
+        expect(result).toHaveLength(2);
+        expect(result.map((r) => r.id)).toContain("scout-11111111");
+        expect(result.map((r) => r.id)).toContain("worker-22222222");
+    });
+
+    it("skips running background start entries", () => {
+        const bgSession = {
+            dir: "/tmp/s/subagent",
+            id: "worker-33333333",
+        };
+        const entries: LookupEntry[] = [
+            // This is a background START entry (tool result with
+            // kind === "background"). It should NOT appear.
+            makeBackgroundStartEntry(bgSession, "tc-1", "worker"),
+        ];
+
+        const result = listCompletedSubagents(entries);
+
+        expect(result).toHaveLength(0);
+    });
+
+    it("deduplicates by session ID (keeps last terminal entry)", () => {
+        const session = {
+            dir: "/tmp/s/subagent",
+            id: "scout-44444444",
+        };
+        const details1: SubagentDetails = {
+            kind: "foreground",
+            result: makeFakeResult({ agent: "scout", task: "first" }),
+            execStatuses: {},
+            session,
+        };
+        const details2: SubagentDetails = {
+            kind: "foreground",
+            result: makeFakeResult({ agent: "scout", task: "second" }),
+            execStatuses: {},
+            session,
+        };
+        const entries: LookupEntry[] = [
+            {
+                type: "message",
+                message: {
+                    role: "toolResult",
+                    toolName: "subagent",
+                    details: details1,
+                },
+            },
+            {
+                type: "message",
+                message: {
+                    role: "toolResult",
+                    toolName: "subagent",
+                    details: details2,
+                },
+            },
+        ];
+
+        const result = listCompletedSubagents(entries);
+
+        expect(result).toHaveLength(1);
+        expect(result[0].details.result.task).toBe("second");
+    });
+
+    it("skips entries without session info", () => {
+        const entries: LookupEntry[] = [
+            makeForegroundEntry(undefined, "scout"), // no session
+        ];
+
+        const result = listCompletedSubagents(entries);
+
+        expect(result).toHaveLength(0);
+    });
+
+    it("returns empty array when no subagents exist", () => {
+        const entries: LookupEntry[] = [
+            makeIrrelevantEntry(),
+            { type: "message", message: { role: "user" } },
+        ];
+
+        const result = listCompletedSubagents(entries);
+
+        expect(result).toEqual([]);
+    });
+
+    it("recovers originalParams from foreground tool call", () => {
+        const session = {
+            dir: "/tmp/s/subagent",
+            id: "scout-55555555",
+        };
+        const params: SubagentToolParams = {
+            agent: "scout",
+            description: "explore",
+            task: "find files",
+            cwd: "/custom/path",
+        };
+        const entries: LookupEntry[] = [
+            makeAssistantToolCall("tc-5", params),
+            makeForegroundEntryWithToolCallId(session, "tc-5", "scout"),
+        ];
+
+        const result = listCompletedSubagents(entries);
+
+        expect(result).toHaveLength(1);
+        expect(result[0].originalParams).toEqual(params);
+        expect(result[0].originalParams?.cwd).toBe("/custom/path");
+    });
+
+    it("recovers originalParams for background custom result via session ID", () => {
+        const session = {
+            dir: "/tmp/s/subagent",
+            id: "worker-66666666",
+        };
+        const params: SubagentToolParams = {
+            agent: "worker",
+            description: "build",
+            task: "compile project",
+            cwd: "/project/root",
+            background: true,
+        };
+        const entries: LookupEntry[] = [
+            // 1. Assistant makes the tool call
+            makeAssistantToolCall("tc-6", params),
+            // 2. Background START tool result (links toolCallId -> session)
+            makeBackgroundStartEntry(session, "tc-6", "worker"),
+            // 3. Background terminal custom message (no toolCallId)
+            makeBackgroundEntry(session, "worker"),
+        ];
+
+        const result = listCompletedSubagents(entries);
+
+        expect(result).toHaveLength(1);
+        expect(result[0].id).toBe("worker-66666666");
+        expect(result[0].originalParams).toEqual(params);
+        expect(result[0].originalParams?.cwd).toBe("/project/root");
     });
 });

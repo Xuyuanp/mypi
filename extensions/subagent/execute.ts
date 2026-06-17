@@ -107,7 +107,14 @@ function parseModelStr(
     return { provider, id: rest };
 }
 
-function getPiInvocation(args: string[]): {
+/**
+ * Determine the command/args to invoke the pi binary.
+ *
+ * Handles bun virtual scripts, generic runtimes (node/bun where pi is
+ * the main script), and direct pi executables. Callers concat their own
+ * CLI flags onto the returned `args` array.
+ */
+export function getPiInvocation(): {
     command: string;
     args: string[];
 } {
@@ -116,17 +123,74 @@ function getPiInvocation(args: string[]): {
     if (currentScript && !isBunVirtualScript && fs.existsSync(currentScript)) {
         return {
             command: process.execPath,
-            args: [currentScript, ...args],
+            args: [currentScript],
         };
     }
 
     const execName = path.basename(process.execPath).toLowerCase();
     const isGenericRuntime = /^(node|bun)(\.exe)?$/.test(execName);
     if (!isGenericRuntime) {
-        return { command: process.execPath, args };
+        return { command: process.execPath, args: [] };
     }
 
-    return { command: "pi", args };
+    return { command: "pi", args: [] };
+}
+
+// ── buildSubagentCommand ─────────────────────────────────────────────
+
+interface BuildSubagentCommandResult {
+    command: string;
+    args: string[];
+    tmpPromptPath: string;
+}
+
+/**
+ * Build the agent-identity flags and system prompt temp file for
+ * spawning a subagent pi process.
+ *
+ * Does NOT include mode-specific flags (--mode, --print, --session,
+ * task positional). Callers push those onto the returned `args`.
+ *
+ * The system prompt is always identical regardless of how the subagent
+ * is launched (run vs attach) to preserve KV cache prefix alignment.
+ */
+export async function buildSubagentCommand(
+    agent: ResolvedAgent,
+): Promise<BuildSubagentCommandResult> {
+    const invocation = getPiInvocation();
+    const args = [
+        ...invocation.args,
+        "--no-extensions",
+        "--no-context-files",
+        "--offline",
+    ];
+
+    args.push("--no-skills");
+    if (agent.skillPaths?.length) {
+        for (const skillPath of agent.skillPaths) {
+            args.push("--skill", skillPath);
+        }
+    }
+
+    const modelArg = agent.model;
+    args.push("--model", modelArg);
+
+    // Disable thinking unless the model name includes a thinking level
+    const hasThinkingLevel = parseModelStr(modelArg)?.thinkingLevel;
+    if (!hasThinkingLevel) args.push("--thinking", "off");
+
+    if (agent.tools && agent.tools.length > 0) {
+        args.push("--tools", agent.tools.join(","));
+    }
+
+    const fullSystemPrompt = agent.systemPrompt.trim()
+        ? `${SUBAGENT_PREAMBLE}\n${agent.systemPrompt}`
+        : SUBAGENT_PREAMBLE.trim();
+
+    const tmpPromptPath = await writePromptToTempFile(agent.name, fullSystemPrompt);
+    args.push("--append-system-prompt", tmpPromptPath);
+
+    return { command: invocation.command, args, tmpPromptPath };
 }
 
 /**
@@ -197,39 +261,6 @@ export async function runSubagent(
 ): Promise<AgentRunResult> {
     const { signal, onProgress, sessionFile, resume } = options;
 
-    const args: string[] = [
-        "--mode",
-        "json",
-        "--no-extensions",
-        "--no-context-files",
-        "--offline",
-        "--print",
-    ];
-
-    if (sessionFile) {
-        args.push("--session", sessionFile);
-    } else {
-        args.push("--no-session");
-    }
-
-    args.push("--no-skills");
-    if (agent.skillPaths?.length) {
-        for (const skillPath of agent.skillPaths) {
-            args.push("--skill", skillPath);
-        }
-    }
-
-    const modelArg = agent.model;
-    args.push("--model", modelArg);
-
-    // Disable thinking unless the model name includes a thinking level
-    const hasThinkingLevel = parseModelStr(modelArg)?.thinkingLevel;
-    if (!hasThinkingLevel) args.push("--thinking", "off");
-
-    if (agent.tools && agent.tools.length > 0) {
-        args.push("--tools", agent.tools.join(","));
-    }
-
     // ── Internal accumulator (never escapes) ─────────────────────────
     const messages: Message[] = [];
     const usage: UsageStats = createZeroUsage();
@@ -243,18 +274,22 @@ export async function runSubagent(
     const startTime = Date.now();
 
     try {
-        const fullSystemPrompt = agent.systemPrompt.trim()
-            ? `${SUBAGENT_PREAMBLE}\n${agent.systemPrompt}`
-            : SUBAGENT_PREAMBLE.trim();
-        tmpPromptPath = await writePromptToTempFile(agent.name, fullSystemPrompt);
-        args.push("--append-system-prompt", tmpPromptPath);
+        const built = await buildSubagentCommand(agent);
+        tmpPromptPath = built.tmpPromptPath;
 
-        args.push(resume ? task : `Task: ${task}`);
+        const fullArgs = [...built.args, "--mode", "json", "--print"];
+
+        if (sessionFile) {
+            fullArgs.push("--session", sessionFile);
+        } else {
+            fullArgs.push("--no-session");
+        }
+
+        fullArgs.push(resume ? task : `Task: ${task}`);
         let wasAborted = false;
 
         const exitCode = await new Promise<number>((resolve) => {
-            const invocation = getPiInvocation(args);
-            const proc = spawn(invocation.command, invocation.args, {
+            const proc = spawn(built.command, fullArgs, {
                 cwd,
                 shell: false,
                 stdio: ["ignore", "pipe", "pipe"],

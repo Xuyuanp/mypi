@@ -21,12 +21,16 @@
  *
  * Usage:
  *   /subagent
+ *   /subagent attach [id]
+ *   /subagent cancel <id>
  */
 
 import * as fs from "node:fs";
+import * as path from "node:path";
 import type {
     ExtensionAPI,
     ExtensionCommandContext,
+    ExtensionContext,
     Theme,
 } from "@earendil-works/pi-coding-agent";
 import { DynamicBorder, getMarkdownTheme } from "@earendil-works/pi-coding-agent";
@@ -43,7 +47,14 @@ import {
     visibleWidth,
 } from "@earendil-works/pi-tui";
 import type { BackgroundManager } from "./background.js";
-import type { AgentSpec } from "./types.js";
+import { buildSubagentCommand } from "./execute.js";
+import type { LookupEntry } from "./resume.js";
+import {
+    type CompletedSubagent,
+    listCompletedSubagents,
+    lookupSubagentSession,
+} from "./resume.js";
+import type { AgentSpec, ResolvedAgent } from "./types.js";
 
 interface AgentRow {
     name: string;
@@ -472,14 +483,221 @@ class AgentsListView implements Component {
     }
 }
 
+// ── Shell quoting ──────────────────────────────────────────────────────
+
+/**
+ * Shell-quote a string for safe embedding in a shell command.
+ * Uses single quotes and escapes embedded single quotes.
+ */
+export function shellQuote(value: string): string {
+    return `'${value.replace(/'/g, "'\\''")}'`;
+}
+
+// ── Tmux arg construction ───────────────────────────────────────────
+
+export type PaneDirection = "right" | "bottom" | "left" | "top" | "new-window";
+
+const TMUX_FLAGS: Record<PaneDirection, string[]> = {
+    right: ["split-window", "-h"],
+    bottom: ["split-window", "-v"],
+    left: ["split-window", "-hb"],
+    top: ["split-window", "-vb"],
+    "new-window": ["new-window"],
+};
+
+/**
+ * Build the tmux argument array for opening a pane/window.
+ *
+ * @param direction - Where to place the new pane.
+ * @param cwd - Start directory for the new pane.
+ * @param shellCommand - The full shell command string to run in the pane.
+ */
+export function buildTmuxArgs(
+    direction: PaneDirection,
+    cwd: string,
+    shellCommand: string,
+): string[] {
+    return [...TMUX_FLAGS[direction], "-c", cwd, shellCommand];
+}
+
+// ── Pane direction options ──────────────────────────────────────────
+
+const PANE_DIRECTIONS: { label: string; value: PaneDirection }[] = [
+    { label: "Right", value: "right" },
+    { label: "Bottom", value: "bottom" },
+    { label: "Left", value: "left" },
+    { label: "Top", value: "top" },
+    { label: "New window", value: "new-window" },
+];
+
+// ── Attach handler ───────────────────────────────────────────────────
+
+async function handleAttach(
+    idArg: string | undefined,
+    ctx: ExtensionCommandContext,
+    pi: ExtensionAPI,
+    bgManager: BackgroundManager,
+    agents: AgentSpec[],
+): Promise<void> {
+    // 1. Require TUI mode
+    if (ctx.mode !== "tui") {
+        ctx.ui.notify("attach is only available in TUI mode", "warning");
+        return;
+    }
+
+    // 2. Require tmux
+    if (!process.env.TMUX) {
+        ctx.ui.notify("attach requires a tmux session", "warning");
+        return;
+    }
+
+    // 3. List completed subagents
+    const entries = ctx.sessionManager.getEntries() as any[];
+    const completed = listCompletedSubagents(entries as readonly LookupEntry[]);
+
+    let selected: CompletedSubagent;
+
+    if (idArg) {
+        // Direct ID specified
+        if (bgManager.agents.has(idArg)) {
+            ctx.ui.notify(
+                `Agent "${idArg}" is still running. Wait for it to complete or cancel it first.`,
+                "warning",
+            );
+            return;
+        }
+
+        const match = completed.find((c) => c.id === idArg);
+        if (!match) {
+            // Fall back to lookupSubagentSession for proper error
+            const lookup = lookupSubagentSession(
+                entries as readonly LookupEntry[],
+                idArg,
+            );
+            if (!lookup.found) {
+                if (lookup.error === "no_session_info") {
+                    ctx.ui.notify(
+                        `Session "${idArg}" predates attach support (no session info stored).`,
+                        "error",
+                    );
+                } else {
+                    const available =
+                        lookup.availableIds.length > 0
+                            ? lookup.availableIds.join(", ")
+                            : "none";
+                    ctx.ui.notify(
+                        `No subagent found with id "${idArg}". Available: ${available}.`,
+                        "error",
+                    );
+                }
+            }
+            return;
+        }
+        selected = match;
+    } else {
+        // No ID: show picker
+        if (completed.length === 0) {
+            ctx.ui.notify("No completed subagents in this session", "info");
+            return;
+        }
+
+        const picked = await ctx.ui.select(
+            "Select subagent to attach",
+            completed.map((c) => c.id),
+        );
+
+        if (!picked) return; // user cancelled
+
+        const match = completed.find((c) => c.id === picked);
+        if (!match) return;
+        selected = match;
+    }
+
+    // 4. Validate session file exists on disk
+    const sessionFile = path.join(
+        selected.session.dir,
+        `${selected.session.id}.jsonl`,
+    );
+    if (!fs.existsSync(sessionFile)) {
+        ctx.ui.notify(`Session file not found: ${sessionFile}`, "error");
+        return;
+    }
+
+    // 5. Validate resolved agent info
+    if (!selected.details.resolvedAgent) {
+        ctx.ui.notify(
+            `Session "${selected.id}" has no resolved agent info. Cannot attach.`,
+            "error",
+        );
+        return;
+    }
+    const persisted = selected.details.resolvedAgent;
+    const agent = agents.find((a) => a.name === persisted.name);
+    if (!agent) {
+        ctx.ui.notify(`Agent "${persisted.name}" is no longer available.`, "error");
+        return;
+    }
+    const resolvedAgent: ResolvedAgent = {
+        ...persisted,
+        systemPrompt: agent.systemPrompt,
+    };
+
+    // 6. Determine working directory
+    const cwd = selected.originalParams?.cwd ?? ctx.cwd;
+
+    // 7. Prompt for pane direction
+    const directionStr = await ctx.ui.select(
+        "Open pane",
+        PANE_DIRECTIONS.map((d) => d.label),
+    );
+    if (!directionStr) return; // user cancelled
+    const direction = PANE_DIRECTIONS.find((d) => d.label === directionStr)!.value;
+
+    // 8. Build subagent command
+    const built = await buildSubagentCommand(resolvedAgent);
+    // Append --session flag for interactive resume
+    built.args.push("--session", sessionFile);
+
+    // 9. Construct shell command string
+    const envPrefix = `PI_SUBAGENT=1 PI_SUBAGENT_NAME=${shellQuote(resolvedAgent.name)}`;
+    const cmdParts = [shellQuote(built.command), ...built.args.map(shellQuote)];
+    const shellCommand = `${envPrefix} ${cmdParts.join(" ")}`;
+
+    // 10. Build tmux args and execute
+    const tmuxArgs = buildTmuxArgs(direction, cwd, shellCommand);
+
+    const result = await pi.exec("tmux", tmuxArgs, { cwd });
+    if (result.code !== 0) {
+        const errMsg =
+            result.stderr?.trim() ||
+            result.stdout?.trim() ||
+            `tmux exited with code ${result.code}`;
+        ctx.ui.notify(`tmux error: ${errMsg}`, "error");
+    }
+}
+
+// ── Command registration ───────────────────────────────────────────
+
 export function registerSubagentCommand(
     pi: ExtensionAPI,
     bgManager: BackgroundManager,
     agents: AgentSpec[],
 ): void {
+    // Best-effort context cache for completions (no ctx in
+    // getArgumentCompletions).
+    let currentCtx: ExtensionContext | null = null;
+    pi.on("session_start", (_event, ctx) => {
+        currentCtx = ctx;
+    });
+    pi.on("session_shutdown", () => {
+        currentCtx = null;
+    });
+
     pi.registerCommand("subagent", {
-        description: "List agents or cancel a background agent",
+        description:
+            "List agents, attach to a completed session, or cancel a background agent",
         getArgumentCompletions(prefix) {
+            // cancel completions
             if (prefix.startsWith("cancel ")) {
                 const partial = prefix.slice("cancel ".length);
                 return [...bgManager.agents.keys()]
@@ -489,8 +707,31 @@ export function registerSubagentCommand(
                         value: `cancel ${id}`,
                     }));
             }
-            if ("cancel".startsWith(prefix)) {
-                return [{ label: "cancel", value: "cancel " }];
+
+            // attach completions
+            if (prefix.startsWith("attach ")) {
+                if (!currentCtx) return null;
+                const partial = prefix.slice("attach ".length);
+                const entries = currentCtx.sessionManager.getEntries() as any[];
+                const completed = listCompletedSubagents(
+                    entries as readonly LookupEntry[],
+                );
+                return completed
+                    .filter((c) => c.id.startsWith(partial))
+                    .map((c) => ({
+                        label: c.id,
+                        value: `attach ${c.id}`,
+                    }));
+            }
+
+            // keyword completions
+            const keywords = ["cancel", "attach"];
+            const matching = keywords.filter((k) => k.startsWith(prefix));
+            if (matching.length > 0) {
+                return matching.map((k) => ({
+                    label: k,
+                    value: `${k} `,
+                }));
             }
             return null;
         },
@@ -505,6 +746,16 @@ export function registerSubagentCommand(
                     return;
                 }
                 ctx.ui.notify(`Cancelled background agent: ${id}`);
+                return;
+            }
+
+            // /subagent attach [id]
+            if (trimmed === "attach" || trimmed.startsWith("attach ")) {
+                const idArg =
+                    trimmed === "attach"
+                        ? undefined
+                        : trimmed.slice("attach ".length).trim() || undefined;
+                await handleAttach(idArg, ctx, pi, bgManager, agents);
                 return;
             }
 
