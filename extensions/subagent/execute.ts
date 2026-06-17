@@ -20,7 +20,7 @@ import type {
     SubagentProgressCallback,
     UsageStats,
 } from "./types.js";
-import { createZeroUsage } from "./types.js";
+import { createZeroUsage, formatModelString } from "./types.js";
 
 // ── Constants ────────────────────────────────────────────────────────
 
@@ -95,18 +95,6 @@ async function writePromptToTempFile(
     return filePath;
 }
 
-function parseModelStr(
-    modelStr: string,
-): { provider: string; id: string; thinkingLevel?: string } | null {
-    const slash = modelStr.indexOf("/");
-    if (slash === -1) return null;
-    const provider = modelStr.slice(0, slash);
-    const rest = modelStr.slice(slash + 1);
-    const match = rest.match(/^(.+):([a-z]+)$/);
-    if (match) return { provider, id: match[1], thinkingLevel: match[2] };
-    return { provider, id: rest };
-}
-
 /**
  * Determine the command/args to invoke the pi binary.
  *
@@ -172,12 +160,11 @@ export async function buildSubagentCommand(
         }
     }
 
-    const modelArg = agent.model;
+    const modelArg = formatModelString(agent.model);
     args.push("--model", modelArg);
 
-    // Disable thinking unless the model name includes a thinking level
-    const hasThinkingLevel = parseModelStr(modelArg)?.thinkingLevel;
-    if (!hasThinkingLevel) args.push("--thinking", "off");
+    // Disable thinking unless the model name includes a thinking level.
+    if (!agent.model.thinkingLevel) args.push("--thinking", "off");
 
     if (agent.tools && agent.tools.length > 0) {
         args.push("--tools", agent.tools.join(","));
@@ -265,7 +252,6 @@ export async function runSubagent(
     const messages: Message[] = [];
     const usage: UsageStats = createZeroUsage();
     let stderr = "";
-    let model: string | undefined = agent.model;
     let latestStopReason: string | undefined;
     let latestErrorMessage: string | undefined;
     let turns = 0;
@@ -323,9 +309,6 @@ export async function runSubagent(
                                 (msg.usage.cacheRead || 0) +
                                 (msg.usage.cacheWrite || 0);
                         }
-                        if (!model && msg.model) {
-                            model = msg.model;
-                        }
                         if (msg.stopReason) latestStopReason = msg.stopReason;
                         if (msg.errorMessage) latestErrorMessage = msg.errorMessage;
                     }
@@ -334,7 +317,6 @@ export async function runSubagent(
                         type: "message",
                         message: msg,
                         usage: { ...usage, cost: { ...usage.cost } },
-                        model,
                     });
                 }
 
@@ -417,7 +399,6 @@ export async function runSubagent(
             messages,
             stderr,
             usage,
-            model,
             durationMs,
         };
     } finally {

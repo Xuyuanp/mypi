@@ -20,15 +20,21 @@ import { createProgressTracker } from "./tracker.js";
 import type {
     AgentRunResult,
     AgentSpec,
+    Model,
     PersistedResolvedAgent,
     ResolvedAgent,
     SubagentDetails,
     SubagentToolParams,
     ToolResult,
 } from "./types.js";
-import { isSubagentError, ZERO_USAGE } from "./types.js";
+import { isSubagentError, parseModelString, ZERO_USAGE } from "./types.js";
 
 // ── Pure resolution helpers ──────────────────────────────────────────
+
+export interface ResolveAgentConfigOptions {
+    parentModel?: Model;
+    getContextWindow: (provider: string, name: string) => number | undefined;
+}
 
 /**
  * Resolve skill names to absolute file paths via the skill cache.
@@ -61,7 +67,7 @@ export function resolveAgentConfig(
     params: SubagentToolParams,
     agents: AgentSpec[],
     skillCache: Map<string, Skill>,
-    ctx: ExtensionContext,
+    opts: ResolveAgentConfigOptions,
 ): ResolvedAgent | string {
     const agent = agents.find((a) => a.name === params.agent);
     if (!agent) {
@@ -76,12 +82,20 @@ export function resolveAgentConfig(
         return skillResult.error;
     }
 
-    const parentModel = ctx.model
-        ? `${ctx.model.provider}/${ctx.model.id}`
-        : undefined;
-    const resolvedModel = (params.model || undefined) ?? agent.model ?? parentModel;
+    const resolvedModelStr = (params.model || undefined) ?? agent.model;
+    const resolvedModel = resolvedModelStr
+        ? parseModelString(resolvedModelStr)
+        : opts.parentModel;
     if (!resolvedModel) {
-        return "No model available: agent has no default model and no parent model is set.";
+        return resolvedModelStr
+            ? `Invalid model: "${resolvedModelStr}". Expected "provider/name" or "provider/name:thinking".`
+            : "No model available: agent has no default model and no parent model is set.";
+    }
+
+    if (resolvedModelStr) {
+        resolvedModel.contextWindow =
+            opts.getContextWindow(resolvedModel.provider, resolvedModel.name) ??
+            opts.parentModel?.contextWindow;
     }
 
     return {
@@ -94,19 +108,11 @@ export function resolveAgentConfig(
     };
 }
 
-/** Resolve the context window for a model string via the model registry. */
+/** Resolve the context window stored on a structured model. */
 export function resolveContextWindow(
-    modelStr: string | undefined,
+    model: ResolvedAgent["model"] | undefined,
     ctx: ExtensionContext,
 ): number | undefined {
-    if (!modelStr) return ctx.model?.contextWindow;
-    const slash = modelStr.indexOf("/");
-    if (slash === -1) return ctx.model?.contextWindow;
-    const provider = modelStr.slice(0, slash);
-    const rest = modelStr.slice(slash + 1);
-    const match = rest.match(/^(.+):([a-z]+)$/);
-    const id = match ? match[1] : rest;
-    const model = ctx.modelRegistry.find(provider, id);
     return model?.contextWindow ?? ctx.model?.contextWindow;
 }
 
@@ -330,7 +336,6 @@ export function executeBackground(
                 messages: [],
                 stderr: "",
                 usage: ZERO_USAGE,
-                model: resolvedAgent.model,
                 durationMs: 0,
             },
             ...bgDetails(false),
@@ -385,7 +390,6 @@ export async function executeForeground(
                       messages: [...tracker.messages],
                       stderr: "",
                       usage: tracker.usage,
-                      model: resolvedAgent.model,
                       durationMs: 0,
                   };
                   onUpdate({

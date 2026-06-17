@@ -37,6 +37,7 @@ import type {
     ResolvedAgent,
     SubagentDetails,
 } from "./types.js";
+import { formatModelString } from "./types.js";
 
 // ── Re-exports for backward compatibility ────────────────────────────
 export type { BackgroundAgent } from "./types.js";
@@ -204,12 +205,23 @@ export default function (pi: ExtensionAPI) {
         parameters: SubagentParams,
 
         async execute(_toolCallId, params, signal, onUpdate, ctx) {
-            const resolved = resolveAgentConfig(
-                params,
-                knownAgents,
-                skillCache,
-                ctx,
-            );
+            const parentThinkingLevel = pi.getThinkingLevel();
+            const parentModel = ctx.model
+                ? {
+                      provider: ctx.model.provider,
+                      name: ctx.model.id,
+                      thinkingLevel:
+                          parentThinkingLevel === "off"
+                              ? undefined
+                              : parentThinkingLevel,
+                      contextWindow: ctx.model.contextWindow,
+                  }
+                : undefined;
+            const resolved = resolveAgentConfig(params, knownAgents, skillCache, {
+                parentModel,
+                getContextWindow: (provider, name) =>
+                    ctx.modelRegistry.find(provider, name)?.contextWindow,
+            });
             if (typeof resolved === "string") {
                 return makeErrorToolResult(resolved, params);
             }
@@ -244,7 +256,10 @@ export default function (pi: ExtensionAPI) {
             const bgIndicator = args.background ? theme.fg("muted", " (bg)") : "";
             const state = context.state as SubagentRenderState;
             const modelPart = state.resolvedAgent
-                ? theme.fg("muted", ` ${state.resolvedAgent.model}`)
+                ? theme.fg(
+                      "muted",
+                      ` ${formatModelString(state.resolvedAgent.model)}`,
+                  )
                 : "";
             const text =
                 theme.fg("toolTitle", theme.bold("subagent ")) +
@@ -393,7 +408,10 @@ export default function (pi: ExtensionAPI) {
             const agentName = sessionId.replace(/-[^-]+$/, "") || sessionId;
             const state = context.state as SubagentRenderState;
             const modelPart = state.resolvedAgent
-                ? theme.fg("muted", ` ${state.resolvedAgent.model}`)
+                ? theme.fg(
+                      "muted",
+                      ` ${formatModelString(state.resolvedAgent.model)}`,
+                  )
                 : "";
             const rawFollowUp = args.follow_up
                 ? args.follow_up.replace(/\s+/g, " ").trim()

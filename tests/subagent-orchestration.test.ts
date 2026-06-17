@@ -20,7 +20,11 @@ import type {
     ResolvedAgent,
     SubagentToolParams,
 } from "../extensions/subagent/types.js";
-import { createZeroUsage } from "../extensions/subagent/types.js";
+import {
+    createZeroUsage,
+    formatModelString,
+    parseModelString,
+} from "../extensions/subagent/types.js";
 
 // ── Helpers ──────────────────────────────────────────────────────────
 
@@ -39,7 +43,7 @@ function makeResolvedAgent(overrides?: Partial<ResolvedAgent>): ResolvedAgent {
     return {
         name: "scout",
         tools: ["read", "bash"],
-        model: "anthropic/claude-sonnet",
+        model: parseModelString("anthropic/claude-sonnet", 100000)!,
         systemPrompt: "You are a scout.",
         source: "system",
         ...overrides,
@@ -65,6 +69,21 @@ function makeMockCtx(overrides?: Record<string, unknown>) {
         },
         ...overrides,
     } as any;
+}
+
+function makeResolveOpts(ctx: any, parentThinkingLevel?: string) {
+    return {
+        parentModel: ctx.model
+            ? {
+                  provider: ctx.model.provider,
+                  name: ctx.model.id,
+                  thinkingLevel: parentThinkingLevel,
+                  contextWindow: ctx.model.contextWindow,
+              }
+            : undefined,
+        getContextWindow: (provider: string, name: string) =>
+            ctx.modelRegistry.find(provider, name)?.contextWindow,
+    };
 }
 
 // ── resolveSkills ────────────────────────────────────────────────────
@@ -130,11 +149,17 @@ describe("resolveAgentConfig", () => {
     it("resolves a known agent with default model", () => {
         const agents = [makeAgentSpec({ name: "scout", model: "deepseek/v4" })];
         const ctx = makeMockCtx();
-        const result = resolveAgentConfig(params, agents, new Map(), ctx);
+        const result = resolveAgentConfig(
+            params,
+            agents,
+            new Map(),
+            makeResolveOpts(ctx),
+        );
         expect(typeof result).toBe("object");
         if (typeof result === "object") {
             expect(result.name).toBe("scout");
-            expect(result.model).toBe("deepseek/v4");
+            expect(formatModelString(result.model)).toBe("deepseek/v4");
+            expect(result.model.contextWindow).toBe(100000);
             expect(result.systemPrompt).toBe("You are a scout.");
             expect(result.source).toBe("system");
         }
@@ -143,7 +168,12 @@ describe("resolveAgentConfig", () => {
     it("returns error for unknown agent", () => {
         const agents = [makeAgentSpec({ name: "worker" })];
         const ctx = makeMockCtx();
-        const result = resolveAgentConfig(params, agents, new Map(), ctx);
+        const result = resolveAgentConfig(
+            params,
+            agents,
+            new Map(),
+            makeResolveOpts(ctx),
+        );
         expect(typeof result).toBe("string");
         expect(result).toContain('Unknown agent: "scout"');
         expect(result).toContain('Available agents: "worker"');
@@ -151,7 +181,12 @@ describe("resolveAgentConfig", () => {
 
     it("returns error when no agents exist", () => {
         const ctx = makeMockCtx();
-        const result = resolveAgentConfig(params, [], new Map(), ctx);
+        const result = resolveAgentConfig(
+            params,
+            [],
+            new Map(),
+            makeResolveOpts(ctx),
+        );
         expect(typeof result).toBe("string");
         expect(result).toContain("none");
     });
@@ -160,25 +195,66 @@ describe("resolveAgentConfig", () => {
         const agents = [makeAgentSpec({ name: "scout", model: "deepseek/v4" })];
         const ctx = makeMockCtx();
         const overrideParams = { ...params, model: "anthropic/opus" };
-        const result = resolveAgentConfig(overrideParams, agents, new Map(), ctx);
+        const result = resolveAgentConfig(
+            overrideParams,
+            agents,
+            new Map(),
+            makeResolveOpts(ctx),
+        );
         if (typeof result === "object") {
-            expect(result.model).toBe("anthropic/opus");
+            expect(formatModelString(result.model)).toBe("anthropic/opus");
         }
     });
 
-    it("falls back to parent model when agent has no model", () => {
+    it("constructs the structured model from parent ctx when agent has no model", () => {
+        const agents = [makeAgentSpec({ name: "scout", model: undefined })];
+        const ctx = makeMockCtx({
+            modelRegistry: {
+                find: () => {
+                    throw new Error("parent model should not use registry lookup");
+                },
+            },
+        });
+        const result = resolveAgentConfig(
+            params,
+            agents,
+            new Map(),
+            makeResolveOpts(ctx, "high"),
+        );
+        if (typeof result === "object") {
+            expect(result.model).toEqual({
+                provider: "anthropic",
+                name: "claude-sonnet",
+                thinkingLevel: "high",
+                contextWindow: 200000,
+            });
+        }
+    });
+
+    it("omits parent thinking suffix when parent thinking is off", () => {
         const agents = [makeAgentSpec({ name: "scout", model: undefined })];
         const ctx = makeMockCtx();
-        const result = resolveAgentConfig(params, agents, new Map(), ctx);
+        const result = resolveAgentConfig(
+            params,
+            agents,
+            new Map(),
+            makeResolveOpts(ctx),
+        );
         if (typeof result === "object") {
-            expect(result.model).toBe("anthropic/claude-sonnet");
+            expect(result.model.thinkingLevel).toBeUndefined();
+            expect(formatModelString(result.model)).toBe("anthropic/claude-sonnet");
         }
     });
 
     it("returns error when no model is available at all", () => {
         const agents = [makeAgentSpec({ name: "scout", model: undefined })];
         const ctx = makeMockCtx({ model: null });
-        const result = resolveAgentConfig(params, agents, new Map(), ctx);
+        const result = resolveAgentConfig(
+            params,
+            agents,
+            new Map(),
+            makeResolveOpts(ctx),
+        );
         expect(typeof result).toBe("string");
         expect(result).toContain("No model available");
     });
@@ -187,7 +263,12 @@ describe("resolveAgentConfig", () => {
         const agents = [makeAgentSpec({ name: "scout" })];
         const ctx = makeMockCtx();
         const skillParams = { ...params, skills: ["unknown"] };
-        const result = resolveAgentConfig(skillParams, agents, new Map(), ctx);
+        const result = resolveAgentConfig(
+            skillParams,
+            agents,
+            new Map(),
+            makeResolveOpts(ctx),
+        );
         expect(typeof result).toBe("string");
         expect(result).toContain("Unknown skill");
     });
@@ -203,7 +284,12 @@ describe("resolveAgentConfig", () => {
         const cache = makeSkillCache([
             { name: "code-review", filePath: "/abs/skills/cr.md" },
         ]);
-        const result = resolveAgentConfig(params, agents, cache, ctx);
+        const result = resolveAgentConfig(
+            params,
+            agents,
+            cache,
+            makeResolveOpts(ctx),
+        );
         if (typeof result === "object") {
             expect(result.skillPaths).toEqual(["/abs/skills/cr.md"]);
         }
@@ -221,7 +307,12 @@ describe("resolveAgentConfig", () => {
             { name: "testing", filePath: "/abs/skills/testing.md" },
         ]);
         const skillParams = { ...params, skills: ["testing"] };
-        const result = resolveAgentConfig(skillParams, agents, cache, ctx);
+        const result = resolveAgentConfig(
+            skillParams,
+            agents,
+            cache,
+            makeResolveOpts(ctx),
+        );
         if (typeof result === "object") {
             expect(result.skillPaths).toEqual(["/abs/skills/testing.md"]);
         }
@@ -236,7 +327,12 @@ describe("resolveAgentConfig", () => {
         ];
         const ctx = makeMockCtx();
         const skillParams = { ...params, skills: [] };
-        const result = resolveAgentConfig(skillParams, agents, new Map(), ctx);
+        const result = resolveAgentConfig(
+            skillParams,
+            agents,
+            new Map(),
+            makeResolveOpts(ctx),
+        );
         if (typeof result === "object") {
             expect(result.skillPaths).toBeUndefined();
         }
@@ -246,40 +342,26 @@ describe("resolveAgentConfig", () => {
 // ── resolveContextWindow ─────────────────────────────────────────────
 
 describe("resolveContextWindow", () => {
-    it("returns parent model context window when modelStr is undefined", () => {
+    it("returns parent model context window when model is undefined", () => {
         const ctx = makeMockCtx();
         expect(resolveContextWindow(undefined, ctx)).toBe(200000);
     });
 
-    it("returns parent model context window when modelStr has no slash", () => {
+    it("returns the structured model context window", () => {
         const ctx = makeMockCtx();
-        expect(resolveContextWindow("claude-sonnet", ctx)).toBe(200000);
+        const model = parseModelString("deepseek/deepseek-v4-flash", 100000)!;
+        expect(resolveContextWindow(model, ctx)).toBe(100000);
     });
 
-    it("looks up model in registry when modelStr has provider/id", () => {
-        const ctx = makeMockCtx();
-        expect(resolveContextWindow("deepseek/deepseek-v4-flash", ctx)).toBe(100000);
-    });
-
-    it("strips thinking level suffix from model string", () => {
-        const ctx = makeMockCtx();
-        expect(resolveContextWindow("anthropic/claude-sonnet:high", ctx)).toBe(
-            100000,
-        );
-    });
-
-    it("returns undefined when parent model is null", () => {
+    it("returns undefined when model and parent model are unavailable", () => {
         const ctx = makeMockCtx({ model: null });
         expect(resolveContextWindow(undefined, ctx)).toBeUndefined();
     });
 
-    it("falls back to parent context window when registry lookup fails", () => {
-        const ctx = makeMockCtx({
-            modelRegistry: {
-                find: () => undefined,
-            },
-        });
-        expect(resolveContextWindow("unknown/provider", ctx)).toBe(200000);
+    it("falls back to parent context window when structured model has none", () => {
+        const ctx = makeMockCtx();
+        const model = parseModelString("unknown/provider")!;
+        expect(resolveContextWindow(model, ctx)).toBe(200000);
     });
 });
 
@@ -293,7 +375,7 @@ describe("persistAgent", () => {
         const persisted = persistAgent(agent);
         expect(persisted).not.toHaveProperty("systemPrompt");
         expect(persisted.name).toBe("scout");
-        expect(persisted.model).toBe("anthropic/claude-sonnet");
+        expect(formatModelString(persisted.model)).toBe("anthropic/claude-sonnet");
         expect(persisted.tools).toEqual(["read", "bash"]);
     });
 

@@ -17,6 +17,7 @@ import {
     getPiInvocation,
 } from "../extensions/subagent/execute.js";
 import type { ResolvedAgent } from "../extensions/subagent/types.js";
+import { parseModelString } from "../extensions/subagent/types.js";
 
 // ── Cleanup helper ───────────────────────────────────────────────────
 
@@ -42,14 +43,14 @@ const fullAgent: ResolvedAgent = {
     name: "scout",
     tools: ["read", "bash", "grep"],
     skillPaths: ["/skills/web-search", "/skills/web-extract"],
-    model: "anthropic/claude-sonnet-4",
+    model: parseModelString("anthropic/claude-sonnet-4")!,
     systemPrompt: "You are a codebase explorer.",
     source: "system",
 };
 
 const minimalAgent: ResolvedAgent = {
     name: "worker",
-    model: "openai/gpt-4o",
+    model: parseModelString("openai/gpt-4o")!,
     systemPrompt: "",
     source: "user",
 };
@@ -57,7 +58,7 @@ const minimalAgent: ResolvedAgent = {
 const thinkingAgent: ResolvedAgent = {
     name: "thinker",
     tools: ["read"],
-    model: "anthropic/claude-sonnet:high",
+    model: parseModelString("anthropic/claude-sonnet:high")!,
     systemPrompt: "Think carefully.",
     source: "system",
 };

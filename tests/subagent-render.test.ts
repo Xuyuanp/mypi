@@ -22,7 +22,11 @@ import type {
     AgentRunResult,
     SubagentDetails,
 } from "../extensions/subagent/types.js";
-import { createZeroUsage, isSubagentError } from "../extensions/subagent/types.js";
+import {
+    createZeroUsage,
+    isSubagentError,
+    parseModelString,
+} from "../extensions/subagent/types.js";
 
 // ── Helpers ──────────────────────────────────────────────────────────
 
@@ -534,10 +538,14 @@ describe("renderSubagentResult (background)", () => {
             kind: "background",
             result: makeResult({
                 outcome: { status: "running" } as any,
-                model: "deepseek/deepseek-v4-flash",
                 task: "explore codebase",
             }),
             execStatuses: {},
+            resolvedAgent: {
+                name: "scout",
+                model: parseModelString("deepseek/deepseek-v4-flash")!,
+                source: "system",
+            },
             description: "find files",
             cancelled: false,
         };
@@ -555,7 +563,6 @@ describe("renderSubagentResult (background)", () => {
         const details: SubagentDetails = {
             kind: "background",
             result: makeResult({
-                model: "anthropic/claude-sonnet",
                 messages: [
                     {
                         role: "assistant",
@@ -570,6 +577,11 @@ describe("renderSubagentResult (background)", () => {
                 durationMs: 2000,
             }),
             execStatuses: {},
+            resolvedAgent: {
+                name: "scout",
+                model: parseModelString("anthropic/claude-sonnet")!,
+                source: "system",
+            },
             description: "do work",
             cancelled: false,
         };

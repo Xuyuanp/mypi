@@ -18,7 +18,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Box, Container, Markdown, Spacer, Text } from "@earendil-works/pi-tui";
 import type { AgentRunResult, SubagentDetails, UsageStats } from "./types.js";
-import { isSubagentError } from "./types.js";
+import { formatModelString, isSubagentError } from "./types.js";
 
 // ── Presentation-only types (moved from types.ts) ────────────────────
 
@@ -404,7 +404,9 @@ function buildBackgroundHeader(
     theme: RenderTheme,
 ): string {
     const agentName = details.result.agent || "...";
-    const model = details.result.model;
+    const model = details.resolvedAgent
+        ? formatModelString(details.resolvedAgent.model)
+        : undefined;
     const statusLabel = isRunning
         ? "running"
         : isCancelled

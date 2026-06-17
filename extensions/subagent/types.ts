@@ -8,6 +8,48 @@
 
 import type { Message } from "@earendil-works/pi-ai";
 
+// ── Model ───────────────────────────────────────────────────────────
+
+/** Fully parsed model identity used to launch a subagent. */
+export interface Model {
+    provider: string;
+    /** Model name/id as accepted by the pi CLI after the provider slash. */
+    name: string;
+    /** Optional pi thinking-level suffix parsed from provider/name:level. */
+    thinkingLevel: string | undefined;
+    /** Resolved context window for rendering usage, when known. */
+    contextWindow: number | undefined;
+}
+
+/** Parse a provider/name[:thinking] model string into its structured form. */
+export function parseModelString(
+    modelStr: string,
+    contextWindow: number | undefined = undefined,
+): Model | undefined {
+    const slash = modelStr.indexOf("/");
+    if (slash === -1) return undefined;
+    const provider = modelStr.slice(0, slash);
+    const rest = modelStr.slice(slash + 1);
+    if (!provider || !rest) return undefined;
+
+    const match = rest.match(/^(.+):([a-z]+)$/);
+    if (match) {
+        return {
+            provider,
+            name: match[1],
+            thinkingLevel: match[2],
+            contextWindow,
+        };
+    }
+
+    return { provider, name: rest, thinkingLevel: undefined, contextWindow };
+}
+
+/** Format a structured model back into the pi CLI provider/name[:thinking] form. */
+export function formatModelString(model: Model): string {
+    return `${model.provider}/${model.name}${model.thinkingLevel ? `:${model.thinkingLevel}` : ""}`;
+}
+
 // ── AgentSpec ────────────────────────────────────────────────────────
 
 /**
@@ -43,7 +85,7 @@ export interface ResolvedAgent {
     /** Resolved absolute filesystem paths for --skill flags. */
     skillPaths?: string[];
     /** Required — resolved from param override > agent default > parent model. */
-    model: string;
+    model: Model;
     systemPrompt: string;
     source: "user" | "system";
 }
@@ -114,7 +156,6 @@ export interface AgentRunResult {
     messages: Message[];
     stderr: string;
     usage: UsageStats;
-    model?: string;
     durationMs: number;
 }
 
@@ -191,7 +232,7 @@ export interface BackgroundAgent {
  * their own views from these atomic events.
  */
 export type SubagentProgressEvent =
-    | { type: "message"; message: Message; usage: UsageStats; model?: string }
+    | { type: "message"; message: Message; usage: UsageStats }
     | { type: "tool_start"; toolCallId: string }
     | { type: "tool_end"; toolCallId: string; isError: boolean }
     | { type: "tool_result"; message: Message };
