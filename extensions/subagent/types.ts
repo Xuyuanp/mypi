@@ -289,3 +289,25 @@ export function isSubagentError(r: AgentRunResult): r is AgentRunResult & {
 } {
     return r.outcome.status === "error" || r.outcome.status === "aborted";
 }
+
+// ── Message extraction ───────────────────────────────────────────────
+
+/**
+ * Extract the final text output from the last assistant message.
+ *
+ * Iterates messages in reverse, returning the first text part found
+ * in the last assistant message. Returns empty string if none found.
+ *
+ * This is a pure data-extraction utility — no formatting or TUI concern.
+ */
+export function getFinalOutput(messages: Message[]): string {
+    for (let i = messages.length - 1; i >= 0; i--) {
+        const msg = messages[i];
+        if (msg.role === "assistant") {
+            for (const part of msg.content) {
+                if (part.type === "text") return part.text;
+            }
+        }
+    }
+    return "";
+}

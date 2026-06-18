@@ -8,7 +8,9 @@
 import { describe, expect, it } from "vitest";
 import {
     getResultOutput,
+    hydrateResolvedAgent,
     makeErrorToolResult,
+    makeResumeErrorResult,
     persistAgent,
     resolveAgentConfig,
     resolveContextWindow,
@@ -574,5 +576,87 @@ describe("makeErrorToolResult", () => {
         const result = makeErrorToolResult("err", params);
         expect(result.details?.result.messages).toEqual([]);
         expect(result.details?.execStatuses).toEqual({});
+    });
+});
+
+// ── hydrateResolvedAgent ─────────────────────────────────────────────────
+
+describe("hydrateResolvedAgent", () => {
+    it("returns ResolvedAgent when agent found in registry", () => {
+        const persisted = persistAgent(makeResolvedAgent());
+        const agents = [
+            makeAgentSpec({ name: "scout", systemPrompt: "You are a scout." }),
+        ];
+        const result = hydrateResolvedAgent(persisted, agents);
+        expect(result).toBeDefined();
+        expect(result!.name).toBe("scout");
+        expect(result!.systemPrompt).toBe("You are a scout.");
+    });
+
+    it("returns undefined when agent not in list", () => {
+        const persisted = persistAgent(makeResolvedAgent({ name: "unknown" }));
+        const agents = [makeAgentSpec({ name: "scout" })];
+        const result = hydrateResolvedAgent(persisted, agents);
+        expect(result).toBeUndefined();
+    });
+
+    it("preserves all persisted fields (model, tools, skillPaths, source)", () => {
+        const original = makeResolvedAgent({
+            name: "worker",
+            tools: ["read", "write", "bash"],
+            skillPaths: ["/path/to/skill1", "/path/to/skill2"],
+            model: parseModelString("openai/gpt-4o:high", 128000)!,
+            source: "user",
+            systemPrompt: "You are a worker.",
+        });
+        const persisted = persistAgent(original);
+        const agents = [
+            makeAgentSpec({ name: "worker", systemPrompt: "You are a worker." }),
+        ];
+        const result = hydrateResolvedAgent(persisted, agents);
+        expect(result).toBeDefined();
+        expect(result!.name).toBe("worker");
+        expect(result!.tools).toEqual(["read", "write", "bash"]);
+        expect(result!.skillPaths).toEqual(["/path/to/skill1", "/path/to/skill2"]);
+        expect(result!.model).toEqual(
+            parseModelString("openai/gpt-4o:high", 128000),
+        );
+        expect(result!.source).toBe("user");
+        expect(result!.systemPrompt).toBe("You are a worker.");
+    });
+
+    it("uses systemPrompt from registry, not from persisted (it has none)", () => {
+        const persisted = persistAgent(makeResolvedAgent({ name: "scout" }));
+        const agents = [
+            makeAgentSpec({ name: "scout", systemPrompt: "Updated prompt." }),
+        ];
+        const result = hydrateResolvedAgent(persisted, agents);
+        expect(result!.systemPrompt).toBe("Updated prompt.");
+    });
+});
+
+// ── makeResumeErrorResult ────────────────────────────────────────────────
+
+describe("makeResumeErrorResult", () => {
+    it("builds error ToolResult with undefined details", () => {
+        const result = makeResumeErrorResult("something went wrong");
+        expect(result.isError).toBe(true);
+        expect(result.details).toBeUndefined();
+    });
+
+    it("embeds message in content", () => {
+        const result = makeResumeErrorResult("session not found");
+        expect(result.content).toHaveLength(1);
+        expect(result.content[0]).toEqual({
+            type: "text",
+            text: "session not found",
+        });
+    });
+
+    it("handles empty message string", () => {
+        const result = makeResumeErrorResult("");
+        expect(result.content[0].text).toBe("");
+        expect(result.isError).toBe(true);
+        expect(result.details).toBeUndefined();
     });
 });

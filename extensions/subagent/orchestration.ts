@@ -15,7 +15,6 @@ import * as path from "node:path";
 import type { ExtensionContext, Skill } from "@earendil-works/pi-coding-agent";
 import type { BackgroundManager } from "./background.js";
 import { runSubagent } from "./execute.js";
-import { getFinalOutput } from "./render.js";
 import { createProgressTracker } from "./tracker.js";
 import type {
     AgentRunResult,
@@ -27,7 +26,12 @@ import type {
     SubagentToolParams,
     ToolResult,
 } from "./types.js";
-import { isSubagentError, parseModelString, ZERO_USAGE } from "./types.js";
+import {
+    getFinalOutput,
+    isSubagentError,
+    parseModelString,
+    ZERO_USAGE,
+} from "./types.js";
 
 // ── Pure resolution helpers ──────────────────────────────────────────
 
@@ -135,6 +139,40 @@ export function deriveSessionPath(
 export function persistAgent(agent: ResolvedAgent): PersistedResolvedAgent {
     const { systemPrompt: _, ...rest } = agent;
     return rest;
+}
+
+/**
+ * Re-hydrate a PersistedResolvedAgent back to a full ResolvedAgent.
+ *
+ * Completes the resolve/persist/hydrate lifecycle:
+ * - resolveAgentConfig() builds a ResolvedAgent from params + registry
+ * - persistAgent() strips the systemPrompt for storage
+ * - hydrateResolvedAgent() re-attaches the prompt from the registry
+ *
+ * Returns undefined when the agent is no longer in the registry.
+ */
+export function hydrateResolvedAgent(
+    persisted: PersistedResolvedAgent,
+    agents: AgentSpec[],
+): ResolvedAgent | undefined {
+    const agent = agents.find((a) => a.name === persisted.name);
+    if (!agent) return undefined;
+    return { ...persisted, systemPrompt: agent.systemPrompt };
+}
+
+/**
+ * Build a lightweight error ToolResult for the subagent_resume tool.
+ *
+ * Unlike makeErrorToolResult (which requires SubagentToolParams and builds
+ * a full SubagentDetails), this is for resume-path errors that occur before
+ * any agent is resolved — so details is undefined.
+ */
+export function makeResumeErrorResult(msg: string): ToolResult {
+    return {
+        content: [{ type: "text", text: msg }],
+        details: undefined,
+        isError: true,
+    };
 }
 
 /** Extract a human-readable error/output string from a completed agent result. */

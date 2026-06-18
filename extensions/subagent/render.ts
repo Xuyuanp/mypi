@@ -18,7 +18,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Box, Container, Markdown, Spacer, Text } from "@earendil-works/pi-tui";
 import type { AgentRunResult, SubagentDetails, UsageStats } from "./types.js";
-import { formatModelString, isSubagentError } from "./types.js";
+import { formatModelString, getFinalOutput, isSubagentError } from "./types.js";
 
 // ── Presentation-only types (moved from types.ts) ────────────────────
 
@@ -245,19 +245,6 @@ export function getDisplayItems(
         }
     }
     return items;
-}
-
-/** Get the final text output from the last assistant message. */
-export function getFinalOutput(messages: Message[]): string {
-    for (let i = messages.length - 1; i >= 0; i--) {
-        const msg = messages[i];
-        if (msg.role === "assistant") {
-            for (const part of msg.content) {
-                if (part.type === "text") return part.text;
-            }
-        }
-    }
-    return "";
 }
 
 // ── Result renderer ──────────────────────────────────────────────────

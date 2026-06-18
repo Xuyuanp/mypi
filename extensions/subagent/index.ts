@@ -26,17 +26,14 @@ import {
     deriveSessionPath,
     executeBackground,
     executeForeground,
+    hydrateResolvedAgent,
     makeErrorToolResult,
+    makeResumeErrorResult,
     resolveAgentConfig,
 } from "./orchestration.js";
 import { renderSubagentResult } from "./render.js";
 import { lookupSubagentSession } from "./resume.js";
-import type {
-    AgentSpec,
-    PersistedResolvedAgent,
-    ResolvedAgent,
-    SubagentDetails,
-} from "./types.js";
+import type { AgentSpec, PersistedResolvedAgent, SubagentDetails } from "./types.js";
 import { formatModelString } from "./types.js";
 
 // ── Re-exports for backward compatibility ────────────────────────────
@@ -332,14 +329,8 @@ export default function (pi: ExtensionAPI) {
         async execute(_toolCallId, params, signal, onUpdate, ctx) {
             const { id, follow_up } = params;
 
-            const errorResult = (text: string) => ({
-                content: [{ type: "text" as const, text }],
-                details: undefined,
-                isError: true,
-            });
-
             if (bgManager.agents.has(id)) {
-                return errorResult(
+                return makeResumeErrorResult(
                     `Agent "${id}" is still running. Wait for it to complete or cancel it first.`,
                 );
             }
@@ -349,7 +340,7 @@ export default function (pi: ExtensionAPI) {
 
             if (!lookup.found) {
                 if (lookup.error === "no_session_info") {
-                    return errorResult(
+                    return makeResumeErrorResult(
                         `Session "${id}" predates resume support (no session info stored).`,
                     );
                 }
@@ -357,7 +348,7 @@ export default function (pi: ExtensionAPI) {
                     lookup.availableIds.length > 0
                         ? lookup.availableIds.map((i) => `"${i}"`).join(", ")
                         : "none";
-                return errorResult(
+                return makeResumeErrorResult(
                     `No subagent found with id "${id}". Available sessions: ${available}.`,
                 );
             }
@@ -366,25 +357,26 @@ export default function (pi: ExtensionAPI) {
 
             const sessionFile = path.join(session.dir, `${session.id}.jsonl`);
             if (!fs.existsSync(sessionFile)) {
-                return errorResult(`Session file not found on disk: ${sessionFile}`);
+                return makeResumeErrorResult(
+                    `Session file not found on disk: ${sessionFile}`,
+                );
             }
 
             if (!matchedDetails.resolvedAgent) {
-                return errorResult(
+                return makeResumeErrorResult(
                     `Session "${id}" has no resolved agent info. Cannot resume.`,
                 );
             }
-            const persisted = matchedDetails.resolvedAgent;
-            const agent = knownAgents.find((a) => a.name === persisted.name);
-            if (!agent) {
-                return errorResult(
-                    `Agent "${persisted.name}" is no longer available.`,
+
+            const resolvedAgent = hydrateResolvedAgent(
+                matchedDetails.resolvedAgent,
+                knownAgents,
+            );
+            if (!resolvedAgent) {
+                return makeResumeErrorResult(
+                    `Agent "${matchedDetails.resolvedAgent.name}" is no longer available.`,
                 );
             }
-            const resolvedAgent: ResolvedAgent = {
-                ...persisted,
-                systemPrompt: agent.systemPrompt,
-            };
 
             return executeForeground(
                 resolvedAgent,

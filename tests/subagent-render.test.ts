@@ -14,7 +14,6 @@ import {
     formatTokens,
     formatUsageStats,
     getDisplayItems,
-    getFinalOutput,
     renderSubagentResult,
 } from "../extensions/subagent/render.js";
 import type {
@@ -24,6 +23,7 @@ import type {
 } from "../extensions/subagent/types.js";
 import {
     createZeroUsage,
+    getFinalOutput,
     isSubagentError,
     parseModelString,
 } from "../extensions/subagent/types.js";

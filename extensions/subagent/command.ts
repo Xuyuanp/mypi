@@ -48,13 +48,14 @@ import {
 } from "@earendil-works/pi-tui";
 import type { BackgroundManager } from "./background.js";
 import { buildSubagentCommand } from "./execute.js";
+import { hydrateResolvedAgent } from "./orchestration.js";
 import type { LookupEntry } from "./resume.js";
 import {
     type CompletedSubagent,
     listCompletedSubagents,
     lookupSubagentSession,
 } from "./resume.js";
-import type { AgentSpec, ResolvedAgent } from "./types.js";
+import type { AgentSpec } from "./types.js";
 
 interface AgentRow {
     name: string;
@@ -631,16 +632,17 @@ async function handleAttach(
         );
         return;
     }
-    const persisted = selected.details.resolvedAgent;
-    const agent = agents.find((a) => a.name === persisted.name);
-    if (!agent) {
-        ctx.ui.notify(`Agent "${persisted.name}" is no longer available.`, "error");
+    const resolvedAgent = hydrateResolvedAgent(
+        selected.details.resolvedAgent,
+        agents,
+    );
+    if (!resolvedAgent) {
+        ctx.ui.notify(
+            `Agent "${selected.details.resolvedAgent.name}" is no longer available.`,
+            "error",
+        );
         return;
     }
-    const resolvedAgent: ResolvedAgent = {
-        ...persisted,
-        systemPrompt: agent.systemPrompt,
-    };
 
     // 6. Determine working directory
     const cwd = selected.originalParams?.cwd ?? ctx.cwd;
