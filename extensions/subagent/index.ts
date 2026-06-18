@@ -335,7 +335,7 @@ export default function (pi: ExtensionAPI) {
                 );
             }
 
-            const entries = ctx.sessionManager.getEntries() as any[];
+            const entries = ctx.sessionManager.getBranch() as any[];
             const lookup = lookupSubagentSession(entries, id);
 
             if (!lookup.found) {

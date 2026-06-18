@@ -553,7 +553,7 @@ async function handleAttach(
     }
 
     // 3. List completed subagents
-    const entries = ctx.sessionManager.getEntries() as any[];
+    const entries = ctx.sessionManager.getBranch() as any[];
     const completed = listCompletedSubagents(entries as readonly LookupEntry[]);
 
     let selected: CompletedSubagent;
@@ -714,7 +714,7 @@ export function registerSubagentCommand(
             if (prefix.startsWith("attach ")) {
                 if (!currentCtx) return null;
                 const partial = prefix.slice("attach ".length);
-                const entries = currentCtx.sessionManager.getEntries() as any[];
+                const entries = currentCtx.sessionManager.getBranch() as any[];
                 const completed = listCompletedSubagents(
                     entries as readonly LookupEntry[],
                 );
