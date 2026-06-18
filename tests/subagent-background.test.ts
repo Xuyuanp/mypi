@@ -630,60 +630,49 @@ describe("widget render width compliance", () => {
 // ── createBackgroundManager tests ────────────────────────────────────
 
 describe("createBackgroundManager", () => {
-    function makeMockPi() {
-        return {
-            sendMessage: vi.fn(),
-        } as any;
+    function makeMockInject() {
+        return vi.fn();
     }
 
-    function makeMockCtx() {
-        return {
-            ui: {
-                setWidget: vi.fn(),
-                setStatus: vi.fn(),
-                theme: {
-                    fg: (_color: string, text: string) => text,
-                },
-            },
-        } as any;
+    function makeMockSetWidget() {
+        return vi.fn();
     }
 
     it("register updates widget", () => {
-        const pi = makeMockPi();
-        const mgr = createBackgroundManager(pi);
-        const ctx = makeMockCtx();
-        mgr.setContext(ctx);
+        const injectMessage = makeMockInject();
+        const mgr = createBackgroundManager(injectMessage);
+        const setWidget = makeMockSetWidget();
+        mgr.setUI(setWidget);
 
         const entry = makeFakeEntry({ kill: vi.fn() });
         mgr.register(entry);
 
         expect(mgr.agents.size).toBe(1);
-        expect(ctx.ui.setWidget).toHaveBeenCalled();
+        expect(setWidget).toHaveBeenCalled();
     });
 
     it("remove clears widget when last agent removed", () => {
-        const pi = makeMockPi();
-        const mgr = createBackgroundManager(pi);
-        const ctx = makeMockCtx();
-        mgr.setContext(ctx);
+        const injectMessage = makeMockInject();
+        const mgr = createBackgroundManager(injectMessage);
+        const setWidget = makeMockSetWidget();
+        mgr.setUI(setWidget);
 
         const entry = makeFakeEntry({ kill: vi.fn() });
         mgr.register(entry);
-        ctx.ui.setStatus.mockClear();
-        ctx.ui.setWidget.mockClear();
+        setWidget.mockClear();
 
         mgr.remove(entry.id);
 
         expect(mgr.agents.size).toBe(0);
         // When count goes to 0, widget is cleared
-        expect(ctx.ui.setWidget).toHaveBeenCalledWith("subagent-bg", undefined);
+        expect(setWidget).toHaveBeenCalledWith("subagent-bg", undefined);
     });
 
     it("cancel kills and removes, returns false for unknown IDs", () => {
-        const pi = makeMockPi();
-        const mgr = createBackgroundManager(pi);
-        const ctx = makeMockCtx();
-        mgr.setContext(ctx);
+        const injectMessage = makeMockInject();
+        const mgr = createBackgroundManager(injectMessage);
+        const setWidget = makeMockSetWidget();
+        mgr.setUI(setWidget);
 
         const killFn = vi.fn();
         const entry = makeFakeEntry({ kill: killFn });
@@ -699,10 +688,8 @@ describe("createBackgroundManager", () => {
     });
 
     it("injectResult sends followUp with triggerTurn: true for completion", () => {
-        const pi = makeMockPi();
-        const mgr = createBackgroundManager(pi);
-        const ctx = makeMockCtx();
-        mgr.setContext(ctx);
+        const injectMessage = makeMockInject();
+        const mgr = createBackgroundManager(injectMessage);
         mgr.setSessionActive(true);
 
         mgr.injectResult(
@@ -713,18 +700,16 @@ describe("createBackgroundManager", () => {
             { description: "test task", cancelled: false },
         );
 
-        expect(pi.sendMessage).toHaveBeenCalledOnce();
-        const [msg, opts] = pi.sendMessage.mock.calls[0];
+        expect(injectMessage).toHaveBeenCalledOnce();
+        const [msg, opts] = injectMessage.mock.calls[0];
         expect(opts.deliverAs).toBe("followUp");
         expect(opts.triggerTurn).toBe(true);
         expect(msg.content).toContain("completed");
     });
 
     it("injectResult sends triggerTurn: false for cancelled", () => {
-        const pi = makeMockPi();
-        const mgr = createBackgroundManager(pi);
-        const ctx = makeMockCtx();
-        mgr.setContext(ctx);
+        const injectMessage = makeMockInject();
+        const mgr = createBackgroundManager(injectMessage);
         mgr.setSessionActive(true);
 
         mgr.injectResult(
@@ -735,16 +720,16 @@ describe("createBackgroundManager", () => {
             { description: "test task", cancelled: true },
         );
 
-        expect(pi.sendMessage).toHaveBeenCalledOnce();
-        const [_msg, opts] = pi.sendMessage.mock.calls[0];
+        expect(injectMessage).toHaveBeenCalledOnce();
+        const [_msg, opts] = injectMessage.mock.calls[0];
         expect(opts.triggerTurn).toBe(false);
     });
 
     it("shutdown marks inactive and kills/awaits/clears", async () => {
-        const pi = makeMockPi();
-        const mgr = createBackgroundManager(pi);
-        const ctx = makeMockCtx();
-        mgr.setContext(ctx);
+        const injectMessage = makeMockInject();
+        const mgr = createBackgroundManager(injectMessage);
+        const setWidget = makeMockSetWidget();
+        mgr.setUI(setWidget);
 
         const killFn = vi.fn();
         const entry = makeFakeEntry({
@@ -761,8 +746,8 @@ describe("createBackgroundManager", () => {
     });
 
     it("injectResult is a no-op when session is inactive", () => {
-        const pi = makeMockPi();
-        const mgr = createBackgroundManager(pi);
+        const injectMessage = makeMockInject();
+        const mgr = createBackgroundManager(injectMessage);
         mgr.setSessionActive(false);
 
         mgr.injectResult(
@@ -772,14 +757,12 @@ describe("createBackgroundManager", () => {
             makeFakeResult({ outcome: { status: "success" } }),
         );
 
-        expect(pi.sendMessage).not.toHaveBeenCalled();
+        expect(injectMessage).not.toHaveBeenCalled();
     });
 
     it("injectResult constructs SubagentDetails with kind='background'", () => {
-        const pi = makeMockPi();
-        const mgr = createBackgroundManager(pi);
-        const ctx = makeMockCtx();
-        mgr.setContext(ctx);
+        const injectMessage = makeMockInject();
+        const mgr = createBackgroundManager(injectMessage);
         mgr.setSessionActive(true);
 
         mgr.injectResult(
@@ -790,7 +773,7 @@ describe("createBackgroundManager", () => {
             { description: "bg task", cancelled: false },
         );
 
-        const [msg] = pi.sendMessage.mock.calls[0];
+        const [msg] = injectMessage.mock.calls[0];
         expect(msg.details.kind).toBe("background");
         expect(msg.details.description).toBe("bg task");
         expect(msg.details.cancelled).toBe(false);

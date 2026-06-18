@@ -152,7 +152,9 @@ Each completed subagent can be resumed via subagent_resume using the subagent ID
 
 export default function (pi: ExtensionAPI) {
     const knownAgents = discoverAgents();
-    const bgManager = createBackgroundManager(pi);
+    const bgManager = createBackgroundManager((msg, opts) =>
+        pi.sendMessage(msg, opts),
+    );
 
     registerSubagentCommand(pi, bgManager, knownAgents);
 
@@ -160,7 +162,7 @@ export default function (pi: ExtensionAPI) {
 
     pi.on("session_start", (_event, ctx) => {
         bgManager.setSessionActive(true);
-        bgManager.setContext(ctx);
+        bgManager.setUI((key, factory) => ctx.ui.setWidget(key, factory));
     });
 
     pi.on("session_shutdown", async () => {

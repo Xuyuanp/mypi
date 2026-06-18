@@ -27,30 +27,14 @@ function makeFakeResult(overrides?: Partial<AgentRunResult>): AgentRunResult {
     };
 }
 
-function makeMockPi() {
-    return {
-        sendMessage: vi.fn(),
-    } as any;
-}
-
-function makeMockCtx() {
-    return {
-        ui: {
-            setWidget: vi.fn(),
-            setStatus: vi.fn(),
-            theme: {
-                fg: (_color: string, text: string) => text,
-            },
-        },
-    } as any;
+function makeMockInject() {
+    return vi.fn();
 }
 
 describe("background injectResult session header", () => {
     it("prepends [session: <id>] header when session is provided", () => {
-        const pi = makeMockPi();
-        const mgr = createBackgroundManager(pi);
-        const ctx = makeMockCtx();
-        mgr.setContext(ctx);
+        const injectMessage = makeMockInject();
+        const mgr = createBackgroundManager(injectMessage);
         mgr.setSessionActive(true);
 
         const session = { dir: "/tmp/sessions/abc/subagent", id: "scout-a1b2c3d4" };
@@ -62,17 +46,15 @@ describe("background injectResult session header", () => {
             { description: "test task", cancelled: false, session },
         );
 
-        expect(pi.sendMessage).toHaveBeenCalledOnce();
-        const [msg] = pi.sendMessage.mock.calls[0];
+        expect(injectMessage).toHaveBeenCalledOnce();
+        const [msg] = injectMessage.mock.calls[0];
         expect(msg.content).toMatch(/^\[subagent: scout-a1b2c3d4\]\n\n/);
         expect(msg.content).toContain("output text");
     });
 
     it("does not prepend header when session is undefined", () => {
-        const pi = makeMockPi();
-        const mgr = createBackgroundManager(pi);
-        const ctx = makeMockCtx();
-        mgr.setContext(ctx);
+        const injectMessage = makeMockInject();
+        const mgr = createBackgroundManager(injectMessage);
         mgr.setSessionActive(true);
 
         mgr.injectResult(
@@ -83,17 +65,15 @@ describe("background injectResult session header", () => {
             { description: "test task", cancelled: false },
         );
 
-        expect(pi.sendMessage).toHaveBeenCalledOnce();
-        const [msg] = pi.sendMessage.mock.calls[0];
+        expect(injectMessage).toHaveBeenCalledOnce();
+        const [msg] = injectMessage.mock.calls[0];
         expect(msg.content).not.toMatch(/^\[subagent:/);
         expect(msg.content).toContain("output text");
     });
 
     it("stores session in injected message details", () => {
-        const pi = makeMockPi();
-        const mgr = createBackgroundManager(pi);
-        const ctx = makeMockCtx();
-        mgr.setContext(ctx);
+        const injectMessage = makeMockInject();
+        const mgr = createBackgroundManager(injectMessage);
         mgr.setSessionActive(true);
 
         const session = { dir: "/tmp/sessions/abc/subagent", id: "worker-e5f6g7h8" };
@@ -103,15 +83,13 @@ describe("background injectResult session header", () => {
             session,
         });
 
-        const [msg] = pi.sendMessage.mock.calls[0];
+        const [msg] = injectMessage.mock.calls[0];
         expect(msg.details.session).toEqual(session);
     });
 
     it("details.session is undefined when not provided", () => {
-        const pi = makeMockPi();
-        const mgr = createBackgroundManager(pi);
-        const ctx = makeMockCtx();
-        mgr.setContext(ctx);
+        const injectMessage = makeMockInject();
+        const mgr = createBackgroundManager(injectMessage);
         mgr.setSessionActive(true);
 
         mgr.injectResult("worker-e5f6g7h8", "completed", "done", makeFakeResult(), {
@@ -119,7 +97,7 @@ describe("background injectResult session header", () => {
             cancelled: false,
         });
 
-        const [msg] = pi.sendMessage.mock.calls[0];
+        const [msg] = injectMessage.mock.calls[0];
         expect(msg.details.session).toBeUndefined();
     });
 });

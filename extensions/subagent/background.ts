@@ -1,15 +1,14 @@
 /**
  * Background agent lifecycle management (factory pattern).
  *
- * Encapsulates the Map of running background agents, TUI widget/status,
- * result injection via pi.sendMessage, and cooperative shutdown.
+ * Encapsulates the Map of running background agents, TUI widget,
+ * result injection, and cooperative shutdown.
  * State lives in the closure returned by createBackgroundManager.
+ * Framework-free: receives callbacks instead of ExtensionAPI/ExtensionContext.
  */
 
-import type {
-    ExtensionAPI,
-    ExtensionContext,
-} from "@earendil-works/pi-coding-agent";
+import type { Theme } from "@earendil-works/pi-coding-agent";
+import type { Component, TUI } from "@earendil-works/pi-tui";
 import { Container, TruncatedText } from "@earendil-works/pi-tui";
 import { renderSubagentResult } from "./render.js";
 import type { AgentRunResult, BackgroundAgent, SubagentDetails } from "./types.js";
@@ -23,6 +22,33 @@ export const BACKGROUND_RESULT_TYPE = "subagent_background_result";
 const BG_WIDGET_KEY = "subagent-bg";
 
 const MAX_ENTRIES = 5;
+
+// ── Callback types ───────────────────────────────────────────────────
+
+/** Narrow widget-setter callback — mirrors ctx.ui.setWidget signature. */
+export type SetWidgetFn = (key: string, content: WidgetFactory | undefined) => void;
+
+/** Widget factory signature (matches framework's setWidget overload). */
+export type WidgetFactory = (
+    tui: TUI,
+    theme: Theme,
+) => Component & {
+    dispose?(): void;
+};
+
+/** Message injection callback — wraps pi.sendMessage. */
+export type InjectMessageFn = (
+    message: {
+        customType: string;
+        content: string;
+        display: boolean;
+        details: SubagentDetails;
+    },
+    options: {
+        deliverAs: "followUp";
+        triggerTurn: boolean;
+    },
+) => void;
 
 // ── Manager interface ────────────────────────────────────────────────
 
@@ -42,8 +68,8 @@ export interface BackgroundManager {
     /** Clear all entries without killing and update the widget. */
     clear(): void;
 
-    /** Set the current extension context (resets widgetActive on session start). */
-    setContext(ctx: ExtensionContext | null): void;
+    /** Set the UI output channel for the current session (null to detach). */
+    setUI(setWidget: SetWidgetFn | null): void;
 
     /** Mark the session as active or inactive. */
     setSessionActive(active: boolean): void;
@@ -72,21 +98,23 @@ export interface BackgroundManager {
 
 // ── Factory ──────────────────────────────────────────────────────────
 
-/** Create a BackgroundManager instance bound to the given pi API. */
-export function createBackgroundManager(pi: ExtensionAPI): BackgroundManager {
+/** Create a BackgroundManager instance using injected callbacks. */
+export function createBackgroundManager(
+    injectMessage: InjectMessageFn,
+): BackgroundManager {
     const agents = new Map<string, BackgroundAgent>();
     let active = true;
-    let currentCtx: ExtensionContext | null = null;
+    let currentSetWidget: SetWidgetFn | null = null;
     let widgetActive = false;
 
     function updateWidget(): void {
-        const ctx = currentCtx;
-        if (!ctx) return;
+        const setWidget = currentSetWidget;
+        if (!setWidget) return;
         const count = agents.size;
 
         if (count === 0) {
             if (widgetActive) {
-                ctx.ui.setWidget(BG_WIDGET_KEY, undefined);
+                setWidget(BG_WIDGET_KEY, undefined);
                 widgetActive = false;
             }
             return;
@@ -94,7 +122,7 @@ export function createBackgroundManager(pi: ExtensionAPI): BackgroundManager {
 
         // Create widget only on first spawn (0 -> 1 transition)
         if (!widgetActive) {
-            ctx.ui.setWidget(BG_WIDGET_KEY, (tui, theme) => {
+            setWidget(BG_WIDGET_KEY, (tui, theme) => {
                 const interval = setInterval(() => tui.requestRender(), 1000);
                 return {
                     render(width: number): string[] {
@@ -187,8 +215,8 @@ export function createBackgroundManager(pi: ExtensionAPI): BackgroundManager {
             updateWidget();
         },
 
-        setContext(ctx: ExtensionContext | null): void {
-            currentCtx = ctx;
+        setUI(setWidget: SetWidgetFn | null): void {
+            currentSetWidget = setWidget;
             widgetActive = false;
         },
 
@@ -200,12 +228,12 @@ export function createBackgroundManager(pi: ExtensionAPI): BackgroundManager {
 
         async shutdown(): Promise<void> {
             active = false;
-            // Clear widget and status before killing (so UI is clean immediately)
-            if (currentCtx) {
-                currentCtx.ui.setWidget(BG_WIDGET_KEY, undefined);
+            // Clear widget before killing (so UI is clean immediately)
+            if (currentSetWidget) {
+                currentSetWidget(BG_WIDGET_KEY, undefined);
             }
             widgetActive = false;
-            currentCtx = null;
+            currentSetWidget = null;
             const entries = [...agents.values()];
             if (entries.length === 0) return;
             for (const entry of entries) {
@@ -227,7 +255,7 @@ export function createBackgroundManager(pi: ExtensionAPI): BackgroundManager {
                 ? `[subagent: ${details.session.id}]\n\n`
                 : "";
             const content = `${sessionHeader}[Background subagent result \u2014 this is NOT a user message. A fire-and-forget background agent "${id}" has been ${status}. ${status === "cancelled" ? "Do not wait for its result." : "Acknowledge briefly or act on the result only if relevant to the current task."}]\n\n${output}`;
-            pi.sendMessage<SubagentDetails>(
+            injectMessage(
                 {
                     customType: BACKGROUND_RESULT_TYPE,
                     content,
