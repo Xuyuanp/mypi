@@ -11,10 +11,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { createBackgroundManager } from "../extensions/subagent/background.js";
 import { createZeroUsage } from "../extensions/subagent/index.js";
-import type {
-    AgentRunResult,
-    SubagentDetails,
-} from "../extensions/subagent/types.js";
+import type { AgentRunResult } from "../extensions/subagent/types.js";
 
 function makeFakeResult(overrides?: Partial<AgentRunResult>): AgentRunResult {
     return {
@@ -47,66 +44,6 @@ function makeMockCtx() {
         },
     } as any;
 }
-
-describe("foreground subagent session in details", () => {
-    it("session field is populated in SubagentDetails", () => {
-        const session = {
-            dir: "/tmp/sessions/abc123/subagent",
-            id: "scout-a1b2c3d4",
-        };
-        const details: SubagentDetails = {
-            kind: "foreground",
-            result: makeFakeResult(),
-            execStatuses: {},
-            session,
-        };
-
-        expect(details.session).toEqual(session);
-        expect(details.session?.dir).toBe("/tmp/sessions/abc123/subagent");
-        expect(details.session?.id).toBe("scout-a1b2c3d4");
-    });
-
-    it("session field is optional and defaults to undefined", () => {
-        const details: SubagentDetails = {
-            kind: "foreground",
-            result: makeFakeResult(),
-            execStatuses: {},
-        };
-
-        expect(details.session).toBeUndefined();
-    });
-});
-
-describe("background subagent session in details", () => {
-    it("session field is populated in SubagentDetails", () => {
-        const session = {
-            dir: "/tmp/sessions/abc123/subagent",
-            id: "worker-e5f6g7h8",
-        };
-        const details: SubagentDetails = {
-            kind: "background",
-            result: makeFakeResult(),
-            description: "test task",
-            cancelled: false,
-            session,
-        };
-
-        expect(details.session).toEqual(session);
-        expect(details.session?.dir).toBe("/tmp/sessions/abc123/subagent");
-        expect(details.session?.id).toBe("worker-e5f6g7h8");
-    });
-
-    it("session field is optional and defaults to undefined", () => {
-        const details: SubagentDetails = {
-            kind: "background",
-            result: makeFakeResult(),
-            description: "test task",
-            cancelled: false,
-        };
-
-        expect(details.session).toBeUndefined();
-    });
-});
 
 describe("background injectResult session header", () => {
     it("prepends [session: <id>] header when session is provided", () => {

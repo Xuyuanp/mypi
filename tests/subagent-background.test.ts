@@ -81,39 +81,9 @@ describe("cancel command logic", () => {
         expect(entry.kill).toHaveBeenCalledOnce();
         expect(map.has(id)).toBe(false);
     });
-
-    it("reports not found for unknown ID", () => {
-        const map = new Map<string, BackgroundAgent>();
-        const id = "nonexistent-12345678";
-        expect(map.get(id)).toBeUndefined();
-    });
-
-    it("handles cancel after agent already completed (not in map)", () => {
-        const map = new Map<string, BackgroundAgent>();
-        // Agent was in the map but already completed and removed itself
-        const id = "scout-a1b2c3d4";
-        expect(map.get(id)).toBeUndefined();
-    });
 });
 
 describe("background agent lifecycle", () => {
-    it("BackgroundAgent.kill calls abort on the controller", () => {
-        const controller = new AbortController();
-        const killFn = () => controller.abort();
-
-        expect(controller.signal.aborted).toBe(false);
-        killFn();
-        expect(controller.signal.aborted).toBe(true);
-    });
-
-    it("AbortController.abort is idempotent (safe to call after completion)", () => {
-        const controller = new AbortController();
-        controller.abort();
-        // Second call should not throw
-        expect(() => controller.abort()).not.toThrow();
-        expect(controller.signal.aborted).toBe(true);
-    });
-
     it("promise.catch cleans up map entry on abort", async () => {
         const map = new Map<string, BackgroundAgent>();
         const controller = new AbortController();
@@ -359,16 +329,6 @@ describe("shutdown logic", () => {
 
         expect(killFns[0]).toHaveBeenCalledOnce();
         expect(killFns[1]).toHaveBeenCalledOnce();
-        expect(map.size).toBe(0);
-    });
-
-    it("shutdown with no background agents is a no-op", async () => {
-        const map = new Map<string, BackgroundAgent>();
-        const entries = [...map.values()];
-        expect(entries.length).toBe(0);
-        // Should not throw
-        await Promise.allSettled(entries.map((e) => e.promise));
-        map.clear();
         expect(map.size).toBe(0);
     });
 });

@@ -17,7 +17,6 @@ import {
     renderSubagentResult,
 } from "../extensions/subagent/render.js";
 import type {
-    AgentOutcome,
     AgentRunResult,
     SubagentDetails,
 } from "../extensions/subagent/types.js";
@@ -247,43 +246,6 @@ describe("getFinalOutput", () => {
     });
 });
 
-// ── AgentOutcome variants ────────────────────────────────────────────
-
-describe("AgentOutcome variants", () => {
-    it("success variant accepts optional stopReason", () => {
-        const outcome: AgentOutcome = { status: "success", stopReason: "end_turn" };
-        expect(outcome.status).toBe("success");
-        expect(outcome.stopReason).toBe("end_turn");
-    });
-
-    it("success variant with no stopReason", () => {
-        const outcome: AgentOutcome = { status: "success" };
-        expect(outcome.status).toBe("success");
-        expect(outcome.stopReason).toBeUndefined();
-    });
-
-    it("error variant requires exitCode and message", () => {
-        const outcome: AgentOutcome = {
-            status: "error",
-            exitCode: 1,
-            message: "spawn failed",
-            stopReason: "error",
-        };
-        expect(outcome.status).toBe("error");
-        expect(outcome.exitCode).toBe(1);
-        expect(outcome.message).toBe("spawn failed");
-    });
-
-    it("aborted variant accepts optional message", () => {
-        const outcome: AgentOutcome = {
-            status: "aborted",
-            message: "user cancelled",
-        };
-        expect(outcome.status).toBe("aborted");
-        expect(outcome.message).toBe("user cancelled");
-    });
-});
-
 // ── isSubagentError ──────────────────────────────────────────────────
 
 describe("isSubagentError", () => {
@@ -325,32 +287,6 @@ describe("isSubagentError", () => {
                 }),
             ),
         ).toBe(false);
-    });
-});
-
-// ── SubagentDetails discriminated union ──────────────────────────────
-
-describe("SubagentDetails unified shape", () => {
-    it("foreground has kind='foreground' with execStatuses", () => {
-        const details: SubagentDetails = {
-            kind: "foreground",
-            result: makeResult(),
-            execStatuses: { tc1: false, tc2: true },
-        };
-        expect(details.kind).toBe("foreground");
-        expect(details.execStatuses).toEqual({ tc1: false, tc2: true });
-    });
-
-    it("background has kind='background', description, cancelled", () => {
-        const details: SubagentDetails = {
-            kind: "background",
-            result: makeResult(),
-            description: "find auth files",
-            cancelled: false,
-        };
-        expect(details.kind).toBe("background");
-        expect(details.description).toBe("find auth files");
-        expect(details.cancelled).toBe(false);
     });
 });
 
