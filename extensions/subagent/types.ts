@@ -7,6 +7,8 @@
  */
 
 import type { Message } from "@earendil-works/pi-ai";
+import type { Static } from "typebox";
+import { Type } from "typebox";
 
 // ── Model ───────────────────────────────────────────────────────────
 
@@ -238,18 +240,60 @@ export type SubagentProgressEvent =
 
 export type SubagentProgressCallback = (event: SubagentProgressEvent) => void;
 
-// ── Tool execution types ────────────────────────────────────────────
+// ── Tool parameter schemas ──────────────────────────────────────────
 
-/** Parameters accepted by the subagent tool. */
-export interface SubagentToolParams {
-    agent: string;
-    description: string;
-    task: string;
-    model?: string;
-    cwd?: string;
-    skills?: string[];
-    background?: boolean;
-}
+/** Typebox schema for the subagent tool parameters. */
+export const SubagentParamsSchema = Type.Object({
+    agent: Type.String({
+        description:
+            "Name of an available agent. Must match a <name> from the agent list.",
+    }),
+    description: Type.String({
+        description: "A short (3-5 word) summary of the delegated task.",
+    }),
+    task: Type.String({
+        description:
+            "Self-contained task description. The subagent has NO access to your conversation history -- include all necessary context, file paths, constraints, and expected output format. Be explicit about whether to write code or only research.",
+    }),
+    model: Type.Optional(
+        Type.String({
+            description: 'Model override, e.g. "anthropic/claude-sonnet:high".',
+        }),
+    ),
+    cwd: Type.Optional(
+        Type.String({
+            description: "Working directory override for the subprocess.",
+        }),
+    ),
+    skills: Type.Optional(
+        Type.Array(Type.String(), {
+            description:
+                "Skill names to attach. Replaces the agent's default skills.",
+        }),
+    ),
+    background: Type.Optional(
+        Type.Boolean({
+            description: "Run as a fire-and-forget background task.",
+        }),
+    ),
+});
+
+/** Parameters accepted by the subagent tool (derived from schema). */
+export type SubagentToolParams = Static<typeof SubagentParamsSchema>;
+
+/** Typebox schema for the subagent_resume tool parameters. */
+export const ResumeParamsSchema = Type.Object({
+    id: Type.String({
+        description: "Session ID of the completed subagent to resume.",
+    }),
+    follow_up: Type.String({
+        description:
+            "New message to send to the subagent, continuing its conversation.",
+    }),
+});
+
+/** Parameters accepted by the subagent_resume tool (derived from schema). */
+export type ResumeToolParams = Static<typeof ResumeParamsSchema>;
 
 /** Return type for the subagent tool execute handler. */
 export interface ToolResult {

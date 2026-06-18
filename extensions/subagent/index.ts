@@ -18,7 +18,7 @@ import * as path from "node:path";
 
 import type { ExtensionAPI, Skill } from "@earendil-works/pi-coding-agent";
 import { Container, Spacer, Text } from "@earendil-works/pi-tui";
-import { Type } from "typebox";
+
 import { discoverAgents } from "./agents.js";
 import { BACKGROUND_RESULT_TYPE, createBackgroundManager } from "./background.js";
 import { registerSubagentCommand } from "./command.js";
@@ -36,7 +36,11 @@ import {
 } from "./resolve.js";
 import { lookupSubagentSession } from "./resume.js";
 import type { AgentSpec, PersistedResolvedAgent, SubagentDetails } from "./types.js";
-import { formatModelString } from "./types.js";
+import {
+    formatModelString,
+    ResumeParamsSchema,
+    SubagentParamsSchema,
+} from "./types.js";
 
 // ── Re-exports for backward compatibility ────────────────────────────
 export type { BackgroundAgent } from "./types.js";
@@ -58,53 +62,6 @@ interface SubagentRenderState {
 function escapeXml(str: string): string {
     return str.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
-
-// ── Subagent tool params ─────────────────────────────────────────────
-
-const SubagentParams = Type.Object({
-    agent: Type.String({
-        description:
-            "Name of an available agent. Must match a <name> from the agent list.",
-    }),
-    description: Type.String({
-        description: "A short (3-5 word) summary of the delegated task.",
-    }),
-    task: Type.String({
-        description:
-            "Self-contained task description. The subagent has NO access to your conversation history -- include all necessary context, file paths, constraints, and expected output format. Be explicit about whether to write code or only research.",
-    }),
-    model: Type.Optional(
-        Type.String({
-            description: 'Model override, e.g. "anthropic/claude-sonnet:high".',
-        }),
-    ),
-    cwd: Type.Optional(
-        Type.String({
-            description: "Working directory override for the subprocess.",
-        }),
-    ),
-    skills: Type.Optional(
-        Type.Array(Type.String(), {
-            description:
-                "Skill names to attach. Replaces the agent's default skills.",
-        }),
-    ),
-    background: Type.Optional(
-        Type.Boolean({
-            description: "Run as a fire-and-forget background task.",
-        }),
-    ),
-});
-
-const ResumeParams = Type.Object({
-    id: Type.String({
-        description: "Session ID of the completed subagent to resume.",
-    }),
-    follow_up: Type.String({
-        description:
-            "New message to send to the subagent, continuing its conversation.",
-    }),
-});
 
 function buildToolDescription(agents: AgentSpec[]): string {
     const agentList =
@@ -203,7 +160,7 @@ export default function (pi: ExtensionAPI) {
         name: "subagent",
         label: "Subagent",
         description: buildToolDescription(knownAgents),
-        parameters: SubagentParams,
+        parameters: SubagentParamsSchema,
 
         async execute(_toolCallId, params, signal, onUpdate, ctx) {
             const parentThinkingLevel = pi.getThinkingLevel();
@@ -331,7 +288,7 @@ export default function (pi: ExtensionAPI) {
             "(files it read, conclusions it reached, changes it made). " +
             "The subagent reloads its full conversation history and continues from where it left off. " +
             "Always executes in foreground (blocking).",
-        parameters: ResumeParams,
+        parameters: ResumeParamsSchema,
 
         async execute(_toolCallId, params, signal, onUpdate, ctx) {
             const { id, follow_up } = params;
