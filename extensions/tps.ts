@@ -106,18 +106,41 @@ export default function (pi: ExtensionAPI) {
         const tokensPerSecond = s.output / genSeconds;
         const promptTokens = s.input + s.cacheRead + s.cacheWrite;
         const hasCacheActivity = s.cacheRead > 0 || s.cacheWrite > 0;
-        const hitRateSegment =
-            hasCacheActivity && promptTokens > 0
-                ? ` CH${((s.cacheRead / promptTokens) * 100).toFixed(0)}%`
-                : "";
-        let costSegment = "";
+        // Activity
+        const activityParts: string[] = [];
+        if (s.turns) activityParts.push(`${s.turns} turn${s.turns > 1 ? "s" : ""}`);
+        if (s.toolCalls)
+            activityParts.push(`${s.toolCalls} tool${s.toolCalls > 1 ? "s" : ""}`);
+
+        // Tokens
+        const tokenParts: string[] = [
+            `\u2191${formatTokens(s.input)}`,
+            `\u2193${formatTokens(s.output)}`,
+            `R${formatTokens(s.cacheRead)}`,
+            `W${formatTokens(s.cacheWrite)}`,
+        ];
+        if (hasCacheActivity && promptTokens > 0) {
+            tokenParts.push(`CH${((s.cacheRead / promptTokens) * 100).toFixed(1)}%`);
+        }
+
+        // Cost
+        let cost = "";
         if (s.parentCost > 0 || s.subagentCost > 0) {
-            costSegment = ` | $${s.parentCost.toFixed(4)}`;
+            cost = `$${s.parentCost.toFixed(4)}`;
             if (s.subagentCost > 0) {
-                costSegment += `(+$${s.subagentCost.toFixed(4)})`;
+                cost += `(+$${s.subagentCost.toFixed(4)})`;
             }
         }
-        const message = `TPS ${tokensPerSecond.toFixed(1)} tok/s | ${s.turns}T ${s.toolCalls}C | \u2191${formatTokens(s.input)} \u2193${formatTokens(s.output)} R${formatTokens(s.cacheRead)} W${formatTokens(s.cacheWrite)}${hitRateSegment} total ${formatTokens(s.totalTokens)}${costSegment} | ${wallSeconds.toFixed(1)}s`;
+
+        // Assemble
+        const segments: string[] = [
+            `TPS ${tokensPerSecond.toFixed(1)} tok/s`,
+            activityParts.join(" "),
+            tokenParts.join(" "),
+        ];
+        if (cost) segments.push(cost);
+        segments.push(`${wallSeconds.toFixed(1)}s`);
+        const message = segments.join(" | ");
         ctx.ui.notify(message, "info");
     });
 }

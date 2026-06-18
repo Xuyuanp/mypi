@@ -131,7 +131,7 @@ describe("formatUsageStats", () => {
         expect(result).toContain("R3.0k");
         expect(result).toContain("W100");
         expect(result).toContain("CH");
-        expect(result).toContain("ctx 46%/10k");
+        expect(result).toContain("46.0%/10k");
         expect(result).toContain("$0.0040");
         expect(result).not.toContain("turn");
         expect(result).not.toContain("tool");
@@ -147,7 +147,7 @@ describe("formatUsageStats", () => {
         };
         const result = formatUsageStats(usage);
         // cacheRead / (input + cacheRead + cacheWrite) = 1500/2000 = 75%
-        expect(result).toContain("CH75%");
+        expect(result).toContain("CH75.0%");
     });
 
     it("does not include turns or tool counts", () => {

@@ -514,9 +514,9 @@ export default function (pi: ExtensionAPI) {
                 const hasCacheActivity = usage.cacheRead > 0 || usage.cacheWrite > 0;
                 const hitRateSegment =
                     hasCacheActivity && promptTokens > 0
-                        ? ` ${((usage.cacheRead / promptTokens) * 100).toFixed(1)}%`
+                        ? ` CH${((usage.cacheRead / promptTokens) * 100).toFixed(1)}%`
                         : "";
-                const msg = `Ghost ping ok | \u2191${formatTokens(usage.input)} \u2193${formatTokens(usage.output)} R${formatTokens(usage.cacheRead)} W${formatTokens(usage.cacheWrite)} total ${formatTokens(usage.totalTokens)}${hitRateSegment} | $${usage.cost.total.toFixed(4)}`;
+                const msg = `Ghost ping ok | \u2191${formatTokens(usage.input)} \u2193${formatTokens(usage.output)} R${formatTokens(usage.cacheRead)} W${formatTokens(usage.cacheWrite)}${hitRateSegment} | $${usage.cost.total.toFixed(4)}`;
                 ctx.ui.notify(msg, "info");
                 return;
             }

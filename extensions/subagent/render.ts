@@ -85,12 +85,12 @@ export function formatUsageStats(usage: UsageStats, contextWindow?: number): str
         promptTokens > 0
     ) {
         tokens.push(
-            `CH${Math.round((usage.cacheReadTokens / promptTokens) * 100)}%`,
+            `CH${((usage.cacheReadTokens / promptTokens) * 100).toFixed(1)}%`,
         );
     }
     if (contextWindow && usage.contextTokens) {
-        const pct = Math.round((usage.contextTokens / contextWindow) * 100);
-        tokens.push(`ctx ${pct}%/${formatTokens(contextWindow)}`);
+        const pct = ((usage.contextTokens / contextWindow) * 100).toFixed(1);
+        tokens.push(`${pct}%/${formatTokens(contextWindow)}`);
     }
     if (tokens.length) sections.push(tokens.join(" "));
 
