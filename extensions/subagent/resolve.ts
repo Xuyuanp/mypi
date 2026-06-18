@@ -14,7 +14,7 @@
 import { randomUUID } from "node:crypto";
 import * as path from "node:path";
 
-import type { ExtensionContext, Skill } from "@earendil-works/pi-coding-agent";
+import type { Skill } from "@earendil-works/pi-coding-agent";
 import type {
     AgentSpec,
     Model,
@@ -114,14 +114,10 @@ export function resolveAgentConfig(
 /** Derive a subagent session directory and ID from the parent session. */
 export function deriveSessionPath(
     agentName: string,
-    ctx: ExtensionContext,
+    sessionFile: string | undefined,
 ): { dir: string; id: string } | undefined {
-    const parentSessionFile = ctx.sessionManager.getSessionFile();
-    if (!parentSessionFile) return undefined;
-    const dir = path.resolve(
-        parentSessionFile.slice(0, -".jsonl".length),
-        "subagent",
-    );
+    if (!sessionFile) return undefined;
+    const dir = path.resolve(sessionFile.slice(0, -".jsonl".length), "subagent");
     const id = `${agentName}-${randomUUID().slice(0, 8)}`;
     return { dir, id };
 }

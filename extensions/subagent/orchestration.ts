@@ -12,7 +12,6 @@
 import { randomUUID } from "node:crypto";
 import * as path from "node:path";
 
-import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { BackgroundManager } from "./background.js";
 import { runSubagent } from "./execute.js";
 import { persistAgent } from "./resolve.js";
@@ -107,7 +106,7 @@ export function executeBackground(
               details: SubagentDetails;
           }) => void)
         | undefined,
-    ctx: ExtensionContext,
+    cwd: string,
 ): ToolResult {
     const id = session?.id ?? `${resolvedAgent.name}-${randomUUID().slice(0, 8)}`;
 
@@ -119,7 +118,7 @@ export function executeBackground(
         ? path.join(session.dir, `${session.id}.jsonl`)
         : undefined;
 
-    const promise = runSubagent(resolvedAgent, params.task, params.cwd ?? ctx.cwd, {
+    const promise = runSubagent(resolvedAgent, params.task, params.cwd ?? cwd, {
         signal: controller.signal,
         onProgress: tracker.onProgress,
         sessionFile,
@@ -266,7 +265,7 @@ export async function executeForeground(
               details: SubagentDetails;
           }) => void)
         | undefined,
-    ctx: ExtensionContext,
+    cwd: string,
     opts?: { resumedFrom?: string; resume?: boolean },
 ): Promise<ToolResult> {
     const resumedFrom = opts?.resumedFrom;
@@ -305,17 +304,12 @@ export async function executeForeground(
         ? path.join(session.dir, `${session.id}.jsonl`)
         : undefined;
 
-    const result = await runSubagent(
-        resolvedAgent,
-        params.task,
-        params.cwd ?? ctx.cwd,
-        {
-            signal,
-            onProgress: tracker.onProgress,
-            sessionFile,
-            resume: opts?.resume,
-        },
-    );
+    const result = await runSubagent(resolvedAgent, params.task, params.cwd ?? cwd, {
+        signal,
+        onProgress: tracker.onProgress,
+        sessionFile,
+        resume: opts?.resume,
+    });
 
     const sessionHeader = session ? `[subagent: ${session.id}]\n\n` : "";
 

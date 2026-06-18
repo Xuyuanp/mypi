@@ -226,7 +226,10 @@ export default function (pi: ExtensionAPI) {
             }
 
             const resolvedAgent = resolved;
-            const session = deriveSessionPath(resolvedAgent.name, ctx);
+            const session = deriveSessionPath(
+                resolvedAgent.name,
+                ctx.sessionManager.getSessionFile(),
+            );
 
             if (params.background) {
                 return executeBackground(
@@ -235,7 +238,7 @@ export default function (pi: ExtensionAPI) {
                     session,
                     bgManager,
                     onUpdate,
-                    ctx,
+                    ctx.cwd,
                 );
             }
 
@@ -245,7 +248,7 @@ export default function (pi: ExtensionAPI) {
                 session,
                 signal,
                 onUpdate,
-                ctx,
+                ctx.cwd,
             );
         },
 
@@ -392,7 +395,7 @@ export default function (pi: ExtensionAPI) {
                 session,
                 signal,
                 onUpdate,
-                ctx,
+                ctx.cwd,
                 { resumedFrom: id, resume: true },
             );
         },
