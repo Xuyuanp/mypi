@@ -648,7 +648,7 @@ describe("createBackgroundManager", () => {
         } as any;
     }
 
-    it("register updates widget (sets status)", () => {
+    it("register updates widget", () => {
         const pi = makeMockPi();
         const mgr = createBackgroundManager(pi);
         const ctx = makeMockCtx();
@@ -658,7 +658,6 @@ describe("createBackgroundManager", () => {
         mgr.register(entry);
 
         expect(mgr.agents.size).toBe(1);
-        expect(ctx.ui.setStatus).toHaveBeenCalled();
         expect(ctx.ui.setWidget).toHaveBeenCalled();
     });
 
@@ -676,9 +675,8 @@ describe("createBackgroundManager", () => {
         mgr.remove(entry.id);
 
         expect(mgr.agents.size).toBe(0);
-        // When count goes to 0, widget is cleared and status is cleared
+        // When count goes to 0, widget is cleared
         expect(ctx.ui.setWidget).toHaveBeenCalledWith("subagent-bg", undefined);
-        expect(ctx.ui.setStatus).toHaveBeenCalledWith("subagent-bg", undefined);
     });
 
     it("cancel kills and removes, returns false for unknown IDs", () => {

@@ -11,7 +11,7 @@ import type {
     ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import { Container, TruncatedText } from "@earendil-works/pi-tui";
-import { ICON_RUNNING, renderSubagentResult } from "./render.js";
+import { renderSubagentResult } from "./render.js";
 import type { AgentRunResult, BackgroundAgent, SubagentDetails } from "./types.js";
 
 // ── Constants ────────────────────────────────────────────────────────
@@ -89,15 +89,8 @@ export function createBackgroundManager(pi: ExtensionAPI): BackgroundManager {
                 ctx.ui.setWidget(BG_WIDGET_KEY, undefined);
                 widgetActive = false;
             }
-            ctx.ui.setStatus(BG_WIDGET_KEY, undefined);
             return;
         }
-
-        // Update status count
-        ctx.ui.setStatus(
-            BG_WIDGET_KEY,
-            ctx.ui.theme.fg("accent", `${ICON_RUNNING} ${count} bg`),
-        );
 
         // Create widget only on first spawn (0 -> 1 transition)
         if (!widgetActive) {
@@ -210,7 +203,6 @@ export function createBackgroundManager(pi: ExtensionAPI): BackgroundManager {
             // Clear widget and status before killing (so UI is clean immediately)
             if (currentCtx) {
                 currentCtx.ui.setWidget(BG_WIDGET_KEY, undefined);
-                currentCtx.ui.setStatus(BG_WIDGET_KEY, undefined);
             }
             widgetActive = false;
             currentCtx = null;
