@@ -15,7 +15,7 @@ import * as path from "node:path";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { BackgroundManager } from "./background.js";
 import { runSubagent } from "./execute.js";
-import { persistAgent, resolveContextWindow } from "./resolve.js";
+import { persistAgent } from "./resolve.js";
 import { createProgressTracker } from "./tracker.js";
 import type {
     AgentRunResult,
@@ -115,8 +115,6 @@ export function executeBackground(
     const tracker = createProgressTracker({
         onChange: () => bgManager.updateWidget(),
     });
-    const contextWindow = resolveContextWindow(resolvedAgent.model, ctx);
-
     const sessionFile = session
         ? path.join(session.dir, `${session.id}.jsonl`)
         : undefined;
@@ -148,7 +146,6 @@ export function executeBackground(
         execStatuses: Object.fromEntries(tracker.execStatuses),
         session,
         resolvedAgent: persistAgent(resolvedAgent),
-        contextWindow,
     });
 
     // When done, inject result and clean up
@@ -272,7 +269,6 @@ export async function executeForeground(
     ctx: ExtensionContext,
     opts?: { resumedFrom?: string; resume?: boolean },
 ): Promise<ToolResult> {
-    const contextWindow = resolveContextWindow(resolvedAgent.model, ctx);
     const resumedFrom = opts?.resumedFrom;
 
     const makeDetails = (result: AgentRunResult): SubagentDetails => ({
@@ -281,7 +277,6 @@ export async function executeForeground(
         execStatuses: Object.fromEntries(tracker.execStatuses),
         session,
         resolvedAgent: persistAgent(resolvedAgent),
-        contextWindow,
         ...(resumedFrom ? { resumedFrom } : {}),
     });
 

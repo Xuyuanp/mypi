@@ -179,7 +179,6 @@ export interface SubagentDetails {
     execStatuses?: Record<string, boolean>;
     session?: { dir: string; id: string };
     resolvedAgent?: PersistedResolvedAgent;
-    contextWindow?: number;
     // background-specific (undefined for foreground)
     description?: string;
     cancelled?: boolean;

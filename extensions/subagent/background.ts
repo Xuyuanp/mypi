@@ -248,7 +248,6 @@ export function createBackgroundManager(pi: ExtensionAPI): BackgroundManager {
                         execStatuses: details?.execStatuses ?? {},
                         session: details?.session,
                         resolvedAgent: details?.resolvedAgent,
-                        contextWindow: details?.contextWindow,
                     },
                 },
                 {

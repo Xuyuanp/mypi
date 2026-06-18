@@ -448,7 +448,7 @@ export function renderSubagentResult(
     const lastLine = buildLastLine([
         agentId,
         formatActivity(r.usage.turns, toolCallItems.length),
-        formatUsageStats(r.usage, details.contextWindow),
+        formatUsageStats(r.usage, details.resolvedAgent?.model?.contextWindow),
         r.durationMs ? formatDuration(r.durationMs) : undefined,
     ]);
     const finalOutput = getFinalOutput(r.messages);

@@ -109,14 +109,6 @@ export function resolveAgentConfig(
     };
 }
 
-/** Resolve the context window stored on a structured model. */
-export function resolveContextWindow(
-    model: ResolvedAgent["model"] | undefined,
-    ctx: ExtensionContext,
-): number | undefined {
-    return model?.contextWindow ?? ctx.model?.contextWindow;
-}
-
 // ── Session path derivation ──────────────────────────────────────────
 
 /** Derive a subagent session directory and ID from the parent session. */

@@ -1,8 +1,8 @@
 /**
  * Unit tests for resolve.ts pure functions.
  *
- * Covers: resolveSkills, resolveAgentConfig, resolveContextWindow,
- * persistAgent, hydrateResolvedAgent.
+ * Covers: resolveSkills, resolveAgentConfig, persistAgent,
+ * hydrateResolvedAgent.
  */
 
 import { describe, expect, it } from "vitest";
@@ -10,7 +10,6 @@ import {
     hydrateResolvedAgent,
     persistAgent,
     resolveAgentConfig,
-    resolveContextWindow,
     resolveSkills,
 } from "../extensions/subagent/resolve.js";
 import type {
@@ -337,32 +336,6 @@ describe("resolveAgentConfig", () => {
         if (typeof result === "object") {
             expect(result.skillPaths).toBeUndefined();
         }
-    });
-});
-
-// ── resolveContextWindow ─────────────────────────────────────────────
-
-describe("resolveContextWindow", () => {
-    it("returns parent model context window when model is undefined", () => {
-        const ctx = makeMockCtx();
-        expect(resolveContextWindow(undefined, ctx)).toBe(200000);
-    });
-
-    it("returns the structured model context window", () => {
-        const ctx = makeMockCtx();
-        const model = parseModelString("deepseek/deepseek-v4-flash", 100000)!;
-        expect(resolveContextWindow(model, ctx)).toBe(100000);
-    });
-
-    it("returns undefined when model and parent model are unavailable", () => {
-        const ctx = makeMockCtx({ model: null });
-        expect(resolveContextWindow(undefined, ctx)).toBeUndefined();
-    });
-
-    it("falls back to parent context window when structured model has none", () => {
-        const ctx = makeMockCtx();
-        const model = parseModelString("unknown/provider")!;
-        expect(resolveContextWindow(model, ctx)).toBe(200000);
     });
 });
 
