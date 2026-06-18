@@ -23,15 +23,17 @@ import { discoverAgents } from "./agents.js";
 import { BACKGROUND_RESULT_TYPE, createBackgroundManager } from "./background.js";
 import { registerSubagentCommand } from "./command.js";
 import {
-    deriveSessionPath,
     executeBackground,
     executeForeground,
-    hydrateResolvedAgent,
     makeErrorToolResult,
     makeResumeErrorResult,
-    resolveAgentConfig,
 } from "./orchestration.js";
 import { renderSubagentResult } from "./render.js";
+import {
+    deriveSessionPath,
+    hydrateResolvedAgent,
+    resolveAgentConfig,
+} from "./resolve.js";
 import { lookupSubagentSession } from "./resume.js";
 import type { AgentSpec, PersistedResolvedAgent, SubagentDetails } from "./types.js";
 import { formatModelString } from "./types.js";

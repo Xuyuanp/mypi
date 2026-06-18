@@ -48,7 +48,7 @@ import {
 } from "@earendil-works/pi-tui";
 import type { BackgroundManager } from "./background.js";
 import { buildSubagentCommand } from "./execute.js";
-import { hydrateResolvedAgent } from "./orchestration.js";
+import { hydrateResolvedAgent } from "./resolve.js";
 import type { LookupEntry } from "./resume.js";
 import {
     type CompletedSubagent,
