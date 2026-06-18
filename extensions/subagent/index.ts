@@ -20,7 +20,7 @@ import type { ExtensionAPI, Skill } from "@earendil-works/pi-coding-agent";
 import { Container, Spacer, Text } from "@earendil-works/pi-tui";
 
 import { discoverAgents } from "./agents.js";
-import { BACKGROUND_RESULT_TYPE, createBackgroundManager } from "./background.js";
+import { createBackgroundManager } from "./background.js";
 import { registerSubagentCommand } from "./command.js";
 import {
     executeBackground,
@@ -37,6 +37,7 @@ import {
 import { lookupSubagentSession } from "./resume.js";
 import type { AgentSpec, PersistedResolvedAgent, SubagentDetails } from "./types.js";
 import {
+    BACKGROUND_RESULT_TYPE,
     formatModelString,
     ResumeParamsSchema,
     SubagentParamsSchema,

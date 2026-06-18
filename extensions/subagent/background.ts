@@ -12,13 +12,11 @@ import type { Component, TUI } from "@earendil-works/pi-tui";
 import { Container, TruncatedText } from "@earendil-works/pi-tui";
 import { renderSubagentResult } from "./render.js";
 import type { AgentRunResult, BackgroundAgent, SubagentDetails } from "./types.js";
+import { BACKGROUND_RESULT_TYPE } from "./types.js";
 
 // ── Constants ────────────────────────────────────────────────────────
 
-/** Custom message type used for background agent result injection. */
-export const BACKGROUND_RESULT_TYPE = "subagent_background_result";
-
-/** TUI widget and status bar key. */
+/** TUI widget key. */
 const BG_WIDGET_KEY = "subagent-bg";
 
 const MAX_ENTRIES = 5;

@@ -24,10 +24,7 @@ export interface Model {
 }
 
 /** Parse a provider/name[:thinking] model string into its structured form. */
-export function parseModelString(
-    modelStr: string,
-    contextWindow: number | undefined = undefined,
-): Model | undefined {
+export function parseModelString(modelStr: string): Model | undefined {
     const slash = modelStr.indexOf("/");
     if (slash === -1) return undefined;
     const provider = modelStr.slice(0, slash);
@@ -40,11 +37,16 @@ export function parseModelString(
             provider,
             name: match[1],
             thinkingLevel: match[2],
-            contextWindow,
+            contextWindow: undefined,
         };
     }
 
-    return { provider, name: rest, thinkingLevel: undefined, contextWindow };
+    return {
+        provider,
+        name: rest,
+        thinkingLevel: undefined,
+        contextWindow: undefined,
+    };
 }
 
 /** Format a structured model back into the pi CLI provider/name[:thinking] form. */
@@ -301,6 +303,11 @@ export interface ToolResult {
     details: SubagentDetails | undefined;
     isError?: boolean;
 }
+
+// ── Constants ────────────────────────────────────────────────────────
+
+/** Custom message type used for background agent result injection. */
+export const BACKGROUND_RESULT_TYPE = "subagent_background_result";
 
 // ── Value utilities ──────────────────────────────────────────────────
 

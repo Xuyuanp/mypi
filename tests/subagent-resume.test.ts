@@ -9,7 +9,6 @@
  */
 
 import { describe, expect, it } from "vitest";
-import { BACKGROUND_RESULT_TYPE } from "../extensions/subagent/background.js";
 import { createZeroUsage } from "../extensions/subagent/index.js";
 import {
     type LookupEntry,
@@ -20,6 +19,7 @@ import type {
     AgentRunResult,
     SubagentDetails,
 } from "../extensions/subagent/types.js";
+import { BACKGROUND_RESULT_TYPE } from "../extensions/subagent/types.js";
 
 // ── Helpers ──────────────────────────────────────────────────────────
 

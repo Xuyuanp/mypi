@@ -5,8 +5,8 @@
  * by ID. Extracted as a testable pure function.
  */
 
-import { BACKGROUND_RESULT_TYPE } from "./background.js";
 import type { SubagentDetails, SubagentToolParams } from "./types.js";
+import { BACKGROUND_RESULT_TYPE } from "./types.js";
 
 // ── Types ────────────────────────────────────────────────────────────
 
