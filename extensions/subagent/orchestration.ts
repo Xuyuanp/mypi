@@ -10,6 +10,7 @@
  */
 
 import { randomUUID } from "node:crypto";
+import * as fs from "node:fs";
 import * as path from "node:path";
 
 import type { BackgroundManager } from "./background.js";
@@ -24,6 +25,26 @@ import type {
     ToolResult,
 } from "./types.js";
 import { getFinalOutput, isSubagentError, ZERO_USAGE } from "./types.js";
+
+// ── Session forking ──────────────────────────────────────────────────
+
+/**
+ * Copy originalFile to path.join(newSession.dir, newSession.id + ".jsonl").
+ * Creates newSession.dir if it does not exist.
+ * Uses COPYFILE_EXCL to fail atomically if the target already exists.
+ * Throws on any I/O failure.
+ */
+export async function forkSubagentSession(
+    originalFile: string,
+    newSession: { dir: string; id: string },
+): Promise<void> {
+    await fs.promises.mkdir(newSession.dir, { recursive: true });
+    await fs.promises.copyFile(
+        originalFile,
+        path.join(newSession.dir, `${newSession.id}.jsonl`),
+        fs.constants.COPYFILE_EXCL,
+    );
+}
 
 // ── Result helpers ───────────────────────────────────────────────────
 

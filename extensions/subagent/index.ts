@@ -25,11 +25,13 @@ import { registerSubagentCommand } from "./command.js";
 import {
     executeBackground,
     executeForeground,
+    forkSubagentSession,
     makeErrorToolResult,
     makeResumeErrorResult,
 } from "./orchestration.js";
 import { renderSubagentResult } from "./render.js";
 import {
+    deriveForkSessionPath,
     deriveSessionPath,
     hydrateResolvedAgent,
     resolveAgentConfig,
@@ -343,6 +345,14 @@ export default function (pi: ExtensionAPI) {
                 );
             }
 
+            const newSession = deriveForkSessionPath(session, resolvedAgent.name);
+            try {
+                await forkSubagentSession(sessionFile, newSession);
+            } catch (err: unknown) {
+                const msg = err instanceof Error ? err.message : "unknown error";
+                return makeResumeErrorResult(`Failed to fork session: ${msg}`);
+            }
+
             return executeForeground(
                 resolvedAgent,
                 {
@@ -352,7 +362,7 @@ export default function (pi: ExtensionAPI) {
                     task: follow_up,
                     background: false,
                 },
-                session,
+                newSession,
                 signal,
                 onUpdate,
                 ctx.cwd,

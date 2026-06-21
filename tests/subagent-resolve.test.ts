@@ -7,6 +7,7 @@
 
 import { describe, expect, it } from "vitest";
 import {
+    deriveForkSessionPath,
     hydrateResolvedAgent,
     persistAgent,
     resolveAgentConfig,
@@ -422,5 +423,43 @@ describe("hydrateResolvedAgent", () => {
         ];
         const result = hydrateResolvedAgent(persisted, agents);
         expect(result!.systemPrompt).toBe("Updated prompt.");
+    });
+});
+
+// ── deriveForkSessionPath ──────────────────────────────────────────
+
+describe("deriveForkSessionPath", () => {
+    const originalSession = {
+        dir: "/tmp/sessions/abc123/subagent",
+        id: "scout-a1b2c3d4",
+    };
+
+    it("returns same dir with new ID", () => {
+        const result = deriveForkSessionPath(originalSession, "scout");
+        expect(result.dir).toBe(originalSession.dir);
+        expect(result.id).not.toBe(originalSession.id);
+        expect(result.id).toMatch(/^scout-[0-9a-f]{8}$/);
+    });
+
+    it("generates unique IDs across calls", () => {
+        const ids = new Set<string>();
+        for (let i = 0; i < 50; i++) {
+            ids.add(deriveForkSessionPath(originalSession, "scout").id);
+        }
+        expect(ids.size).toBe(50);
+    });
+
+    it("uses the provided agent name as prefix", () => {
+        const result = deriveForkSessionPath(originalSession, "worker");
+        expect(result.id).toMatch(/^worker-[0-9a-f]{8}$/);
+    });
+
+    it("never returns the original session ID", () => {
+        // With 8 hex chars the collision chance is ~1/4 billion per call,
+        // but the retry loop guarantees it never happens.
+        for (let i = 0; i < 100; i++) {
+            const result = deriveForkSessionPath(originalSession, "scout");
+            expect(result.id).not.toBe(originalSession.id);
+        }
     });
 });

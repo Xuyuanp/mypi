@@ -122,6 +122,22 @@ export function deriveSessionPath(
     return { dir, id };
 }
 
+/**
+ * Derive a fork session path in the same directory as the original.
+ * Uses the same ID scheme as deriveSessionPath: `${agentName}-${randomUUID().slice(0, 8)}`.
+ * Retries if the generated ID matches originalSession.id.
+ */
+export function deriveForkSessionPath(
+    originalSession: { dir: string; id: string },
+    agentName: string,
+): { dir: string; id: string } {
+    let id: string;
+    do {
+        id = `${agentName}-${randomUUID().slice(0, 8)}`;
+    } while (id === originalSession.id);
+    return { dir: originalSession.dir, id };
+}
+
 // ── Persistence lifecycle ────────────────────────────────────────────
 
 /** Strip systemPrompt from ResolvedAgent for session persistence. */

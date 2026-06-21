@@ -440,13 +440,19 @@ export function renderSubagentResult(
 
     // ── Shared data ──────────────────────────────────────────────────
     const agentId = details.session?.id;
+    const resumedFrom = details.resumedFrom;
+    const sessionLabel = agentId
+        ? resumedFrom
+            ? `${agentId} \u2190 ${resumedFrom}`
+            : agentId
+        : undefined;
     const execStatusMap = new Map(Object.entries(details.execStatuses ?? {}));
     const displayItems = getDisplayItems(r.messages, execStatusMap);
     const toolCallItems = displayItems.filter(
         (i) => i.type === "toolCall",
     ) as (DisplayItem & { type: "toolCall" })[];
     const lastLine = buildLastLine([
-        agentId,
+        sessionLabel,
         formatActivity(r.usage.turns, toolCallItems.length),
         formatUsageStats(r.usage, details.resolvedAgent?.model?.contextWindow),
         r.durationMs ? formatDuration(r.durationMs) : undefined,

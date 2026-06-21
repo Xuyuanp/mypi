@@ -4,8 +4,12 @@
  * Covers: getResultOutput, makeErrorToolResult, makeResumeErrorResult.
  */
 
-import { describe, expect, it } from "vitest";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
+    forkSubagentSession,
     getResultOutput,
     makeErrorToolResult,
     makeResumeErrorResult,
@@ -230,5 +234,82 @@ describe("makeResumeErrorResult", () => {
         expect(result.content[0].text).toBe("");
         expect(result.isError).toBe(true);
         expect(result.details).toBeUndefined();
+    });
+});
+
+// ── forkSubagentSession ────────────────────────────────────────────
+
+describe("forkSubagentSession", () => {
+    let tmpDir: string;
+
+    beforeEach(() => {
+        tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "fork-test-"));
+    });
+
+    afterEach(() => {
+        fs.rmSync(tmpDir, { recursive: true, force: true });
+    });
+
+    it("creates an exact copy of the original file", async () => {
+        const originalContent =
+            '{"type":"session","id":"uuid1"}\n{"type":"message","id":"a"}\n';
+        const originalFile = path.join(tmpDir, "scout-abc.jsonl");
+        fs.writeFileSync(originalFile, originalContent);
+
+        const newSession = { dir: tmpDir, id: "scout-def" };
+        await forkSubagentSession(originalFile, newSession);
+
+        const forkFile = path.join(tmpDir, "scout-def.jsonl");
+        expect(fs.existsSync(forkFile)).toBe(true);
+        expect(fs.readFileSync(forkFile, "utf-8")).toBe(originalContent);
+    });
+
+    it("does not modify the original file", async () => {
+        const originalContent = '{"type":"session","id":"uuid1"}\n';
+        const originalFile = path.join(tmpDir, "scout-abc.jsonl");
+        fs.writeFileSync(originalFile, originalContent);
+
+        const newSession = { dir: tmpDir, id: "scout-def" };
+        await forkSubagentSession(originalFile, newSession);
+
+        expect(fs.readFileSync(originalFile, "utf-8")).toBe(originalContent);
+    });
+
+    it("creates directory if missing", async () => {
+        const originalFile = path.join(tmpDir, "scout-abc.jsonl");
+        fs.writeFileSync(originalFile, "content\n");
+
+        const nestedDir = path.join(tmpDir, "nested", "deep");
+        const newSession = { dir: nestedDir, id: "scout-def" };
+        await forkSubagentSession(originalFile, newSession);
+
+        const forkFile = path.join(nestedDir, "scout-def.jsonl");
+        expect(fs.existsSync(forkFile)).toBe(true);
+        expect(fs.readFileSync(forkFile, "utf-8")).toBe("content\n");
+    });
+
+    it("refuses to overwrite an existing target", async () => {
+        const originalFile = path.join(tmpDir, "scout-abc.jsonl");
+        fs.writeFileSync(originalFile, "original\n");
+
+        const targetFile = path.join(tmpDir, "scout-def.jsonl");
+        fs.writeFileSync(targetFile, "existing\n");
+
+        const newSession = { dir: tmpDir, id: "scout-def" };
+        await expect(
+            forkSubagentSession(originalFile, newSession),
+        ).rejects.toThrow();
+
+        // Existing file unchanged
+        expect(fs.readFileSync(targetFile, "utf-8")).toBe("existing\n");
+    });
+
+    it("throws when original file does not exist", async () => {
+        const originalFile = path.join(tmpDir, "nonexistent.jsonl");
+        const newSession = { dir: tmpDir, id: "scout-def" };
+
+        await expect(
+            forkSubagentSession(originalFile, newSession),
+        ).rejects.toThrow();
     });
 });

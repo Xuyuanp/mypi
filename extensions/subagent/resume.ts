@@ -92,14 +92,18 @@ export function listCompletedSubagents(
                 for (const block of msg.content as any[]) {
                     if (
                         block.type === "toolCall" &&
-                        block.toolName === "subagent" &&
+                        (block.toolName === "subagent" ||
+                            block.toolName === "subagent_resume") &&
                         block.id &&
                         block.arguments
                     ) {
                         toolCallParamsMap.set(block.id, block.arguments);
                     }
                 }
-            } else if (msg.role === "toolResult" && msg.toolName === "subagent") {
+            } else if (
+                msg.role === "toolResult" &&
+                (msg.toolName === "subagent" || msg.toolName === "subagent_resume")
+            ) {
                 const details = msg.details as SubagentDetails | undefined;
                 if (!details?.session?.id) continue;
 
