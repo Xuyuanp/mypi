@@ -8,24 +8,22 @@
  */
 
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { collectReviewFiles } from "../extensions/interactive-shell.js";
 
+const GIT_ENV = {
+    ...process.env,
+    GIT_AUTHOR_NAME: "test",
+    GIT_AUTHOR_EMAIL: "test@example.com",
+    GIT_COMMITTER_NAME: "test",
+    GIT_COMMITTER_EMAIL: "test@example.com",
+};
+
 function git(cwd: string, ...args: string[]): void {
-    const result = spawnSync("git", args, {
-        cwd,
-        encoding: "utf-8",
-        env: {
-            ...process.env,
-            GIT_AUTHOR_NAME: "test",
-            GIT_AUTHOR_EMAIL: "test@example.com",
-            GIT_COMMITTER_NAME: "test",
-            GIT_COMMITTER_EMAIL: "test@example.com",
-        },
-    });
+    const result = spawnSync("git", args, { cwd, encoding: "utf-8", env: GIT_ENV });
     if (result.status !== 0) {
         throw new Error(
             `git ${args.join(" ")} failed: ${result.stderr || result.stdout}`,
@@ -35,13 +33,13 @@ function git(cwd: string, ...args: string[]): void {
 
 describe("collectReviewFiles", () => {
     let repo: string;
+    let nonGitDir: string;
 
-    beforeEach(() => {
+    beforeAll(() => {
+        // One-time: create the baseline repo with committed files.
         repo = mkdtempSync(join(tmpdir(), "pi-nvim-review-test-"));
         git(repo, "init", "-q");
-        // Disable any user/system gitignore_global interference.
         git(repo, "config", "commit.gpgsign", "false");
-
         mkdirSync(join(repo, "sub"), { recursive: true });
         mkdirSync(join(repo, "other"), { recursive: true });
         writeFileSync(join(repo, "sub", "tracked.txt"), "v1\n");
@@ -49,19 +47,30 @@ describe("collectReviewFiles", () => {
         writeFileSync(join(repo, "root-tracked.txt"), "v1\n");
         git(repo, "add", "-A");
         git(repo, "commit", "-q", "-m", "init");
+
+        // One-time: directory outside any git repo.
+        nonGitDir = mkdtempSync(join(tmpdir(), "pi-nvim-review-outside-"));
     });
 
     afterEach(() => {
+        // Reset working tree without spawning git (saves ~20ms per test).
+        writeFileSync(join(repo, "sub", "tracked.txt"), "v1\n");
+        writeFileSync(join(repo, "other", "tracked.txt"), "v1\n");
+        writeFileSync(join(repo, "root-tracked.txt"), "v1\n");
+        // Remove untracked files that tests may have created.
+        for (const f of ["sub/untracked.txt", "other/untracked.txt"]) {
+            const p = join(repo, f);
+            if (existsSync(p)) rmSync(p);
+        }
+    });
+
+    afterAll(() => {
         rmSync(repo, { recursive: true, force: true });
+        rmSync(nonGitDir, { recursive: true, force: true });
     });
 
     it("returns [] when cwd is not in a git repo", () => {
-        const outside = mkdtempSync(join(tmpdir(), "pi-nvim-review-outside-"));
-        try {
-            expect(collectReviewFiles(outside)).toEqual([]);
-        } finally {
-            rmSync(outside, { recursive: true, force: true });
-        }
+        expect(collectReviewFiles(nonGitDir)).toEqual([]);
     });
 
     it("returns [] when repo is clean", () => {
@@ -84,13 +93,10 @@ describe("collectReviewFiles", () => {
         writeFileSync(join(repo, "sub", "untracked.txt"), "new\n");
 
         const files = collectReviewFiles(join(repo, "sub"));
-        // Regression guard: must NOT be "sub/tracked.txt" — that's the
-        // pre-fix bug where nvim tried to open <cwd>/sub/tracked.txt.
         expect(files.sort()).toEqual(["tracked.txt", "untracked.txt"].sort());
     });
 
     it("from subdir: omits changes outside the subdir subtree", () => {
-        // Modify a file in a sibling dir, plus one in our subdir.
         writeFileSync(join(repo, "other", "tracked.txt"), "v2\n");
         writeFileSync(join(repo, "root-tracked.txt"), "v2\n");
         writeFileSync(join(repo, "sub", "tracked.txt"), "v2\n");

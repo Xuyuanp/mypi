@@ -26,4 +26,8 @@ export default defineConfig({
             ),
         },
     },
+    test: {
+        isolate: false,
+        maxWorkers: 1,
+    },
 });
