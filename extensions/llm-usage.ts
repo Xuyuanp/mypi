@@ -1,92 +1,122 @@
 /**
- * Quota Usage Extension
+ * Multi-provider usage fetcher.
  *
- * Fetches LLM budget usage from the company AI gateway on each turn_end
- * and displays usage percentage and dollars in the footer status bar.
+ * Displays the current session model provider's usage/balance in the
+ * footer status bar. Uses a fetcher registry keyed by provider name —
+ * adding a new provider means appending one entry to
+ * `BALANCE_FETCHERS`.
  *
- * Requires env var: LLM_BRIDGE_API_KEY
+ * DeepSeek is the first (and only) provider in this version.
+ * - Endpoint: GET https://api.deepseek.com/user/balance
+ * - Auth: Authorization: Bearer ${apiKey}
  */
 
-import type { ExtensionAPI, ThemeColor } from "@earendil-works/pi-coding-agent";
+import type {
+    ExtensionAPI,
+    ExtensionContext,
+    ThemeColor,
+} from "@earendil-works/pi-coding-agent";
 
-const KEY_INFO_URL = "https://llm-bridge.tigerbrokers.net/key/info";
-const STATUS_KEY = "quota-usage";
+// --- Types ---
 
-interface KeyInfoResponse {
-    info: {
-        spend: number;
-        max_budget: number;
-    };
+interface BalanceResult {
+    text: string;
+    status: "ok" | "warning";
 }
 
-async function fetchUsage(
-    apiKey: string,
-): Promise<{ spend: number; maxBudget: number }> {
-    const response = await fetch(KEY_INFO_URL, {
-        method: "GET",
-        headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${apiKey}`,
-        },
+interface DeepseekBalanceResponse {
+    is_available: boolean;
+    balance_infos: Array<{
+        currency: "CNY" | "USD";
+        total_balance: string;
+        granted_balance: string;
+        topped_up_balance: string;
+    }>;
+}
+
+interface BalanceFetcherDef {
+    label: string;
+    getBalance(apiKey: string): Promise<BalanceResult>;
+}
+
+// --- Constants ---
+
+const STATUS_KEY = "provider-usage";
+
+const BALANCE_FETCHERS: Record<string, BalanceFetcherDef> = {
+    deepseek: { label: "DS", getBalance: getDeepseekBalance },
+};
+
+// --- DeepSeek fetcher ---
+
+async function getDeepseekBalance(apiKey: string): Promise<BalanceResult> {
+    const response = await fetch("https://api.deepseek.com/user/balance", {
+        headers: { Authorization: `Bearer ${apiKey}` },
     });
 
     if (!response.ok) {
-        throw new Error(`Key info API returned ${response.status}`);
+        throw new Error(`DeepSeek balance API returned ${response.status}`);
     }
 
-    const data = (await response.json()) as KeyInfoResponse;
-    return { spend: data.info.spend, maxBudget: data.info.max_budget };
+    const data = (await response.json()) as DeepseekBalanceResponse;
+
+    const first = data.balance_infos?.[0];
+    if (!first) {
+        throw new Error("DeepSeek balance_infos is empty");
+    }
+
+    const symbol = first.currency === "USD" ? "$" : "¥";
+
+    return {
+        text: `${symbol}${first.total_balance}`,
+        status: data.is_available ? "ok" : "warning",
+    };
 }
 
-function formatStatus(
-    usage: { spend: number; maxBudget: number },
-    theme: { fg: (color: ThemeColor, text: string) => string },
+// --- Status bar formatting ---
+
+function formatUsage(
+    text: string,
+    status: "ok" | "warning",
+    theme: {
+        fg: (color: ThemeColor, text: string) => string;
+    },
 ): string {
-    const label = theme.fg("dim", "Quota:");
-
-    if (usage.maxBudget <= 0) {
-        return `${label}${theme.fg("dim", " N/A")}`;
-    }
-
-    const pctNum = (usage.spend / usage.maxBudget) * 100;
-    const percent = pctNum.toFixed(1);
-
-    const color = pctNum > 100 ? "error" : pctNum >= 90 ? "warning" : "success";
-
-    const pct = theme.fg(color, `${percent}%`);
-    const dollars = theme.fg(
-        "dim",
-        `($${usage.spend.toFixed(0)}/$${usage.maxBudget.toFixed(0)})`,
-    );
-
-    return `${label} ${pct}${dollars}`;
+    const color = status === "ok" ? "success" : "warning";
+    return theme.fg(color, text);
 }
+
+// --- Update logic ---
+
+async function updateUsage(ctx: ExtensionContext): Promise<void> {
+    if (!ctx.hasUI) return;
+
+    const model = ctx.model;
+    if (!model) return;
+
+    const fetcherDef = BALANCE_FETCHERS[model.provider];
+    if (!fetcherDef) return;
+
+    const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
+    if (!auth.ok) return;
+
+    const label = fetcherDef.label;
+
+    try {
+        const result = await fetcherDef.getBalance(auth.apiKey ?? "");
+        const text = `${label} ${result.text}`;
+        ctx.ui.setStatus(STATUS_KEY, formatUsage(text, result.status, ctx.ui.theme));
+    } catch {
+        ctx.ui.setStatus(
+            STATUS_KEY,
+            ctx.ui.theme.fg("error", `${label} fetch failed`),
+        );
+    }
+}
+
+// --- Extension entry point ---
 
 export default function (pi: ExtensionAPI) {
-    const enabled = process.env.PI_TIGER_LLM_QUOTA;
-    if (!enabled || enabled === "0" || enabled === "false") return;
-    async function updateUsage(ctx: {
-        hasUI: boolean;
-        ui: {
-            setStatus: (key: string, value: string | undefined) => void;
-            theme: { fg: (color: ThemeColor, text: string) => string };
-        };
-    }): Promise<void> {
-        if (!ctx.hasUI) return;
-        const apiKey = process.env.LLM_BRIDGE_API_KEY;
-        if (!apiKey) return;
-
-        try {
-            const usage = await fetchUsage(apiKey);
-            ctx.ui.setStatus(STATUS_KEY, formatStatus(usage, ctx.ui.theme));
-        } catch {
-            ctx.ui.setStatus(
-                STATUS_KEY,
-                ctx.ui.theme.fg("error", "Quota: fetch failed"),
-            );
-        }
-    }
-
     pi.on("session_start", async (_event, ctx) => {
         await updateUsage(ctx);
     });
