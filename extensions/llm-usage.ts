@@ -97,13 +97,27 @@ async function updateUsage(ctx: ExtensionContext): Promise<void> {
     const fetcherDef = BALANCE_FETCHERS[model.provider];
     if (!fetcherDef) return;
 
+    const label = fetcherDef.label;
+
     const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
     if (!auth.ok) return;
 
-    const label = fetcherDef.label;
+    // getApiKeyAndHeaders doesn't fall back to env vars (includeFallback: false),
+    // so resolve the key separately if missing.
+    const apiKey =
+        auth.apiKey ??
+        (await ctx.modelRegistry.getApiKeyForProvider(model.provider));
+
+    if (!apiKey) {
+        ctx.ui.setStatus(
+            STATUS_KEY,
+            ctx.ui.theme.fg("error", `${label} no API key`),
+        );
+        return;
+    }
 
     try {
-        const result = await fetcherDef.getBalance(auth.apiKey ?? "");
+        const result = await fetcherDef.getBalance(apiKey);
         const text = `${label} ${result.text}`;
         ctx.ui.setStatus(STATUS_KEY, formatUsage(text, result.status, ctx.ui.theme));
     } catch {

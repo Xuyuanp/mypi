@@ -13,13 +13,15 @@ const piCodingAgentModules = resolve(
     "node_modules/@earendil-works/pi-coding-agent/node_modules",
 );
 
+const piAiDir = resolve(piCodingAgentModules, "@earendil-works/pi-ai");
+
 export default defineConfig({
     resolve: {
         alias: {
-            "@earendil-works/pi-ai": resolve(
-                piCodingAgentModules,
-                "@earendil-works/pi-ai/dist/index.js",
-            ),
+            // compat is a strict superset of the root entrypoint.
+            // Both aliases are needed: explicit compat imports and bare root imports.
+            "@earendil-works/pi-ai/compat": resolve(piAiDir, "dist/compat.js"),
+            "@earendil-works/pi-ai": resolve(piAiDir, "dist/compat.js"),
             "@earendil-works/pi-agent-core": resolve(
                 piCodingAgentModules,
                 "@earendil-works/pi-agent-core/dist/index.js",

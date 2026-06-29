@@ -6,7 +6,7 @@
  *   using a cheap LLM call, show questionnaire UI, send answers back.
  */
 
-import { completeSimple } from "@earendil-works/pi-ai";
+import { completeSimple } from "@earendil-works/pi-ai/compat";
 import type {
     ExtensionAPI,
     ExtensionCommandContext,
