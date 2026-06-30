@@ -10,13 +10,15 @@
 import { describe, expect, it } from "vitest";
 import {
     buildAgentRows,
-    buildTmuxArgs,
     COL_GAP,
     clamp,
     computeColumnWidths,
-    type PaneDirection,
-    shellQuote,
 } from "../extensions/subagent/command.js";
+import {
+    buildTmuxArgs,
+    shellQuote,
+    type TmuxDirection,
+} from "../extensions/subagent/multiplexer.js";
 import type { AgentSpec } from "../extensions/subagent/types.js";
 
 const agent = (overrides: Partial<AgentSpec>): AgentSpec => ({
@@ -204,7 +206,7 @@ describe("buildTmuxArgs", () => {
     });
 
     it("includes -c cwd in all directions", () => {
-        const directions: PaneDirection[] = [
+        const directions: TmuxDirection[] = [
             "right",
             "bottom",
             "left",
@@ -220,7 +222,7 @@ describe("buildTmuxArgs", () => {
     });
 
     it("places the shell command as the last argument", () => {
-        const directions: PaneDirection[] = [
+        const directions: TmuxDirection[] = [
             "right",
             "bottom",
             "left",

@@ -22,6 +22,7 @@ import { Container, Spacer, Text } from "@earendil-works/pi-tui";
 import { discoverAgents } from "./agents.js";
 import { createBackgroundManager } from "./background.js";
 import { registerSubagentCommand } from "./command.js";
+import { detectMultiplexer } from "./multiplexer.js";
 import {
     executeBackground,
     executeForeground,
@@ -116,7 +117,8 @@ export default function (pi: ExtensionAPI) {
         pi.sendMessage(msg, opts),
     );
 
-    registerSubagentCommand(pi, bgManager, knownAgents);
+    const multiplexer = detectMultiplexer((cmd, args) => pi.exec(cmd, args));
+    registerSubagentCommand(pi, bgManager, knownAgents, multiplexer);
 
     let skillCache = new Map<string, Skill>();
 

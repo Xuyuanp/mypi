@@ -48,6 +48,8 @@ import {
 } from "@earendil-works/pi-tui";
 import type { BackgroundManager } from "./background.js";
 import { buildSubagentCommand } from "./execute.js";
+import type { Multiplexer } from "./multiplexer.js";
+import { shellQuote } from "./multiplexer.js";
 import { hydrateResolvedAgent } from "./resolve.js";
 import type { LookupEntry } from "./resume.js";
 import {
@@ -484,61 +486,14 @@ class AgentsListView implements Component {
     }
 }
 
-// ── Shell quoting ──────────────────────────────────────────────────────
-
-/**
- * Shell-quote a string for safe embedding in a shell command.
- * Uses single quotes and escapes embedded single quotes.
- */
-export function shellQuote(value: string): string {
-    return `'${value.replace(/'/g, "'\\''")}'`;
-}
-
-// ── Tmux arg construction ───────────────────────────────────────────
-
-export type PaneDirection = "right" | "bottom" | "left" | "top" | "new-window";
-
-const TMUX_FLAGS: Record<PaneDirection, string[]> = {
-    right: ["split-window", "-h"],
-    bottom: ["split-window", "-v"],
-    left: ["split-window", "-hb"],
-    top: ["split-window", "-vb"],
-    "new-window": ["new-window"],
-};
-
-/**
- * Build the tmux argument array for opening a pane/window.
- *
- * @param direction - Where to place the new pane.
- * @param cwd - Start directory for the new pane.
- * @param shellCommand - The full shell command string to run in the pane.
- */
-export function buildTmuxArgs(
-    direction: PaneDirection,
-    cwd: string,
-    shellCommand: string,
-): string[] {
-    return [...TMUX_FLAGS[direction], "-c", cwd, shellCommand];
-}
-
-// ── Pane direction options ──────────────────────────────────────────
-
-const PANE_DIRECTIONS: { label: string; value: PaneDirection }[] = [
-    { label: "Right", value: "right" },
-    { label: "Bottom", value: "bottom" },
-    { label: "Left", value: "left" },
-    { label: "Top", value: "top" },
-    { label: "New window", value: "new-window" },
-];
-
 // ── Attach handler ───────────────────────────────────────────────────
 
 async function handleAttach(
     idArg: string | undefined,
     ctx: ExtensionCommandContext,
-    pi: ExtensionAPI,
     bgManager: BackgroundManager,
     agents: AgentSpec[],
+    multiplexer: Multiplexer,
 ): Promise<void> {
     // 1. Require TUI mode
     if (ctx.mode !== "tui") {
@@ -546,9 +501,12 @@ async function handleAttach(
         return;
     }
 
-    // 2. Require tmux
-    if (!process.env.TMUX) {
-        ctx.ui.notify("attach requires a tmux session", "warning");
+    // 2. Require multiplexer
+    if (!multiplexer.available) {
+        ctx.ui.notify(
+            multiplexer.unavailableHint ?? "attach requires a terminal multiplexer",
+            "warning",
+        );
         return;
     }
 
@@ -648,12 +606,12 @@ async function handleAttach(
     const cwd = selected.originalParams?.cwd ?? ctx.cwd;
 
     // 7. Prompt for pane direction
-    const directionStr = await ctx.ui.select(
-        "Open pane",
-        PANE_DIRECTIONS.map((d) => d.label),
-    );
+    const directionLabels = multiplexer.directions.map((d) => d.label);
+    const directionStr = await ctx.ui.select("Open pane", directionLabels);
     if (!directionStr) return; // user cancelled
-    const direction = PANE_DIRECTIONS.find((d) => d.label === directionStr)!.value;
+    const direction = multiplexer.directions.find(
+        (d) => d.label === directionStr,
+    )!.value;
 
     // 8. Build subagent command
     const built = await buildSubagentCommand(resolvedAgent);
@@ -665,16 +623,13 @@ async function handleAttach(
     const cmdParts = [shellQuote(built.command), ...built.args.map(shellQuote)];
     const shellCommand = `${envPrefix} ${cmdParts.join(" ")}`;
 
-    // 10. Build tmux args and execute
-    const tmuxArgs = buildTmuxArgs(direction, cwd, shellCommand);
-
-    const result = await pi.exec("tmux", tmuxArgs, { cwd });
+    // 10. Execute via multiplexer
+    const result = await multiplexer.attach(direction, cwd, shellCommand);
     if (result.code !== 0) {
         const errMsg =
             result.stderr?.trim() ||
-            result.stdout?.trim() ||
-            `tmux exited with code ${result.code}`;
-        ctx.ui.notify(`tmux error: ${errMsg}`, "error");
+            `multiplexer (${multiplexer.name}) exited with code ${result.code}`;
+        ctx.ui.notify(errMsg, "error");
     }
 }
 
@@ -684,6 +639,7 @@ export function registerSubagentCommand(
     pi: ExtensionAPI,
     bgManager: BackgroundManager,
     agents: AgentSpec[],
+    multiplexer: Multiplexer,
 ): void {
     // Best-effort context cache for completions (no ctx in
     // getArgumentCompletions).
@@ -757,7 +713,7 @@ export function registerSubagentCommand(
                     trimmed === "attach"
                         ? undefined
                         : trimmed.slice("attach ".length).trim() || undefined;
-                await handleAttach(idArg, ctx, pi, bgManager, agents);
+                await handleAttach(idArg, ctx, bgManager, agents, multiplexer);
                 return;
             }
 
