@@ -190,12 +190,17 @@ function createHerdrMultiplexer(exec: ExecFn): Multiplexer<HerdrDirection> {
                 };
             }
 
-            const result = await exec("herdr", [
-                "pane",
-                "run",
-                newPaneId,
-                shellCommand,
-            ]);
+            // Chain `herdr pane close` after the subagent command so the
+            // pane closes automatically when the user quits the agent
+            // (Ctrl-D, :exit, or any normal termination). Uses `;` so
+            // the close runs regardless of exit code. Fails silently if
+            // the user already closed the pane manually.
+            //
+            // newPaneId is a known-safe alphanumeric identifier from
+            // herdr JSON output, so we embed it unquoted.
+            const closeCmd = `herdr pane close ${newPaneId}`;
+            const chained = `${shellCommand}; ${closeCmd}`;
+            const result = await exec("herdr", ["pane", "run", newPaneId, chained]);
             return { code: result.code, stderr: result.stderr };
         },
     };
