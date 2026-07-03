@@ -227,6 +227,9 @@ async function sendNotification(
 }
 
 export default function (pi: ExtensionAPI) {
+    // Disable under herdr — it has its own agent-awareness system.
+    if (process.env.HERDR_ENV === "1") return;
+
     let tmuxContext: TmuxContext | undefined;
     let sessionActive = false;
 
