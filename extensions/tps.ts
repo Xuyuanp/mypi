@@ -10,6 +10,8 @@ function formatTokens(count: number): string {
 
 /**
  * Reports tokens-per-second based on generation time only.
+ * Tracks across the full agent chain: retries, auto-compaction retries,
+ * and queued follow-ups are accumulated until agent_settled.
  *
  * Generation time is measured as the sum of (message_start -> message_end)
  * intervals for assistant messages, excluding tool execution time that
@@ -51,11 +53,16 @@ const STATUS_KEY = "tps-timer";
 
 export default function (pi: ExtensionAPI) {
     let s = createRunState();
+    let running = false;
     let timerInterval: ReturnType<typeof setInterval> | null = null;
 
     pi.on("agent_start", (_event, ctx) => {
-        s = createRunState();
+        if (!running) {
+            s = createRunState();
+            running = true;
+        }
         if (ctx.mode !== "tui") return;
+        if (timerInterval) clearInterval(timerInterval);
         timerInterval = setInterval(() => {
             const elapsed = ((Date.now() - s.agentStartMs) / 1000).toFixed(1);
             ctx.ui.setStatus(STATUS_KEY, ctx.ui.theme.fg("dim", `${elapsed}s`));
@@ -73,7 +80,6 @@ export default function (pi: ExtensionAPI) {
             return;
         s.generationMs += Date.now() - s.generationStartMs;
         s.generationStartMs = null;
-        s.turns++;
         const msg = event.message as AssistantMessage;
         s.input += msg.usage.input;
         s.output += msg.usage.output;
@@ -81,6 +87,10 @@ export default function (pi: ExtensionAPI) {
         s.cacheWrite += msg.usage.cacheWrite;
         s.totalTokens += msg.usage.totalTokens;
         s.parentCost += msg.usage.cost.total;
+    });
+
+    pi.on("turn_end", () => {
+        s.turns++;
     });
 
     pi.on("tool_result", (event) => {
@@ -91,13 +101,13 @@ export default function (pi: ExtensionAPI) {
         s.subagentCost += details?.result?.usage?.cost?.total ?? 0;
     });
 
-    pi.on("agent_end", (_event, ctx) => {
+    pi.on("agent_settled", (_event, ctx) => {
+        running = false;
         if (timerInterval) {
             clearInterval(timerInterval);
             timerInterval = null;
         }
         if (!ctx.hasUI) return;
-        ctx.ui.setStatus(STATUS_KEY, undefined);
         const wallSeconds = (Date.now() - s.agentStartMs) / 1000;
         if (s.generationMs <= 0) return;
         if (s.output <= 0) return;
