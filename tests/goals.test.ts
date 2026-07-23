@@ -17,10 +17,8 @@ import {
     registerFauxProvider,
 } from "@earendil-works/pi-ai";
 import {
-    AuthStorage,
     createAgentSession,
     DefaultResourceLoader,
-    ModelRegistry,
     SessionManager,
     SettingsManager,
 } from "@earendil-works/pi-coding-agent";
@@ -28,6 +26,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import goalsExtension from "../extensions/goals/index.js";
 import type { GoalEntryData } from "../extensions/goals/store.js";
 import { GOAL_ENTRY_TYPE, type SessionGoal } from "../extensions/goals/types.js";
+import { createFauxModelRuntime } from "./test-utils.js";
 
 // ── Event-loop flush ──────────────────────────────────────────────────
 
@@ -86,17 +85,13 @@ describe("goals extension", () => {
     // Shared infrastructure — created once, reused across all 32 tests.
     let faux: FauxProviderRegistration;
     let cwd: string;
+    let modelRuntime: ModelRuntime;
     let settingsManager: SettingsManager;
-    let authStorage: AuthStorage;
-    let modelRegistry: ModelRegistry;
 
     beforeAll(async () => {
         cwd = await mkdtemp(join(tmpdir(), "goals-test-"));
         faux = registerFauxProvider();
-        const model = faux.getModel()!;
-        authStorage = AuthStorage.inMemory();
-        authStorage.setRuntimeApiKey(model.provider, "fake-key");
-        modelRegistry = ModelRegistry.inMemory(authStorage);
+        modelRuntime = await createFauxModelRuntime(faux);
         settingsManager = SettingsManager.inMemory({
             compaction: { enabled: false },
             retry: { enabled: false },
@@ -135,8 +130,7 @@ describe("goals extension", () => {
             resourceLoader: rl,
             sessionManager,
             settingsManager,
-            authStorage,
-            modelRegistry,
+            modelRuntime,
         });
         await session.bindExtensions({});
         return { session, sessionManager };

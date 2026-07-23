@@ -50,8 +50,25 @@ function createRunState(): RunState {
                 cacheWrite: 0,
                 total: 0,
             },
+            cacheWrite1h: 0,
+            reasoning: 0,
         },
     };
+}
+
+function sumUsage(target: Usage, source: Usage): void {
+    target.input += source.input;
+    target.output += source.output;
+    target.cacheRead += source.cacheRead;
+    target.cacheWrite += source.cacheWrite;
+    target.totalTokens += source.totalTokens;
+    target.cost.input += source.cost.input;
+    target.cost.output += source.cost.output;
+    target.cost.cacheRead += source.cost.cacheRead;
+    target.cost.cacheWrite += source.cost.cacheWrite;
+    target.cost.total += source.cost.total;
+    target.cacheWrite1h += source.cacheWrite1h ?? 0;
+    target.reasoning += source.reasoning ?? 0;
 }
 
 const STATUS_KEY = "tps-timer";
@@ -86,24 +103,7 @@ export default function (pi: ExtensionAPI) {
         s.generationMs += Date.now() - s.generationStartMs;
         s.generationStartMs = null;
         const msg = event.message as AssistantMessage;
-
-        s.usage.input += msg.usage.input;
-        s.usage.output += msg.usage.output;
-        s.usage.cacheRead += msg.usage.cacheRead;
-        s.usage.cacheWrite += msg.usage.cacheWrite;
-        s.usage.totalTokens += msg.usage.totalTokens;
-        s.usage.cost.input += msg.usage.cost.input;
-        s.usage.cost.output += msg.usage.cost.output;
-        s.usage.cost.cacheRead += msg.usage.cost.cacheRead;
-        s.usage.cost.cacheWrite += msg.usage.cost.cacheWrite;
-        s.usage.cost.total += msg.usage.cost.total;
-        if (msg.usage.cacheWrite1h !== undefined) {
-            s.usage.cacheWrite1h =
-                (s.usage.cacheWrite1h ?? 0) + msg.usage.cacheWrite1h;
-        }
-        if (msg.usage.reasoning !== undefined) {
-            s.usage.reasoning = (s.usage.reasoning ?? 0) + msg.usage.reasoning;
-        }
+        sumUsage(s.usage, msg.usage);
     });
 
     pi.on("turn_end", () => {

@@ -16,15 +16,14 @@ import {
 } from "@earendil-works/pi-ai";
 import type { AgentSession } from "@earendil-works/pi-coding-agent";
 import {
-    AuthStorage,
     createAgentSession,
     DefaultResourceLoader,
-    ModelRegistry,
     SessionManager,
     SettingsManager,
 } from "@earendil-works/pi-coding-agent";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import keepalive, { getMaxPings, getMaxTotalCost } from "../extensions/keepalive.js";
+import { createFauxModelRuntime } from "./test-utils.js";
 
 // ── Helpers ────────────────────────────────────────────────────────────
 
@@ -33,9 +32,7 @@ async function createSession(
     faux: FauxProviderRegistration,
 ): Promise<AgentSession> {
     const model = faux.getModel()!;
-    const authStorage = AuthStorage.inMemory();
-    authStorage.setRuntimeApiKey(model.provider, "fake-key");
-    const modelRegistry = ModelRegistry.inMemory(authStorage);
+    const modelRuntime = await createFauxModelRuntime(faux);
     const settingsManager = SettingsManager.inMemory({
         compaction: { enabled: false },
         retry: { enabled: false },
@@ -62,8 +59,7 @@ async function createSession(
         resourceLoader,
         sessionManager: SessionManager.inMemory(),
         settingsManager,
-        authStorage,
-        modelRegistry,
+        modelRuntime,
     });
 
     return session;

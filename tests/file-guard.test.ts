@@ -19,15 +19,14 @@ import {
 } from "@earendil-works/pi-ai";
 import type { AgentSessionEvent } from "@earendil-works/pi-coding-agent";
 import {
-    AuthStorage,
     createAgentSession,
     DefaultResourceLoader,
-    ModelRegistry,
     SessionManager,
     SettingsManager,
 } from "@earendil-works/pi-coding-agent";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import fileGuard from "../extensions/file-guard.js";
+import { createFauxModelRuntime } from "./test-utils.js";
 
 // ── Helpers ────────────────────────────────────────────────────────────
 
@@ -55,9 +54,7 @@ async function runAgent(
     faux.setResponses(responses);
 
     const model = faux.getModel()!;
-    const authStorage = AuthStorage.inMemory();
-    authStorage.setRuntimeApiKey(model.provider, "fake-key");
-    const modelRegistry = ModelRegistry.inMemory(authStorage);
+    const modelRuntime = await createFauxModelRuntime(faux);
     const settingsManager = SettingsManager.inMemory({
         compaction: { enabled: false },
         retry: { enabled: false },
@@ -85,8 +82,7 @@ async function runAgent(
         resourceLoader,
         sessionManager: SessionManager.inMemory(),
         settingsManager,
-        authStorage,
-        modelRegistry,
+        modelRuntime,
     });
 
     const events: ToolEndEvent[] = [];

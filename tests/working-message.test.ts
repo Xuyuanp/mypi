@@ -20,10 +20,8 @@ import {
     registerFauxProvider,
 } from "@earendil-works/pi-ai";
 import {
-    AuthStorage,
     createAgentSession,
     DefaultResourceLoader,
-    ModelRegistry,
     SessionManager,
     SettingsManager,
 } from "@earendil-works/pi-coding-agent";
@@ -36,6 +34,7 @@ import workingMessage, {
     pickWorkingWords,
     SPINNER_GLYPHS,
 } from "../extensions/working-message.js";
+import { createFauxModelRuntime } from "./test-utils.js";
 
 // ── Helpers ────────────────────────────────────────────────────────────
 
@@ -330,9 +329,7 @@ describe("working-message extension (headless)", () => {
         ]);
 
         const model = faux.getModel()!;
-        const authStorage = AuthStorage.inMemory();
-        authStorage.setRuntimeApiKey(model.provider, "fake-key");
-        const modelRegistry = ModelRegistry.inMemory(authStorage);
+        const modelRuntime = await createFauxModelRuntime(faux);
         const settingsManager = SettingsManager.inMemory({
             compaction: { enabled: false },
             retry: { enabled: false },
@@ -359,8 +356,7 @@ describe("working-message extension (headless)", () => {
             resourceLoader,
             sessionManager: SessionManager.inMemory(),
             settingsManager,
-            authStorage,
-            modelRegistry,
+            modelRuntime,
         });
 
         await expect(session.prompt("go")).resolves.toBeUndefined();
