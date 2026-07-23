@@ -1,4 +1,4 @@
-import type { AssistantMessage } from "@earendil-works/pi-ai";
+import type { AssistantMessage, Usage } from "@earendil-works/pi-ai";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 function formatTokens(count: number): string {
@@ -21,14 +21,11 @@ interface RunState {
     agentStartMs: number;
     generationMs: number;
     generationStartMs: number | null;
+
     turns: number;
     toolCalls: number;
-    input: number;
-    output: number;
-    cacheRead: number;
-    cacheWrite: number;
-    totalTokens: number;
-    parentCost: number;
+    usage: Usage;
+
     subagentCost: number;
 }
 
@@ -39,13 +36,21 @@ function createRunState(): RunState {
         generationStartMs: null,
         turns: 0,
         toolCalls: 0,
-        input: 0,
-        output: 0,
-        cacheRead: 0,
-        cacheWrite: 0,
-        totalTokens: 0,
-        parentCost: 0,
         subagentCost: 0,
+        usage: {
+            input: 0,
+            output: 0,
+            cacheRead: 0,
+            cacheWrite: 0,
+            totalTokens: 0,
+            cost: {
+                input: 0,
+                output: 0,
+                cacheRead: 0,
+                cacheWrite: 0,
+                total: 0,
+            },
+        },
     };
 }
 
@@ -81,12 +86,24 @@ export default function (pi: ExtensionAPI) {
         s.generationMs += Date.now() - s.generationStartMs;
         s.generationStartMs = null;
         const msg = event.message as AssistantMessage;
-        s.input += msg.usage.input;
-        s.output += msg.usage.output;
-        s.cacheRead += msg.usage.cacheRead;
-        s.cacheWrite += msg.usage.cacheWrite;
-        s.totalTokens += msg.usage.totalTokens;
-        s.parentCost += msg.usage.cost.total;
+
+        s.usage.input += msg.usage.input;
+        s.usage.output += msg.usage.output;
+        s.usage.cacheRead += msg.usage.cacheRead;
+        s.usage.cacheWrite += msg.usage.cacheWrite;
+        s.usage.totalTokens += msg.usage.totalTokens;
+        s.usage.cost.input += msg.usage.cost.input;
+        s.usage.cost.output += msg.usage.cost.output;
+        s.usage.cost.cacheRead += msg.usage.cost.cacheRead;
+        s.usage.cost.cacheWrite += msg.usage.cost.cacheWrite;
+        s.usage.cost.total += msg.usage.cost.total;
+        if (msg.usage.cacheWrite1h !== undefined) {
+            s.usage.cacheWrite1h =
+                (s.usage.cacheWrite1h ?? 0) + msg.usage.cacheWrite1h;
+        }
+        if (msg.usage.reasoning !== undefined) {
+            s.usage.reasoning = (s.usage.reasoning ?? 0) + msg.usage.reasoning;
+        }
     });
 
     pi.on("turn_end", () => {
@@ -110,12 +127,12 @@ export default function (pi: ExtensionAPI) {
         if (!ctx.hasUI) return;
         const wallSeconds = (Date.now() - s.agentStartMs) / 1000;
         if (s.generationMs <= 0) return;
-        if (s.output <= 0) return;
+        if (s.usage.output <= 0) return;
 
         const genSeconds = s.generationMs / 1000;
-        const tokensPerSecond = s.output / genSeconds;
-        const promptTokens = s.input + s.cacheRead + s.cacheWrite;
-        const hasCacheActivity = s.cacheRead > 0 || s.cacheWrite > 0;
+        const tokensPerSecond = s.usage.output / genSeconds;
+        const promptTokens = s.usage.input + s.usage.cacheRead + s.usage.cacheWrite;
+        const hasCacheActivity = s.usage.cacheRead > 0 || s.usage.cacheWrite > 0;
         // Activity
         const activityParts: string[] = [];
         if (s.turns) activityParts.push(`${s.turns} turn${s.turns > 1 ? "s" : ""}`);
@@ -124,19 +141,21 @@ export default function (pi: ExtensionAPI) {
 
         // Tokens
         const tokenParts: string[] = [
-            `\u2191${formatTokens(s.input)}`,
-            `\u2193${formatTokens(s.output)}`,
-            `R${formatTokens(s.cacheRead)}`,
-            `W${formatTokens(s.cacheWrite)}`,
+            `\u2191${formatTokens(s.usage.input)}`,
+            `\u2193${formatTokens(s.usage.output)}`,
+            `R${formatTokens(s.usage.cacheRead)}`,
+            `W${formatTokens(s.usage.cacheWrite)}`,
         ];
         if (hasCacheActivity && promptTokens > 0) {
-            tokenParts.push(`CH${((s.cacheRead / promptTokens) * 100).toFixed(1)}%`);
+            tokenParts.push(
+                `CH${((s.usage.cacheRead / promptTokens) * 100).toFixed(1)}%`,
+            );
         }
 
         // Cost
         let cost = "";
-        if (s.parentCost > 0 || s.subagentCost > 0) {
-            cost = `$${s.parentCost.toFixed(4)}`;
+        if (s.usage.cost.total > 0 || s.subagentCost > 0) {
+            cost = `$${s.usage.cost.total.toFixed(4)}`;
             if (s.subagentCost > 0) {
                 cost += `(+$${s.subagentCost.toFixed(4)})`;
             }
