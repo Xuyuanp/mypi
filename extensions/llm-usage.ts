@@ -134,7 +134,7 @@ export default function (pi: ExtensionAPI) {
     pi.on("session_start", async (_event, ctx) => {
         await updateUsage(ctx);
     });
-    pi.on("turn_end", async (_event, ctx) => {
+    pi.on("agent_end", async (_event, ctx) => {
         await updateUsage(ctx);
     });
 }
