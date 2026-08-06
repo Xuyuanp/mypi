@@ -8,7 +8,7 @@ description: >-
   the `read` tool and will load the file itself. For short diffs (<= 200 lines), inline the
   diff directly in the task inside a ```diff code fence.
 tools: read, grep, find, ls
-model: github-copilot/gpt-5.5:xhigh
+model: opencode-go/kimi-k3:xhigh
 ---
 
 # Review Guidelines
