@@ -1,18 +1,37 @@
 /**
- * Pure subprocess execution module for the subagent extension.
+ * Execution module for the subagent extension.
  *
- * Contains `runSubagent()` and all its helpers. Zero framework
- * dependencies — only Node.js built-ins and the `Message` type.
- * Always resolves (never rejects for abort).
+ * Contains `runSubagent()` — in-process subagent execution via the pi SDK
+ * (`createAgentSession`) — plus the attach-path helpers (`buildSubagentCommand`,
+ * `getPiInvocation`) used by `/subagent attach` to launch an interactive pi
+ * process in a multiplexer pane.
+ *
+ * `runSubagent` always resolves (never rejects for abort). On abort it returns
+ * a result with `outcome: { status: "aborted" }`.
  */
 
-import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+
+import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import type { Message } from "@earendil-works/pi-ai";
-import { withFileMutationQueue } from "@earendil-works/pi-coding-agent";
+import type {
+    AgentSession,
+    ModelRuntime,
+    ResourceLoader,
+    Skill,
+} from "@earendil-works/pi-coding-agent";
+import {
+    CURRENT_SESSION_VERSION,
+    createAgentSession,
+    createBashToolDefinition,
+    createExtensionRuntime,
+    SessionManager,
+    SettingsManager,
+    withFileMutationQueue,
+} from "@earendil-works/pi-coding-agent";
 import type {
     AgentOutcome,
     AgentRunResult,
@@ -136,11 +155,9 @@ interface BuildSubagentCommandResult {
  * Build the agent-identity flags and system prompt temp file for
  * spawning a subagent pi process.
  *
+ * Used by the `/subagent attach` command (interactive pane resume).
  * Does NOT include mode-specific flags (--mode, --print, --session,
  * task positional). Callers push those onto the returned `args`.
- *
- * The system prompt is always identical regardless of how the subagent
- * is launched (run vs attach) to preserve KV cache prefix alignment.
  */
 export async function buildSubagentCommand(
     agent: ResolvedAgent,
@@ -181,38 +198,25 @@ export async function buildSubagentCommand(
 }
 
 /**
- * Build an AgentOutcome from subprocess exit state.
+ * Build an AgentOutcome from in-process terminal state.
  *
- * This is the single point where exitCode + stopReason + errorMessage
- * are reconciled into a discriminated union variant.
+ * In-process there is no exit code; outcome is derived from the abort flag
+ * and the latest assistant message's stopReason/errorMessage.
  */
 function buildOutcome(
-    exitCode: number,
     wasAborted: boolean,
     latestStopReason: string | undefined,
     latestErrorMessage: string | undefined,
-    stderr: string,
 ): AgentOutcome {
     if (wasAborted) {
         return { status: "aborted" };
     }
-    if (exitCode !== 0) {
-        return {
-            status: "error",
-            exitCode,
-            stopReason: latestStopReason,
-            message:
-                latestErrorMessage ||
-                stderr ||
-                `(subprocess exited with code ${exitCode})`,
-        };
-    }
     if (latestStopReason === "error") {
         return {
             status: "error",
-            exitCode: 0,
+            exitCode: 1,
             stopReason: "error",
-            message: latestErrorMessage || stderr || "(agent error)",
+            message: latestErrorMessage || "(agent error)",
         };
     }
     if (latestStopReason === "aborted") {
@@ -228,15 +232,117 @@ interface RunSubagentOptions {
     onProgress?: SubagentProgressCallback;
     sessionFile?: string;
     resume?: boolean;
+    /**
+     * Lazily-created shared ModelRuntime provider, injected by index.ts.
+     * A thunk (not a bare promise) so eager singleton creation never happens
+     * in unit tests that mock runSubagent.
+     */
+    modelRuntime: () => Promise<ModelRuntime>;
+    /** Session skill cache (name -> Skill) used to resolve agent skills. */
+    skillCache: Map<string, Skill>;
+}
+
+// ── Resource loader ──────────────────────────────────────────────────
+
+/**
+ * Build a minimal per-run ResourceLoader for the subagent session.
+ *
+ * Isolated like the old subprocess flags (--no-extensions --no-context-files):
+ * no extensions, no prompts/themes, no context files. The agent's system
+ * prompt is appended (getAppendSystemPrompt) rather than replacing pi's
+ * default prompt (getSystemPrompt -> undefined would become customPrompt and
+ * drop the entire default system prompt).
+ */
+function createSubagentResourceLoader(
+    agent: ResolvedAgent,
+    skillCache: Map<string, Skill>,
+): ResourceLoader {
+    const appendedPrompt = agent.systemPrompt.trim()
+        ? `${SUBAGENT_PREAMBLE}\n${agent.systemPrompt}`
+        : SUBAGENT_PREAMBLE.trim();
+    const skills =
+        agent.skillPaths && agent.skillPaths.length > 0
+            ? [...skillCache.values()].filter((skill) =>
+                  agent.skillPaths!.includes(skill.filePath),
+              )
+            : [];
+    return {
+        getExtensions: () => ({
+            extensions: [],
+            errors: [],
+            runtime: createExtensionRuntime(),
+        }),
+        getSkills: () => ({ skills, diagnostics: [] }),
+        getPrompts: () => ({ prompts: [], diagnostics: [] }),
+        getThemes: () => ({ themes: [], diagnostics: [] }),
+        getAgentsFiles: () => ({ agentsFiles: [] }),
+        getSystemPrompt: () => undefined,
+        getAppendSystemPrompt: () => [appendedPrompt],
+        extendResources: () => {},
+        reload: async () => {},
+    };
+}
+
+// ── Session manager ──────────────────────────────────────────────────
+
+/**
+ * Build the subagent SessionManager for the given session file.
+ *
+ * SessionManager.open() on a non-existent path leaves fileEntries empty, and
+ * the SDK only flushes the file once the first assistant message arrives — a
+ * flushed file without a `session` header would break resume and /subagent
+ * attach. So for fresh runs we pre-write a valid header (matching the SDK's
+ * format, CURRENT_SESSION_VERSION) before opening.
+ *
+ * Exported for testing: header write failure handling is a regression
+ * surface (EEXIST race vs. real I/O failures).
+ */
+export async function buildSessionManager(
+    sessionFile: string | undefined,
+    cwd: string,
+    resume: boolean | undefined,
+): Promise<SessionManager> {
+    if (!sessionFile) return SessionManager.inMemory(cwd);
+
+    if (!resume && !fs.existsSync(sessionFile)) {
+        const dir = path.dirname(sessionFile);
+        const id = path.basename(sessionFile, ".jsonl");
+        await fs.promises.mkdir(dir, { recursive: true });
+        const header = {
+            type: "session",
+            version: CURRENT_SESSION_VERSION,
+            id,
+            timestamp: new Date().toISOString(),
+            cwd,
+            parentSession: undefined,
+        };
+        try {
+            await fs.promises.writeFile(sessionFile, `${JSON.stringify(header)}\n`, {
+                encoding: "utf-8",
+                mode: 0o600,
+                flag: "wx",
+            });
+        } catch (err) {
+            // Only the concurrent-creation race (EEXIST) is benign; any other
+            // write failure must surface — a silently header-less file breaks
+            // resume and /subagent attach later.
+            const code =
+                err instanceof Error && "code" in err
+                    ? (err as NodeJS.ErrnoException).code
+                    : undefined;
+            if (code !== "EEXIST") throw err;
+        }
+    }
+    return SessionManager.open(sessionFile, undefined, cwd);
 }
 
 // ── Main execution function ──────────────────────────────────────────
 
 /**
- * Execute a subagent as an isolated subprocess.
+ * Execute a subagent as an in-process AgentSession via the pi SDK.
  *
- * Always resolves — never rejects for abort. On abort, returns a
- * result with `outcome: { status: "aborted" }`.
+ * Always resolves — never rejects for abort. On abort, returns a result with
+ * `outcome: { status: "aborted" }`.
  *
  * The internal accumulator never escapes this function.
  */
@@ -244,170 +350,174 @@ export async function runSubagent(
     agent: ResolvedAgent,
     task: string,
     cwd: string,
-    options: RunSubagentOptions = {},
+    options: RunSubagentOptions,
 ): Promise<AgentRunResult> {
     const { signal, onProgress, sessionFile, resume } = options;
 
     // ── Internal accumulator (never escapes) ─────────────────────────
     const messages: Message[] = [];
     const usage: UsageStats = createZeroUsage();
-    let stderr = "";
     let latestStopReason: string | undefined;
     let latestErrorMessage: string | undefined;
     let turns = 0;
+    let wasAborted = false;
 
-    let tmpPromptPath: string | null = null;
+    let session: AgentSession | undefined;
+    let removeAbortListener: (() => void) | undefined;
+    let unsubscribe: (() => void) | undefined;
     const startTime = Date.now();
 
     try {
-        const built = await buildSubagentCommand(agent);
-        tmpPromptPath = built.tmpPromptPath;
-
-        const fullArgs = [...built.args, "--mode", "json", "--print"];
-
-        if (sessionFile) {
-            fullArgs.push("--session", sessionFile);
-        } else {
-            fullArgs.push("--no-session");
+        const runtime = await options.modelRuntime();
+        if (signal?.aborted) {
+            // An abort that lands before the model is resolved wins over the
+            // missing-model error path below.
+            return {
+                agent: agent.name,
+                agentSource: agent.source,
+                task,
+                outcome: { status: "aborted" },
+                messages: [],
+                stderr: "",
+                usage,
+                durationMs: 0,
+            };
+        }
+        const model = runtime.getModel(agent.model.provider, agent.model.name);
+        if (!model) {
+            return {
+                agent: agent.name,
+                agentSource: agent.source,
+                task,
+                outcome: {
+                    status: "error",
+                    exitCode: 1,
+                    message: `Model not available: ${formatModelString(agent.model)}`,
+                },
+                messages: [],
+                stderr: "",
+                usage,
+                durationMs: 0,
+            };
         }
 
-        fullArgs.push(resume ? task : `Task: ${task}`);
-        let wasAborted = false;
+        const settingsManager = SettingsManager.inMemory({
+            compaction: { enabled: false },
+            retry: { enabled: false },
+        });
 
-        const exitCode = await new Promise<number>((resolve) => {
-            const proc = spawn(built.command, fullArgs, {
-                cwd,
-                shell: false,
-                stdio: ["ignore", "pipe", "pipe"],
+        // Override the built-in bash tool so commands executed by the
+        // subagent can observe that they run inside a subagent. The registry
+        // gives customTools precedence over built-ins by name. spawnHook
+        // rebuilds env per execution — no global process.env mutation, so
+        // the parent's own bash and concurrent background agents are safe.
+        const bash = createBashToolDefinition(cwd, {
+            commandPrefix: settingsManager.getShellCommandPrefix(),
+            shellPath: settingsManager.getShellPath(),
+            spawnHook: (spawnContext) => ({
+                ...spawnContext,
                 env: {
-                    ...process.env,
+                    ...spawnContext.env,
                     PI_SUBAGENT: "1",
                     PI_SUBAGENT_NAME: agent.name,
                 },
-            });
-            let buffer = "";
+            }),
+        });
 
-            const processLine = (line: string) => {
-                if (!line.trim()) return;
-                let event: any;
-                try {
-                    event = JSON.parse(line);
-                } catch {
-                    return;
-                }
+        const resourceLoader = createSubagentResourceLoader(
+            agent,
+            options.skillCache,
+        );
+        const sessionManager = await buildSessionManager(sessionFile, cwd, resume);
 
-                if (event.type === "message_end" && event.message) {
-                    const msg = event.message as Message;
-                    messages.push(msg);
+        const created = await createAgentSession({
+            cwd,
+            model,
+            thinkingLevel: (agent.model.thinkingLevel ?? "off") as ThinkingLevel,
+            modelRuntime: runtime,
+            resourceLoader,
+            sessionManager,
+            settingsManager,
+            tools: agent.tools?.length ? agent.tools : undefined,
+            customTools: [bash],
+        });
+        session = created.session;
 
-                    if (msg.role === "assistant") {
-                        turns++;
-                        if (msg.usage) {
-                            accumulateUsage(usage, msg.usage);
-                            usage.contextTokens =
-                                (msg.usage.input || 0) +
-                                (msg.usage.cacheRead || 0) +
-                                (msg.usage.cacheWrite || 0);
-                        }
-                        if (msg.stopReason) latestStopReason = msg.stopReason;
-                        if (msg.errorMessage) latestErrorMessage = msg.errorMessage;
+        const abort = () => {
+            wasAborted = true;
+            session?.abort();
+        };
+        if (signal) {
+            if (signal.aborted) {
+                abort();
+            } else {
+                signal.addEventListener("abort", abort, { once: true });
+                removeAbortListener = () =>
+                    signal.removeEventListener("abort", abort);
+            }
+        }
+
+        unsubscribe = session.subscribe((event) => {
+            if (event.type === "message_end") {
+                const msg = event.message as Message;
+                messages.push(msg);
+                if (msg.role === "assistant") {
+                    turns++;
+                    if (msg.usage) {
+                        accumulateUsage(usage, msg.usage);
+                        usage.contextTokens =
+                            (msg.usage.input || 0) +
+                            (msg.usage.cacheRead || 0) +
+                            (msg.usage.cacheWrite || 0);
                     }
-                    usage.turns = turns;
-                    onProgress?.({
-                        type: "message",
-                        message: msg,
-                        usage: { ...usage, cost: { ...usage.cost } },
-                    });
+                    if (msg.stopReason) latestStopReason = msg.stopReason;
+                    if (msg.errorMessage) latestErrorMessage = msg.errorMessage;
                 }
-
-                if (event.type === "tool_execution_start" && event.toolCallId) {
-                    onProgress?.({
-                        type: "tool_start",
-                        toolCallId: event.toolCallId,
-                    });
-                }
-
-                if (event.type === "tool_execution_end" && event.toolCallId) {
-                    onProgress?.({
-                        type: "tool_end",
-                        toolCallId: event.toolCallId,
-                        isError: !!event.isError,
-                    });
-                }
-
-                if (event.type === "tool_result_end" && event.message) {
-                    const msg = event.message as Message;
-                    messages.push(msg);
-                    onProgress?.({ type: "tool_result", message: msg });
-                }
-            };
-
-            proc.stdout.on("data", (data) => {
-                buffer += data.toString();
-                const lines = buffer.split("\n");
-                buffer = lines.pop() || "";
-                for (const line of lines) processLine(line);
-            });
-
-            proc.stderr.on("data", (data) => {
-                stderr += data.toString();
-            });
-
-            proc.on("close", (code) => {
-                if (buffer.trim()) processLine(buffer);
-                resolve(code ?? 0);
-            });
-
-            proc.on("error", () => {
-                resolve(1);
-            });
-
-            if (signal) {
-                let exited = false;
-                proc.on("close", () => {
-                    exited = true;
+                usage.turns = turns;
+                onProgress?.({
+                    type: "message",
+                    message: msg,
+                    usage: { ...usage, cost: { ...usage.cost } },
                 });
-                const killProc = () => {
-                    wasAborted = true;
-                    proc.kill("SIGTERM");
-                    setTimeout(() => {
-                        if (!exited) proc.kill("SIGKILL");
-                    }, 5000);
-                };
-                if (signal.aborted) killProc();
-                else
-                    signal.addEventListener("abort", killProc, {
-                        once: true,
-                    });
+            } else if (event.type === "tool_execution_start") {
+                onProgress?.({ type: "tool_start", toolCallId: event.toolCallId });
+            } else if (event.type === "tool_execution_end") {
+                onProgress?.({
+                    type: "tool_end",
+                    toolCallId: event.toolCallId,
+                    isError: event.isError,
+                });
             }
         });
 
-        const durationMs = Date.now() - startTime;
-        const outcome = buildOutcome(
-            exitCode,
-            wasAborted,
-            latestStopReason,
-            latestErrorMessage,
-            stderr,
-        );
-
-        return {
-            agent: agent.name,
-            agentSource: agent.source,
-            task,
-            outcome,
-            messages,
-            stderr,
-            usage,
-            durationMs,
-        };
-    } finally {
-        if (tmpPromptPath) {
-            try {
-                fs.unlinkSync(tmpPromptPath);
-            } catch {
-                /* ignore */
-            }
+        // If the signal aborted while the setup awaits were in flight, skip
+        // the prompt entirely — the provider should not do work for a run
+        // that is already cancelled.
+        if (!signal?.aborted) {
+            await session.prompt(resume ? task : `Task: ${task}`);
         }
+    } catch (err: unknown) {
+        if (!wasAborted) {
+            latestStopReason = "error";
+            latestErrorMessage = err instanceof Error ? err.message : String(err);
+        }
+    } finally {
+        unsubscribe?.();
+        removeAbortListener?.();
+        session?.dispose();
     }
+
+    const durationMs = Date.now() - startTime;
+    const outcome = buildOutcome(wasAborted, latestStopReason, latestErrorMessage);
+
+    return {
+        agent: agent.name,
+        agentSource: agent.source,
+        task,
+        outcome,
+        messages,
+        stderr: "",
+        usage,
+        durationMs,
+    };
 }

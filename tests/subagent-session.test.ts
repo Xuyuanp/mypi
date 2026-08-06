@@ -10,8 +10,8 @@
 
 import { describe, expect, it, vi } from "vitest";
 import { createBackgroundManager } from "../extensions/subagent/background.js";
-import { createZeroUsage } from "../extensions/subagent/index.js";
 import type { AgentRunResult } from "../extensions/subagent/types.js";
+import { createZeroUsage } from "../extensions/subagent/types.js";
 
 function makeFakeResult(overrides?: Partial<AgentRunResult>): AgentRunResult {
     return {

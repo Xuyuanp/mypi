@@ -11,12 +11,12 @@
 
 import { describe, expect, it, vi } from "vitest";
 import { createBackgroundManager } from "../extensions/subagent/background.js";
+import { createProgressTracker } from "../extensions/subagent/tracker.js";
+import type { AgentRunResult } from "../extensions/subagent/types.js";
 import {
     type BackgroundAgent,
     createZeroUsage,
-} from "../extensions/subagent/index.js";
-import { createProgressTracker } from "../extensions/subagent/tracker.js";
-import type { AgentRunResult } from "../extensions/subagent/types.js";
+} from "../extensions/subagent/types.js";
 
 function makeFakeResult(overrides?: Partial<AgentRunResult>): AgentRunResult {
     return {

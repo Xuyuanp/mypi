@@ -20,7 +20,6 @@ vi.mock("../extensions/subagent/execute.js", () => ({
     getPiInvocation: vi.fn(),
 }));
 
-import { createZeroUsage } from "../extensions/subagent/index.js";
 import {
     type LookupEntry,
     listCompletedSubagents,
@@ -30,7 +29,10 @@ import type {
     AgentRunResult,
     SubagentDetails,
 } from "../extensions/subagent/types.js";
-import { BACKGROUND_RESULT_TYPE } from "../extensions/subagent/types.js";
+import {
+    BACKGROUND_RESULT_TYPE,
+    createZeroUsage,
+} from "../extensions/subagent/types.js";
 
 // ── Helpers ──────────────────────────────────────────────────────────
 

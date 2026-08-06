@@ -13,6 +13,8 @@ import { randomUUID } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 
+import type { ModelRuntime, Skill } from "@earendil-works/pi-coding-agent";
+
 import type { BackgroundManager } from "./background.js";
 import { runSubagent } from "./execute.js";
 import { persistAgent } from "./resolve.js";
@@ -128,6 +130,8 @@ export function executeBackground(
           }) => void)
         | undefined,
     cwd: string,
+    runtimeProvider: () => Promise<ModelRuntime>,
+    skillCache: Map<string, Skill>,
 ): ToolResult {
     const id = session?.id ?? `${resolvedAgent.name}-${randomUUID().slice(0, 8)}`;
 
@@ -143,6 +147,8 @@ export function executeBackground(
         signal: controller.signal,
         onProgress: tracker.onProgress,
         sessionFile,
+        modelRuntime: runtimeProvider,
+        skillCache,
     });
 
     const entry = {
@@ -287,6 +293,8 @@ export async function executeForeground(
           }) => void)
         | undefined,
     cwd: string,
+    runtimeProvider: () => Promise<ModelRuntime>,
+    skillCache: Map<string, Skill>,
     opts?: { resumedFrom?: string; resume?: boolean },
 ): Promise<ToolResult> {
     const resumedFrom = opts?.resumedFrom;
@@ -330,6 +338,8 @@ export async function executeForeground(
         onProgress: tracker.onProgress,
         sessionFile,
         resume: opts?.resume,
+        modelRuntime: runtimeProvider,
+        skillCache,
     });
 
     const sessionHeader = session ? `[subagent: ${session.id}]\n\n` : "";

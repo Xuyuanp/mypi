@@ -4,7 +4,7 @@
  *
  * The tracker is a single object with a .onProgress callback that
  * runSubagent feeds events into. Callers read the accumulated state
- * directly (messages, execStatuses, usage, toolStartCount) and
+ * directly (messages, execStatuses, usage) and
  * optionally register an onChange callback for side effects
  * (widget refresh, partial-result push).
  */
@@ -32,7 +32,6 @@ export function createProgressTracker(
     const messages: Message[] = [];
     const execStatuses = new Map<string, boolean>();
     let usage: UsageStats = createZeroUsage();
-    let toolStartCount = 0;
 
     function notifyChange(): void {
         try {
@@ -44,7 +43,6 @@ export function createProgressTracker(
 
     const onProgress: SubagentProgressCallback = (event) => {
         if (event.type === "tool_start") {
-            toolStartCount++;
             notifyChange();
         } else if (event.type === "tool_end") {
             execStatuses.set(event.toolCallId, event.isError);
@@ -53,10 +51,6 @@ export function createProgressTracker(
             messages.push(event.message);
             usage = event.usage;
             notifyChange();
-        } else if (event.type === "tool_result") {
-            messages.push(event.message);
-            // No onChange: current render state is already updated by tool_end;
-            // final rendering uses the authoritative AgentRunResult messages.
         }
     };
 
@@ -66,9 +60,6 @@ export function createProgressTracker(
         execStatuses,
         get usage() {
             return usage;
-        },
-        get toolStartCount() {
-            return toolStartCount;
         },
     };
 }

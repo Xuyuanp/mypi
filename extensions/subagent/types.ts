@@ -208,8 +208,6 @@ export interface ProgressTracker {
     readonly execStatuses: Map<string, boolean>;
     /** Running usage totals (snapshot from latest message event). */
     readonly usage: UsageStats;
-    /** Number of tools started (increments on tool_start, before completion). */
-    readonly toolStartCount: number;
 }
 
 // ── BackgroundAgent ──────────────────────────────────────────────────
@@ -237,8 +235,7 @@ export interface BackgroundAgent {
 export type SubagentProgressEvent =
     | { type: "message"; message: Message; usage: UsageStats }
     | { type: "tool_start"; toolCallId: string }
-    | { type: "tool_end"; toolCallId: string; isError: boolean }
-    | { type: "tool_result"; message: Message };
+    | { type: "tool_end"; toolCallId: string; isError: boolean };
 
 export type SubagentProgressCallback = (event: SubagentProgressEvent) => void;
 

@@ -17,6 +17,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 
 import type { ExtensionAPI, Skill } from "@earendil-works/pi-coding-agent";
+import { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { Container, Spacer, Text } from "@earendil-works/pi-tui";
 
 import { discoverAgents } from "./agents.js";
@@ -45,10 +46,6 @@ import {
     ResumeParamsSchema,
     SubagentParamsSchema,
 } from "./types.js";
-
-// ── Re-exports for backward compatibility ────────────────────────────
-export type { BackgroundAgent } from "./types.js";
-export { createZeroUsage } from "./types.js";
 
 // ── Renderer state ───────────────────────────────────────────────────
 
@@ -121,6 +118,15 @@ export default function (pi: ExtensionAPI) {
     registerSubagentCommand(pi, bgManager, knownAgents, multiplexer);
 
     let skillCache = new Map<string, Skill>();
+
+    // Shared ModelRuntime for all subagent runs. Lazily created on first use;
+    // reset on rejection so a transient failure does not poison future runs.
+    let modelRuntimePromise: Promise<ModelRuntime> | undefined;
+    const getModelRuntime = (): Promise<ModelRuntime> =>
+        (modelRuntimePromise ??= ModelRuntime.create().catch((err) => {
+            modelRuntimePromise = undefined;
+            throw err;
+        }));
 
     pi.on("session_start", (_event, ctx) => {
         bgManager.setSessionActive(true);
@@ -203,6 +209,8 @@ export default function (pi: ExtensionAPI) {
                     bgManager,
                     onUpdate,
                     ctx.cwd,
+                    getModelRuntime,
+                    skillCache,
                 );
             }
 
@@ -213,6 +221,8 @@ export default function (pi: ExtensionAPI) {
                 signal,
                 onUpdate,
                 ctx.cwd,
+                getModelRuntime,
+                skillCache,
             );
         },
 
@@ -368,6 +378,8 @@ export default function (pi: ExtensionAPI) {
                 signal,
                 onUpdate,
                 ctx.cwd,
+                getModelRuntime,
+                skillCache,
                 { resumedFrom: id, resume: true },
             );
         },

@@ -2,7 +2,7 @@
  * Tests for createProgressTracker (issue #subagent-unification).
  *
  * Covers: initial state, message accumulation, execStatuses,
- * toolStartCount, onChange firing, error swallowing, usage getter.
+ * onChange firing, error swallowing, usage getter.
  */
 
 import type { Message } from "@earendil-works/pi-ai";
@@ -33,13 +33,6 @@ function makeToolEndEvent(
     return { type: "tool_end", toolCallId, isError };
 }
 
-function makeToolResultEvent(message: Message): {
-    type: "tool_result";
-    message: Message;
-} {
-    return { type: "tool_result", message };
-}
-
 // ── Tests ────────────────────────────────────────────────────────────
 
 describe("createProgressTracker", () => {
@@ -48,7 +41,6 @@ describe("createProgressTracker", () => {
         expect(tracker.messages).toEqual([]);
         expect(tracker.execStatuses.size).toBe(0);
         expect(tracker.usage).toEqual(createZeroUsage());
-        expect(tracker.toolStartCount).toBe(0);
     });
 
     it("onProgress accumulates messages on 'message' event", () => {
@@ -78,31 +70,6 @@ describe("createProgressTracker", () => {
         expect(tracker.execStatuses.get("tc2")).toBe(true);
     });
 
-    it("onProgress increments toolStartCount on 'tool_start'", () => {
-        const tracker = createProgressTracker();
-
-        tracker.onProgress(makeToolStartEvent("tc1"));
-        tracker.onProgress(makeToolStartEvent("tc2"));
-        tracker.onProgress(makeToolStartEvent("tc3"));
-
-        expect(tracker.toolStartCount).toBe(3);
-    });
-
-    it("onProgress pushes tool_result messages", () => {
-        const tracker = createProgressTracker();
-        const msg: Message = {
-            role: "toolResult",
-            toolCallId: "tc1",
-            content: [{ type: "text", text: "output" }],
-            isError: false,
-        } as Message;
-
-        tracker.onProgress(makeToolResultEvent(msg));
-
-        expect(tracker.messages).toHaveLength(1);
-        expect(tracker.messages[0]).toBe(msg);
-    });
-
     it("onChange fires on message, tool_start, and tool_end events", () => {
         const onChange = vi.fn();
         const tracker = createProgressTracker({ onChange });
@@ -117,22 +84,6 @@ describe("createProgressTracker", () => {
         tracker.onProgress(makeToolEndEvent("tc1", false));
 
         expect(onChange).toHaveBeenCalledTimes(3);
-    });
-
-    it("onChange does not fire on tool_result", () => {
-        const onChange = vi.fn();
-        const tracker = createProgressTracker({ onChange });
-
-        const msg: Message = {
-            role: "toolResult",
-            toolCallId: "tc1",
-            content: [{ type: "text", text: "output" }],
-            isError: false,
-        } as Message;
-
-        tracker.onProgress(makeToolResultEvent(msg));
-
-        expect(onChange).not.toHaveBeenCalled();
     });
 
     it("onChange exceptions are swallowed", () => {
