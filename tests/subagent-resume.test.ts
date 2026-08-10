@@ -754,7 +754,7 @@ describe("subagent_resume execute handler (fork-on-resume)", () => {
         );
 
         expect(result.isError).toBe(true);
-        expect(result.content[0].text).toContain("not found on disk");
+        expect(result.content[0].text).toContain("Session file not found");
     });
 
     it("returns error when fork copy fails", async () => {

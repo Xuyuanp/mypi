@@ -43,10 +43,28 @@ type ThemeBgFn = Theme["bg"];
 // ── Constants ────────────────────────────────────────────────────────
 
 export const ICON_RUNNING = "\u25cb";
-const ICON_SUCCESS = "\u25cf";
-const ICON_ERROR = "\u25cf";
+const ICON_DONE = "\u25cf";
+const ICON_FAILED = "\u00d7";
+
+const TASK_HEADER = "\u2500\u2500\u2500 Task \u2500\u2500\u2500";
+const OUTPUT_HEADER = "\u2500\u2500\u2500 Output \u2500\u2500\u2500";
 
 // ── Formatting helpers ───────────────────────────────────────────────
+
+/** Truncate a string to `max` characters, appending an ellipsis. */
+export function truncateText(text: string, max: number): string {
+    return text.length > max ? `${text.slice(0, max)}...` : text;
+}
+
+/** Collapse whitespace/newlines so text renders on a single line. */
+export function flattenDescription(desc: string | undefined): string {
+    return (desc ?? "").replace(/\s+/g, " ").trim();
+}
+
+/** Themed "─── Task ───" section header component. */
+export function taskHeader(theme: RenderTheme): Text {
+    return new Text(theme.fg("muted", TASK_HEADER), 0, 0);
+}
 
 /** Format a token count into a human-readable short form. */
 export function formatTokens(count: number): string {
@@ -121,6 +139,11 @@ function shortenPath(p: string): string {
     return p.startsWith(HOME_DIR) ? `~${p.slice(HOME_DIR.length)}` : p;
 }
 
+/** Extract a file-path arg (`file_path` or `path`) with a fallback. */
+function getToolPath(args: Record<string, unknown>, fallback = "..."): string {
+    return ((args.file_path || args.path) as string) || fallback;
+}
+
 /** Format a tool call with TUI theme colors. */
 function formatToolCall(
     toolName: string,
@@ -130,13 +153,11 @@ function formatToolCall(
     switch (toolName) {
         case "bash": {
             const command = (args.command as string) || "...";
-            const preview =
-                command.length > 60 ? `${command.slice(0, 60)}...` : command;
+            const preview = truncateText(command, 60);
             return themeFg("muted", "bash ") + themeFg("dim", preview);
         }
         case "read": {
-            const rawPath = (args.file_path || args.path || "...") as string;
-            const filePath = shortenPath(rawPath);
+            const filePath = shortenPath(getToolPath(args));
             const offset = args.offset as number | undefined;
             const limit = args.limit as number | undefined;
             let text = themeFg("dim", filePath);
@@ -151,8 +172,7 @@ function formatToolCall(
             return themeFg("muted", "read ") + text;
         }
         case "write": {
-            const rawPath = (args.file_path || args.path || "...") as string;
-            const filePath = shortenPath(rawPath);
+            const filePath = shortenPath(getToolPath(args));
             const content = (args.content || "") as string;
             const lines = content.split("\n").length;
             let text = themeFg("muted", "write ") + themeFg("dim", filePath);
@@ -160,16 +180,16 @@ function formatToolCall(
             return text;
         }
         case "edit": {
-            const rawPath = (args.file_path || args.path || "...") as string;
-            return themeFg("muted", "edit ") + themeFg("dim", shortenPath(rawPath));
+            const filePath = shortenPath(getToolPath(args));
+            return themeFg("muted", "edit ") + themeFg("dim", filePath);
         }
         case "ls": {
-            const rawPath = (args.path || ".") as string;
-            return themeFg("muted", "ls ") + themeFg("dim", shortenPath(rawPath));
+            const filePath = shortenPath(getToolPath(args, "."));
+            return themeFg("muted", "ls ") + themeFg("dim", filePath);
         }
         case "find": {
             const pattern = (args.pattern || "*") as string;
-            const rawPath = (args.path || ".") as string;
+            const rawPath = getToolPath(args, ".");
             return (
                 themeFg("muted", "find ") +
                 themeFg("dim", pattern) +
@@ -178,7 +198,7 @@ function formatToolCall(
         }
         case "grep": {
             const pattern = (args.pattern || "") as string;
-            const rawPath = (args.path || ".") as string;
+            const rawPath = getToolPath(args, ".");
             return (
                 themeFg("muted", "grep ") +
                 themeFg("dim", `/${pattern}/`) +
@@ -186,9 +206,7 @@ function formatToolCall(
             );
         }
         default: {
-            const argsStr = JSON.stringify(args);
-            const preview =
-                argsStr.length > 50 ? `${argsStr.slice(0, 50)}...` : argsStr;
+            const preview = truncateText(JSON.stringify(args), 50);
             return themeFg("muted", toolName) + themeFg("dim", ` ${preview}`);
         }
     }
@@ -200,9 +218,9 @@ function formatToolCall(
 function toolStatusIcon(status: ToolCallStatus, theme: { fg: ThemeFg }): string {
     switch (status) {
         case "success":
-            return theme.fg("dim", ICON_SUCCESS);
+            return theme.fg("dim", ICON_DONE);
         case "error":
-            return ICON_ERROR;
+            return ICON_FAILED;
         case "pending":
             return theme.fg("dim", ICON_RUNNING);
     }
@@ -282,22 +300,10 @@ function appendExpandedContent(
     theme: RenderTheme,
 ): void {
     const mdTheme = getMarkdownTheme();
-    container.addChild(
-        new Text(
-            theme.fg("muted", "\u2500\u2500\u2500 Task \u2500\u2500\u2500"),
-            0,
-            0,
-        ),
-    );
+    container.addChild(taskHeader(theme));
     container.addChild(new Text(theme.fg("dim", task), 0, 0));
     container.addChild(new Spacer(1));
-    container.addChild(
-        new Text(
-            theme.fg("muted", "\u2500\u2500\u2500 Output \u2500\u2500\u2500"),
-            0,
-            0,
-        ),
-    );
+    container.addChild(new Text(theme.fg("muted", OUTPUT_HEADER), 0, 0));
     if (toolCallItems.length === 0 && !finalOutput) {
         container.addChild(new Text(theme.fg("muted", "(no output)"), 0, 0));
     } else {
@@ -361,13 +367,7 @@ function renderBackgroundRunning(
     box.addChild(new Text(headerText, 0, 0));
     if (expanded && result.task) {
         box.addChild(new Spacer(1));
-        box.addChild(
-            new Text(
-                theme.fg("muted", "\u2500\u2500\u2500 Task \u2500\u2500\u2500"),
-                0,
-                0,
-            ),
-        );
+        box.addChild(taskHeader(theme));
         box.addChild(new Text(theme.fg("dim", result.task), 0, 0));
     }
     const recentTools = buildRecentToolCallsText(toolCallItems, theme);

@@ -13,10 +13,7 @@
  *   formatting, status icons, and usage stats (tokens/cost/time).
  */
 
-import * as fs from "node:fs";
-import * as path from "node:path";
-
-import type { ExtensionAPI, Skill } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, Skill, Theme } from "@earendil-works/pi-coding-agent";
 import { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { Container, Spacer, Text } from "@earendil-works/pi-tui";
 
@@ -31,17 +28,26 @@ import {
     makeErrorToolResult,
     makeResumeErrorResult,
 } from "./orchestration.js";
-import { renderSubagentResult } from "./render.js";
+import {
+    flattenDescription,
+    renderSubagentResult,
+    taskHeader,
+    truncateText,
+} from "./render.js";
 import {
     deriveForkSessionPath,
     deriveSessionPath,
-    hydrateResolvedAgent,
     resolveAgentConfig,
 } from "./resolve.js";
-import { lookupSubagentSession } from "./resume.js";
+import {
+    lookupSubagentSession,
+    resolveResumeTarget,
+    runningAgentMessage,
+} from "./resume.js";
 import type { AgentSpec, PersistedResolvedAgent, SubagentDetails } from "./types.js";
 import {
     BACKGROUND_RESULT_TYPE,
+    errorMessage,
     formatModelString,
     ResumeParamsSchema,
     SubagentParamsSchema,
@@ -62,6 +68,41 @@ interface SubagentRenderState {
 
 function escapeXml(str: string): string {
     return str.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+/** Type guard: value is a SubagentDetails-shaped tool result detail. */
+function isSubagentDetails(details: unknown): details is SubagentDetails {
+    return !!details && typeof details === "object" && "kind" in details;
+}
+
+/** Minimal tool-result shape needed for the plain-text fallback render. */
+interface PlainRenderResult {
+    content: ({ type: "text"; text: string } | { type: string; text?: string })[];
+}
+
+/** Render a tool result that carries no subagent details. */
+function renderPlainResult(result: PlainRenderResult, theme: Theme): Text {
+    const text = result.content[0];
+    return new Text(
+        text?.type === "text" ? theme.fg("dim", text.text ?? "") : "(no output)",
+        0,
+        0,
+    );
+}
+
+/** Publish the resolved agent for renderCall's model display. */
+function publishResolvedAgent(
+    state: SubagentRenderState,
+    details: SubagentDetails,
+): void {
+    if (details.resolvedAgent) state.resolvedAgent = details.resolvedAgent;
+}
+
+/** Build the muted model-suffix part of a tool call header. */
+function buildModelPart(state: SubagentRenderState, theme: Theme): string {
+    return state.resolvedAgent
+        ? theme.fg("muted", ` ${formatModelString(state.resolvedAgent.model)}`)
+        : "";
 }
 
 function buildToolDescription(agents: AgentSpec[]): string {
@@ -230,13 +271,10 @@ export default function (pi: ExtensionAPI) {
             const agentName = args.agent || "...";
             const desc = args.description || "...";
             const bgIndicator = args.background ? theme.fg("muted", " (bg)") : "";
-            const state = context.state as SubagentRenderState;
-            const modelPart = state.resolvedAgent
-                ? theme.fg(
-                      "muted",
-                      ` ${formatModelString(state.resolvedAgent.model)}`,
-                  )
-                : "";
+            const modelPart = buildModelPart(
+                context.state as SubagentRenderState,
+                theme,
+            );
             const text =
                 theme.fg("toolTitle", theme.bold("subagent ")) +
                 theme.fg("text", agentName) +
@@ -248,47 +286,29 @@ export default function (pi: ExtensionAPI) {
 
         renderResult(result, { expanded }, theme, context) {
             const details = result.details;
-            if (!details || typeof details !== "object" || !("kind" in details)) {
-                const text = result.content[0];
-                return new Text(
-                    text?.type === "text"
-                        ? theme.fg("dim", text.text)
-                        : "(no output)",
-                    0,
-                    0,
-                );
+            if (!isSubagentDetails(details)) {
+                return renderPlainResult(result, theme);
             }
-            const typed = details as SubagentDetails;
             // Publish resolved agent to shared state for renderCall
-            const state = context.state as SubagentRenderState;
-            if (typed.resolvedAgent) state.resolvedAgent = typed.resolvedAgent;
+            publishResolvedAgent(context.state as SubagentRenderState, details);
 
-            if (typed.kind === "background") {
+            if (details.kind === "background") {
                 const contentText = result.content[0];
                 const msg =
                     contentText?.type === "text" ? contentText.text : "(started)";
-                if (expanded && typed.result.task) {
+                if (expanded && details.result.task) {
                     const container = new Container();
                     container.addChild(new Text(theme.fg("dim", msg), 0, 0));
                     container.addChild(new Spacer(1));
+                    container.addChild(taskHeader(theme));
                     container.addChild(
-                        new Text(
-                            theme.fg(
-                                "muted",
-                                "\u2500\u2500\u2500 Task \u2500\u2500\u2500",
-                            ),
-                            0,
-                            0,
-                        ),
-                    );
-                    container.addChild(
-                        new Text(theme.fg("dim", typed.result.task), 0, 0),
+                        new Text(theme.fg("dim", details.result.task), 0, 0),
                     );
                     return container;
                 }
                 return new Text(theme.fg("dim", msg), 0, 0);
             }
-            return renderSubagentResult(typed, expanded, theme);
+            return renderSubagentResult(details, expanded, theme);
         },
     });
 
@@ -309,9 +329,7 @@ export default function (pi: ExtensionAPI) {
             const { id, follow_up } = params;
 
             if (bgManager.agents.has(id)) {
-                return makeResumeErrorResult(
-                    `Agent "${id}" is still running. Wait for it to complete or cancel it first.`,
-                );
+                return makeResumeErrorResult(runningAgentMessage(id));
             }
 
             const entries = ctx.sessionManager.getBranch() as any[];
@@ -334,35 +352,24 @@ export default function (pi: ExtensionAPI) {
 
             const { details: matchedDetails, session } = lookup;
 
-            const sessionFile = path.join(session.dir, `${session.id}.jsonl`);
-            if (!fs.existsSync(sessionFile)) {
-                return makeResumeErrorResult(
-                    `Session file not found on disk: ${sessionFile}`,
-                );
-            }
-
-            if (!matchedDetails.resolvedAgent) {
-                return makeResumeErrorResult(
-                    `Session "${id}" has no resolved agent info. Cannot resume.`,
-                );
-            }
-
-            const resolvedAgent = hydrateResolvedAgent(
+            const target = resolveResumeTarget(
+                session,
                 matchedDetails.resolvedAgent,
                 knownAgents,
+                "resume",
             );
-            if (!resolvedAgent) {
-                return makeResumeErrorResult(
-                    `Agent "${matchedDetails.resolvedAgent.name}" is no longer available.`,
-                );
+            if (!target.ok) {
+                return makeResumeErrorResult(target.error);
             }
+            const { resolvedAgent, sessionFile } = target;
 
             const newSession = deriveForkSessionPath(session, resolvedAgent.name);
             try {
                 await forkSubagentSession(sessionFile, newSession);
             } catch (err: unknown) {
-                const msg = err instanceof Error ? err.message : "unknown error";
-                return makeResumeErrorResult(`Failed to fork session: ${msg}`);
+                return makeResumeErrorResult(
+                    `Failed to fork session: ${errorMessage(err)}`,
+                );
             }
 
             return executeForeground(
@@ -387,20 +394,14 @@ export default function (pi: ExtensionAPI) {
         renderCall(args, theme, context) {
             const sessionId = args.id || "...";
             const agentName = sessionId.replace(/-[^-]+$/, "") || sessionId;
-            const state = context.state as SubagentRenderState;
-            const modelPart = state.resolvedAgent
-                ? theme.fg(
-                      "muted",
-                      ` ${formatModelString(state.resolvedAgent.model)}`,
-                  )
-                : "";
+            const modelPart = buildModelPart(
+                context.state as SubagentRenderState,
+                theme,
+            );
             const rawFollowUp = args.follow_up
-                ? args.follow_up.replace(/\s+/g, " ").trim()
+                ? flattenDescription(args.follow_up)
                 : "...";
-            const followUp =
-                rawFollowUp.length > 60
-                    ? `${rawFollowUp.slice(0, 60)}...`
-                    : rawFollowUp;
+            const followUp = truncateText(rawFollowUp, 60);
             const text =
                 theme.fg("toolTitle", theme.bold("subagent_resume ")) +
                 theme.fg("text", agentName) +
@@ -411,27 +412,13 @@ export default function (pi: ExtensionAPI) {
 
         renderResult(result, { expanded }, theme, context) {
             const details = result.details;
-            if (
-                !details ||
-                typeof details !== "object" ||
-                !("kind" in details) ||
-                details.kind !== "foreground"
-            ) {
-                const text = result.content[0];
-                return new Text(
-                    text?.type === "text"
-                        ? theme.fg("dim", text.text)
-                        : "(no output)",
-                    0,
-                    0,
-                );
+            if (!isSubagentDetails(details) || details.kind !== "foreground") {
+                return renderPlainResult(result, theme);
             }
             // Publish resolved agent to shared state for renderCall
-            const typed = details as SubagentDetails;
-            const state = context.state as SubagentRenderState;
-            if (typed.resolvedAgent) state.resolvedAgent = typed.resolvedAgent;
+            publishResolvedAgent(context.state as SubagentRenderState, details);
 
-            return renderSubagentResult(typed, expanded, theme);
+            return renderSubagentResult(details, expanded, theme);
         },
     });
 }

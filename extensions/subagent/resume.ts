@@ -1,11 +1,22 @@
 /**
- * Pure lookup logic for subagent_resume.
+ * Lookup and validation logic for subagent_resume and /subagent attach.
  *
  * Scans session entries to find a matching subagent session reference
- * by ID. Extracted as a testable pure function.
+ * by ID, and validates that a found session can be resumed/attached
+ * (session file on disk, agent still registered). Lookup is pure;
+ * resolveResumeTarget touches the filesystem via fs.existsSync.
  */
 
-import type { SubagentDetails, SubagentToolParams } from "./types.js";
+import * as fs from "node:fs";
+
+import { hydrateResolvedAgent, sessionFilePath } from "./resolve.js";
+import type {
+    AgentSpec,
+    PersistedResolvedAgent,
+    ResolvedAgent,
+    SubagentDetails,
+    SubagentToolParams,
+} from "./types.js";
 import { BACKGROUND_RESULT_TYPE } from "./types.js";
 
 // ── Types ────────────────────────────────────────────────────────────
@@ -53,6 +64,49 @@ export type LookupEntry =
       }
     | { type: "custom_message"; customType: string; details?: unknown }
     | { type: string };
+
+// ── Resume target validation ────────────────────────────────────────
+
+export type ResumeTarget =
+    | { ok: true; resolvedAgent: ResolvedAgent; sessionFile: string }
+    | { ok: false; error: string };
+
+/**
+ * Validate a completed subagent session for resume/attach: session file
+ * exists on disk, persisted agent info is present, and the agent is
+ * still registered. Shared by the subagent_resume tool and
+ * /subagent attach so the two paths cannot drift apart.
+ */
+export function resolveResumeTarget(
+    session: { dir: string; id: string },
+    persisted: PersistedResolvedAgent | undefined,
+    agents: AgentSpec[],
+    action: "resume" | "attach",
+): ResumeTarget {
+    const sessionFile = sessionFilePath(session);
+    if (!fs.existsSync(sessionFile)) {
+        return { ok: false, error: `Session file not found: ${sessionFile}` };
+    }
+    if (!persisted) {
+        return {
+            ok: false,
+            error: `Session "${session.id}" has no resolved agent info. Cannot ${action}.`,
+        };
+    }
+    const resolvedAgent = hydrateResolvedAgent(persisted, agents);
+    if (!resolvedAgent) {
+        return {
+            ok: false,
+            error: `Agent "${persisted.name}" is no longer available.`,
+        };
+    }
+    return { ok: true, resolvedAgent, sessionFile };
+}
+
+/** User-facing error message for a still-running background agent. */
+export function runningAgentMessage(id: string): string {
+    return `Agent "${id}" is still running. Wait for it to complete or cancel it first.`;
+}
 
 // ── listCompletedSubagents ───────────────────────────────────────────
 

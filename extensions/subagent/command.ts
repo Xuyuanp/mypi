@@ -26,7 +26,6 @@
  */
 
 import * as fs from "node:fs";
-import * as path from "node:path";
 import type {
     ExtensionAPI,
     ExtensionCommandContext,
@@ -50,14 +49,17 @@ import type { BackgroundManager } from "./background.js";
 import { buildSubagentCommand } from "./execute.js";
 import type { Multiplexer } from "./multiplexer.js";
 import { shellQuote } from "./multiplexer.js";
-import { hydrateResolvedAgent } from "./resolve.js";
+import { flattenDescription } from "./render.js";
 import type { LookupEntry } from "./resume.js";
 import {
     type CompletedSubagent,
     listCompletedSubagents,
     lookupSubagentSession,
+    resolveResumeTarget,
+    runningAgentMessage,
 } from "./resume.js";
 import type { AgentSpec } from "./types.js";
+import { errorMessage } from "./types.js";
 
 interface AgentRow {
     name: string;
@@ -105,11 +107,6 @@ function isCloseKey(data: string): boolean {
         matchesKey(data, Key.ctrl("c")) ||
         data.toLowerCase() === "q"
     );
-}
-
-/** Collapse whitespace/newlines so a description renders on a single line. */
-function flattenDescription(desc: string | undefined): string {
-    return (desc ?? "").replace(/\s+/g, " ").trim();
 }
 
 /** Build display rows from the discovered agents, preserving their order. */
@@ -425,9 +422,7 @@ class AgentsListView implements Component {
         try {
             content = fs.readFileSync(row.filePath, "utf-8");
         } catch (err) {
-            content = `Failed to read agent definition:\n${row.filePath}\n\n${
-                err instanceof Error ? err.message : String(err)
-            }`;
+            content = `Failed to read agent definition:\n${row.filePath}\n\n${errorMessage(err)}`;
         }
 
         const title = `${row.name} (${row.source}) \u2014 ${row.filePath}`;
@@ -519,10 +514,7 @@ async function handleAttach(
     if (idArg) {
         // Direct ID specified
         if (bgManager.agents.has(idArg)) {
-            ctx.ui.notify(
-                `Agent "${idArg}" is still running. Wait for it to complete or cancel it first.`,
-                "warning",
-            );
+            ctx.ui.notify(runningAgentMessage(idArg), "warning");
             return;
         }
 
@@ -572,35 +564,19 @@ async function handleAttach(
         selected = match;
     }
 
-    // 4. Validate session file exists on disk
-    const sessionFile = path.join(
-        selected.session.dir,
-        `${selected.session.id}.jsonl`,
-    );
-    if (!fs.existsSync(sessionFile)) {
-        ctx.ui.notify(`Session file not found: ${sessionFile}`, "error");
-        return;
-    }
-
-    // 5. Validate resolved agent info
-    if (!selected.details.resolvedAgent) {
-        ctx.ui.notify(
-            `Session "${selected.id}" has no resolved agent info. Cannot attach.`,
-            "error",
-        );
-        return;
-    }
-    const resolvedAgent = hydrateResolvedAgent(
+    // 4-5. Validate session file exists + resolved agent info is usable.
+    // Shared with the subagent_resume tool (resolveResumeTarget).
+    const target = resolveResumeTarget(
+        selected.session,
         selected.details.resolvedAgent,
         agents,
+        "attach",
     );
-    if (!resolvedAgent) {
-        ctx.ui.notify(
-            `Agent "${selected.details.resolvedAgent.name}" is no longer available.`,
-            "error",
-        );
+    if (!target.ok) {
+        ctx.ui.notify(target.error, "error");
         return;
     }
+    const resolvedAgent = target.resolvedAgent;
 
     // 6. Determine working directory
     const cwd = selected.originalParams?.cwd ?? ctx.cwd;
@@ -616,7 +592,7 @@ async function handleAttach(
     // 8. Build subagent command
     const built = await buildSubagentCommand(resolvedAgent);
     // Append --session flag for interactive resume
-    built.args.push("--session", sessionFile);
+    built.args.push("--session", target.sessionFile);
 
     // 9. Construct shell command string
     const envPrefix = `PI_SUBAGENT=1 PI_SUBAGENT_NAME=${shellQuote(resolvedAgent.name)}`;

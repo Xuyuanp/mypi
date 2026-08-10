@@ -40,7 +40,12 @@ import type {
     SubagentProgressCallback,
     UsageStats,
 } from "./types.js";
-import { createZeroUsage, formatModelString } from "./types.js";
+import {
+    createZeroUsage,
+    errorMessage,
+    formatModelString,
+    makeEmptyResult,
+} from "./types.js";
 
 // ── Constants ────────────────────────────────────────────────────────
 
@@ -113,6 +118,13 @@ async function writePromptToTempFile(
         });
     });
     return filePath;
+}
+
+/** Compose the full appended system prompt: preamble + agent prompt. */
+function buildAppendedPrompt(agent: ResolvedAgent): string {
+    return agent.systemPrompt.trim()
+        ? `${SUBAGENT_PREAMBLE}\n${agent.systemPrompt}`
+        : SUBAGENT_PREAMBLE.trim();
 }
 
 /**
@@ -188,9 +200,7 @@ export async function buildSubagentCommand(
         args.push("--tools", agent.tools.join(","));
     }
 
-    const fullSystemPrompt = agent.systemPrompt.trim()
-        ? `${SUBAGENT_PREAMBLE}\n${agent.systemPrompt}`
-        : SUBAGENT_PREAMBLE.trim();
+    const fullSystemPrompt = buildAppendedPrompt(agent);
 
     const tmpPromptPath = await writePromptToTempFile(agent.name, fullSystemPrompt);
     args.push("--append-system-prompt", tmpPromptPath);
@@ -258,9 +268,7 @@ function createSubagentResourceLoader(
     agent: ResolvedAgent,
     skillCache: Map<string, Skill>,
 ): ResourceLoader {
-    const appendedPrompt = agent.systemPrompt.trim()
-        ? `${SUBAGENT_PREAMBLE}\n${agent.systemPrompt}`
-        : SUBAGENT_PREAMBLE.trim();
+    const appendedPrompt = buildAppendedPrompt(agent);
     const skills =
         agent.skillPaths && agent.skillPaths.length > 0
             ? [...skillCache.values()].filter((skill) =>
@@ -375,33 +383,17 @@ export async function runSubagent(
         if (signal?.aborted) {
             // An abort that lands before the model is resolved wins over the
             // missing-model error path below.
-            return {
-                agent: agent.name,
-                agentSource: agent.source,
-                task,
-                outcome: { status: "aborted" },
-                messages: [],
-                stderr: "",
-                usage,
-                durationMs: 0,
-            };
+            return makeEmptyResult(agent.name, agent.source, task, {
+                status: "aborted",
+            });
         }
         const model = runtime.getModel(agent.model.provider, agent.model.name);
         if (!model) {
-            return {
-                agent: agent.name,
-                agentSource: agent.source,
-                task,
-                outcome: {
-                    status: "error",
-                    exitCode: 1,
-                    message: `Model not available: ${formatModelString(agent.model)}`,
-                },
-                messages: [],
-                stderr: "",
-                usage,
-                durationMs: 0,
-            };
+            return makeEmptyResult(agent.name, agent.source, task, {
+                status: "error",
+                exitCode: 1,
+                message: `Model not available: ${formatModelString(agent.model)}`,
+            });
         }
 
         const settingsManager = SettingsManager.inMemory({
@@ -502,7 +494,7 @@ export async function runSubagent(
     } catch (err: unknown) {
         if (!wasAborted) {
             latestStopReason = "error";
-            latestErrorMessage = err instanceof Error ? err.message : String(err);
+            latestErrorMessage = errorMessage(err);
         }
     } finally {
         unsubscribe?.();

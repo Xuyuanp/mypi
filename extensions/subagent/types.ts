@@ -328,6 +328,42 @@ export const ZERO_USAGE: Readonly<UsageStats> = Object.freeze({
 });
 
 /**
+ * Build an empty AgentRunResult (no messages) for early error/abort paths.
+ * Centralizes the repeated `messages: [], stderr, usage: ZERO_USAGE,
+ * durationMs: 0` construction.
+ */
+export function makeEmptyResult(
+    agent: string,
+    agentSource: AgentRunResult["agentSource"],
+    task: string,
+    outcome: AgentOutcome,
+    stderr = "",
+): AgentRunResult {
+    return {
+        agent,
+        agentSource,
+        task,
+        outcome,
+        messages: [],
+        stderr,
+        usage: ZERO_USAGE,
+        durationMs: 0,
+    };
+}
+
+/** Extract a readable message from an unknown thrown value. */
+export function errorMessage(err: unknown): string {
+    return err instanceof Error ? err.message : String(err);
+}
+
+/** Build the `[subagent: <id>]` message prefix for a session, if any. */
+export function buildSessionHeader(
+    session: { dir: string; id: string } | undefined,
+): string {
+    return session ? `[subagent: ${session.id}]\n\n` : "";
+}
+
+/**
  * Returns true when the subagent result indicates a failure.
  * Positively matches error/aborted variants.
  */

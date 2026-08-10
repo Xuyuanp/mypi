@@ -33,6 +33,11 @@ export interface ResolveAgentConfigOptions {
 
 // ── Skill resolution ─────────────────────────────────────────────────
 
+/** Format a list as quoted, comma-separated items with a fallback. */
+function quoteList(items: string[], fallback: string): string {
+    return items.length > 0 ? items.map((n) => `"${n}"`).join(", ") : fallback;
+}
+
 /**
  * Resolve skill names to absolute file paths via the skill cache.
  * Returns resolved paths, or an error message if any skill is unknown.
@@ -46,10 +51,10 @@ export function resolveSkills(
     if (!skillNames?.length) return { paths: undefined };
     const unresolved = skillNames.filter((name) => !skillCache.has(name));
     if (unresolved.length) {
-        const available =
-            skillCache.size > 0
-                ? [...skillCache.keys()].map((n) => `"${n}"`).join(", ")
-                : "none (skill cache empty)";
+        const available = quoteList(
+            [...skillCache.keys()],
+            "none (skill cache empty)",
+        );
         const msg = `Unknown skill${unresolved.length > 1 ? "s" : ""}: ${unresolved.map((n) => `"${n}"`).join(", ")}. Available: ${available}.`;
         return { error: msg };
     }
@@ -72,7 +77,10 @@ export function resolveAgentConfig(
 ): ResolvedAgent | string {
     const agent = agents.find((a) => a.name === params.agent);
     if (!agent) {
-        const available = agents.map((a) => `"${a.name}"`).join(", ") || "none";
+        const available = quoteList(
+            agents.map((a) => a.name),
+            "none",
+        );
         return `Unknown agent: "${params.agent}". Available agents: ${available}.`;
     }
 
@@ -111,6 +119,16 @@ export function resolveAgentConfig(
 
 // ── Session path derivation ──────────────────────────────────────────
 
+/** Generate a subagent session ID: `${agentName}-${8 random hex chars}`. */
+export function generateSessionId(agentName: string): string {
+    return `${agentName}-${randomUUID().slice(0, 8)}`;
+}
+
+/** Derive the .jsonl file path for a subagent session. */
+export function sessionFilePath(session: { dir: string; id: string }): string {
+    return path.join(session.dir, `${session.id}.jsonl`);
+}
+
 /** Derive a subagent session directory and ID from the parent session. */
 export function deriveSessionPath(
     agentName: string,
@@ -118,14 +136,14 @@ export function deriveSessionPath(
 ): { dir: string; id: string } | undefined {
     if (!sessionFile) return undefined;
     const dir = path.resolve(sessionFile.slice(0, -".jsonl".length), "subagent");
-    const id = `${agentName}-${randomUUID().slice(0, 8)}`;
+    const id = generateSessionId(agentName);
     return { dir, id };
 }
 
 /**
  * Derive a fork session path in the same directory as the original.
- * Uses the same ID scheme as deriveSessionPath: `${agentName}-${randomUUID().slice(0, 8)}`.
- * Retries if the generated ID matches originalSession.id.
+ * Uses the same ID scheme as deriveSessionPath. Retries if the generated
+ * ID matches originalSession.id.
  */
 export function deriveForkSessionPath(
     originalSession: { dir: string; id: string },
@@ -133,7 +151,7 @@ export function deriveForkSessionPath(
 ): { dir: string; id: string } {
     let id: string;
     do {
-        id = `${agentName}-${randomUUID().slice(0, 8)}`;
+        id = generateSessionId(agentName);
     } while (id === originalSession.id);
     return { dir: originalSession.dir, id };
 }

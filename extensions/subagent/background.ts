@@ -11,8 +11,9 @@ import type { Theme } from "@earendil-works/pi-coding-agent";
 import type { Component, TUI } from "@earendil-works/pi-tui";
 import { Container, TruncatedText } from "@earendil-works/pi-tui";
 import { renderSubagentResult } from "./render.js";
+import { snapshotExecStatuses } from "./tracker.js";
 import type { AgentRunResult, BackgroundAgent, SubagentDetails } from "./types.js";
-import { BACKGROUND_RESULT_TYPE } from "./types.js";
+import { BACKGROUND_RESULT_TYPE, buildSessionHeader } from "./types.js";
 
 // ── Constants ────────────────────────────────────────────────────────
 
@@ -144,7 +145,7 @@ export function createBackgroundManager(
                                 description: entry.description,
                                 cancelled: false,
                                 session: entry.session,
-                                execStatuses: Object.fromEntries(
+                                execStatuses: snapshotExecStatuses(
                                     entry.tracker.execStatuses,
                                 ),
                                 result: {
@@ -249,10 +250,7 @@ export function createBackgroundManager(
             details?: Omit<SubagentDetails, "result" | "kind">,
         ): void {
             if (!active) return;
-            const sessionHeader = details?.session
-                ? `[subagent: ${details.session.id}]\n\n`
-                : "";
-            const content = `${sessionHeader}[Background subagent result \u2014 this is NOT a user message. A fire-and-forget background agent "${id}" has been ${status}. ${status === "cancelled" ? "Do not wait for its result." : "Acknowledge briefly or act on the result only if relevant to the current task."}]\n\n${output}`;
+            const content = `${buildSessionHeader(details?.session)}[Background subagent result \u2014 this is NOT a user message. A fire-and-forget background agent "${id}" has been ${status}. ${status === "cancelled" ? "Do not wait for its result." : "Acknowledge briefly or act on the result only if relevant to the current task."}]\n\n${output}`;
             injectMessage(
                 {
                     customType: BACKGROUND_RESULT_TYPE,

@@ -24,6 +24,15 @@ interface CreateProgressTrackerOpts {
     onChange?: () => void;
 }
 
+// ── Helpers ──────────────────────────────────────────────────────────
+
+/** Snapshot the tool-call status map as a plain record. */
+export function snapshotExecStatuses(
+    execStatuses: Map<string, boolean>,
+): Record<string, boolean> {
+    return Object.fromEntries(execStatuses);
+}
+
 // ── Factory ──────────────────────────────────────────────────────────
 
 export function createProgressTracker(

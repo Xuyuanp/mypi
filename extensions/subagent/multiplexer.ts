@@ -14,6 +14,8 @@
  * wrapping pi.exec) and closed over — attach() callers never see it.
  */
 
+import { errorMessage } from "./types.js";
+
 // ── Types ────────────────────────────────────────────────────────────
 
 /** Minimal exec interface — mirrors pi.exec without opts (not needed). */
@@ -183,7 +185,7 @@ function createHerdrMultiplexer(exec: ExecFn): Multiplexer<HerdrDirection> {
                     }
                 }
             } catch (err: unknown) {
-                const msg = err instanceof Error ? err.message : "unknown error";
+                const msg = errorMessage(err);
                 return {
                     code: 1,
                     stderr: `failed to create herdr pane: ${msg}`,

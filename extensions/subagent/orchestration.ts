@@ -11,14 +11,13 @@
 
 import { randomUUID } from "node:crypto";
 import * as fs from "node:fs";
-import * as path from "node:path";
 
 import type { ModelRuntime, Skill } from "@earendil-works/pi-coding-agent";
 
 import type { BackgroundManager } from "./background.js";
 import { runSubagent } from "./execute.js";
-import { persistAgent } from "./resolve.js";
-import { createProgressTracker } from "./tracker.js";
+import { persistAgent, sessionFilePath } from "./resolve.js";
+import { createProgressTracker, snapshotExecStatuses } from "./tracker.js";
 import type {
     AgentRunResult,
     ResolvedAgent,
@@ -26,7 +25,13 @@ import type {
     SubagentToolParams,
     ToolResult,
 } from "./types.js";
-import { getFinalOutput, isSubagentError, ZERO_USAGE } from "./types.js";
+import {
+    buildSessionHeader,
+    errorMessage,
+    getFinalOutput,
+    isSubagentError,
+    makeEmptyResult,
+} from "./types.js";
 
 // ── Session forking ──────────────────────────────────────────────────
 
@@ -43,7 +48,7 @@ export async function forkSubagentSession(
     await fs.promises.mkdir(newSession.dir, { recursive: true });
     await fs.promises.copyFile(
         originalFile,
-        path.join(newSession.dir, `${newSession.id}.jsonl`),
+        sessionFilePath(newSession),
         fs.constants.COPYFILE_EXCL,
     );
 }
@@ -95,20 +100,13 @@ export function makeErrorToolResult(
         content: [{ type: "text", text: msg }],
         details: {
             kind: "foreground",
-            result: {
-                agent: params.agent,
-                agentSource: "unknown",
-                task: params.task,
-                outcome: {
-                    status: "error",
-                    exitCode: 1,
-                    message: msg,
-                },
-                messages: [],
-                stderr: msg,
-                usage: ZERO_USAGE,
-                durationMs: 0,
-            },
+            result: makeEmptyResult(
+                params.agent,
+                "unknown",
+                params.task,
+                { status: "error", exitCode: 1, message: msg },
+                msg,
+            ),
             execStatuses: {},
         },
         isError: true,
@@ -139,9 +137,7 @@ export function executeBackground(
     const tracker = createProgressTracker({
         onChange: () => bgManager.updateWidget(),
     });
-    const sessionFile = session
-        ? path.join(session.dir, `${session.id}.jsonl`)
-        : undefined;
+    const sessionFile = session ? sessionFilePath(session) : undefined;
 
     const promise = runSubagent(resolvedAgent, params.task, params.cwd ?? cwd, {
         signal: controller.signal,
@@ -169,84 +165,50 @@ export function executeBackground(
     ): Omit<SubagentDetails, "result" | "kind"> => ({
         description: params.description,
         cancelled,
-        execStatuses: Object.fromEntries(tracker.execStatuses),
+        execStatuses: snapshotExecStatuses(tracker.execStatuses),
         session,
         resolvedAgent: persistAgent(resolvedAgent),
     });
 
-    // When done, inject result and clean up
-    promise
-        .then((result) => {
-            const wasCancelled = controller.signal.aborted;
-            bgManager.remove(id);
-            if (!bgManager.sessionActive) return;
+    // When done, inject result and clean up.
+    const settle = (result: AgentRunResult, output?: string): void => {
+        const wasCancelled = controller.signal.aborted;
+        bgManager.remove(id);
+        if (!bgManager.sessionActive) return;
 
-            if (wasCancelled) {
-                bgManager.injectResult(
-                    id,
-                    "cancelled",
-                    "(cancelled by user)",
-                    result,
-                    bgDetails(true),
-                );
-                return;
-            }
-
+        if (wasCancelled) {
             bgManager.injectResult(
                 id,
-                isSubagentError(result) ? "failed" : "completed",
-                getResultOutput(result),
-                result,
-                bgDetails(false),
+                "cancelled",
+                "(cancelled by user)",
+                { ...result, outcome: { status: "aborted" } },
+                bgDetails(true),
             );
-        })
-        .catch((err: unknown) => {
-            const wasCancelled = controller.signal.aborted;
-            bgManager.remove(id);
-            if (!bgManager.sessionActive) return;
+            return;
+        }
 
-            if (wasCancelled) {
-                bgManager.injectResult(
-                    id,
-                    "cancelled",
-                    "(cancelled by user)",
-                    {
-                        agent: params.agent,
-                        agentSource: resolvedAgent.source,
-                        task: params.task,
-                        outcome: { status: "aborted" },
-                        messages: [],
-                        stderr: "",
-                        usage: ZERO_USAGE,
-                        durationMs: 0,
-                    },
-                    bgDetails(true),
-                );
-                return;
-            }
+        bgManager.injectResult(
+            id,
+            isSubagentError(result) ? "failed" : "completed",
+            output ?? getResultOutput(result),
+            result,
+            bgDetails(false),
+        );
+    };
 
-            const errMsg = err instanceof Error ? err.message : "unknown error";
-            bgManager.injectResult(
-                id,
-                "failed",
-                `Failed to start: ${errMsg}`,
-                {
-                    agent: params.agent,
-                    agentSource: resolvedAgent.source,
-                    task: params.task,
-                    outcome: {
-                        status: "error",
-                        exitCode: 1,
-                        message: errMsg,
-                    },
-                    messages: [],
-                    stderr: errMsg,
-                    usage: ZERO_USAGE,
-                    durationMs: 0,
-                },
-                bgDetails(false),
-            );
-        });
+    promise.then(settle).catch((err: unknown) => {
+        const errMsg = errorMessage(err);
+        settle(
+            makeEmptyResult(
+                params.agent,
+                resolvedAgent.source,
+                params.task,
+                { status: "error", exitCode: 1, message: errMsg },
+                errMsg,
+            ),
+            `Failed to start: ${errMsg}`,
+        );
+    });
 
     const toolResult: ToolResult = {
         content: [
@@ -257,16 +219,12 @@ export function executeBackground(
         ],
         details: {
             kind: "background",
-            result: {
-                agent: resolvedAgent.name,
-                agentSource: resolvedAgent.source,
-                task: params.task,
-                outcome: { status: "success" },
-                messages: [],
-                stderr: "",
-                usage: ZERO_USAGE,
-                durationMs: 0,
-            },
+            result: makeEmptyResult(
+                resolvedAgent.name,
+                resolvedAgent.source,
+                params.task,
+                { status: "success" },
+            ),
             ...bgDetails(false),
         },
     };
@@ -302,7 +260,7 @@ export async function executeForeground(
     const makeDetails = (result: AgentRunResult): SubagentDetails => ({
         kind: "foreground",
         result,
-        execStatuses: Object.fromEntries(tracker.execStatuses),
+        execStatuses: snapshotExecStatuses(tracker.execStatuses),
         session,
         resolvedAgent: persistAgent(resolvedAgent),
         ...(resumedFrom ? { resumedFrom } : {}),
@@ -329,9 +287,7 @@ export async function executeForeground(
             : undefined,
     });
 
-    const sessionFile = session
-        ? path.join(session.dir, `${session.id}.jsonl`)
-        : undefined;
+    const sessionFile = session ? sessionFilePath(session) : undefined;
 
     const result = await runSubagent(resolvedAgent, params.task, params.cwd ?? cwd, {
         signal,
@@ -342,7 +298,7 @@ export async function executeForeground(
         skillCache,
     });
 
-    const sessionHeader = session ? `[subagent: ${session.id}]\n\n` : "";
+    const sessionHeader = buildSessionHeader(session);
 
     if (isSubagentError(result)) {
         return {
