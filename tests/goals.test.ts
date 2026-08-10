@@ -19,6 +19,7 @@ import {
 import {
     createAgentSession,
     DefaultResourceLoader,
+    type ModelRuntime,
     SessionManager,
     SettingsManager,
 } from "@earendil-works/pi-coding-agent";

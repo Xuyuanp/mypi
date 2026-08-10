@@ -652,7 +652,7 @@ describe("subagent_resume execute handler (fork-on-resume)", () => {
         const entries = makeBranchEntries(session, resolvedAgent);
 
         // Mock runSubagent to return a successful result
-        const fakeRunResult = {
+        const fakeRunResult: AgentRunResult = {
             agent: "scout",
             agentSource: "system",
             task: "follow up question",

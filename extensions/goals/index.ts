@@ -9,7 +9,7 @@
  * aware and travels with session forks. See `store.ts`.
  */
 
-import { StringEnum } from "@earendil-works/pi-ai";
+import { type StopReason, StringEnum } from "@earendil-works/pi-ai";
 import type {
     AgentEndEvent,
     AgentToolResult,
@@ -71,7 +71,7 @@ function tokenDelta(event: TurnEndEvent): number {
 /** Find the last assistant message in a list (used at agent_end). */
 function lastAssistantStopReason(
     messages: AgentEndEvent["messages"],
-): "stop" | "length" | "toolUse" | "error" | "aborted" | undefined {
+): StopReason | undefined {
     for (let i = messages.length - 1; i >= 0; i--) {
         const m = messages[i];
         if (m.role === "assistant") return m.stopReason;

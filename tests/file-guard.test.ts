@@ -10,7 +10,13 @@ import { writeFileSync } from "node:fs";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { FauxProviderRegistration } from "@earendil-works/pi-ai";
+import type {
+    Context,
+    FauxProviderRegistration,
+    FauxProviderState,
+    FauxResponseStep,
+    SimpleStreamOptions,
+} from "@earendil-works/pi-ai";
 import {
     fauxAssistantMessage,
     fauxText,
@@ -49,7 +55,7 @@ interface ToolEndEvent {
 async function runAgent(
     cwd: string,
     faux: FauxProviderRegistration,
-    responses: ReturnType<typeof fauxAssistantMessage>[],
+    responses: FauxResponseStep[],
 ): Promise<ToolEndEvent[]> {
     faux.setResponses(responses);
 
@@ -247,7 +253,11 @@ describe("file-guard extension", () => {
                 stopReason: "toolUse",
             }),
             // Turn 2: edit — but a factory callback mutates the file first
-            ((_context, _options, _state) => {
+            ((
+                _context: Context,
+                _options: SimpleStreamOptions | undefined,
+                _state: FauxProviderState,
+            ) => {
                 // Use a factory response to modify the file right
                 // before the LLM "responds" with the edit request.
                 writeFileSync(filePath, "externally modified");

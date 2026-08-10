@@ -22,6 +22,7 @@ import type {
     ModelRuntime,
     ResourceLoader,
     Skill,
+    ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import {
     CURRENT_SESSION_VERSION,
@@ -277,7 +278,9 @@ function createSubagentResourceLoader(
         getThemes: () => ({ themes: [], diagnostics: [] }),
         getAgentsFiles: () => ({ agentsFiles: [] }),
         getSystemPrompt: () => undefined,
+        getSystemPromptSource: () => undefined,
         getAppendSystemPrompt: () => [appendedPrompt],
+        getAppendSystemPromptSources: () => [],
         extendResources: () => {},
         reload: async () => {},
     };
@@ -439,7 +442,7 @@ export async function runSubagent(
             sessionManager,
             settingsManager,
             tools: agent.tools?.length ? agent.tools : undefined,
-            customTools: [bash],
+            customTools: [bash as ToolDefinition],
         });
         session = created.session;
 

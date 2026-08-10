@@ -74,12 +74,14 @@ const TMUX_FLAGS = {
     "new-window": ["new-window"],
 } as const satisfies Record<string, string[]>;
 
+export type TmuxDirection = keyof typeof TMUX_FLAGS;
+
 /**
  * Build the tmux argument array for opening a pane/window.
  * Exported for testing.
  */
 export function buildTmuxArgs(
-    direction: string,
+    direction: TmuxDirection,
     cwd: string,
     shellCommand: string,
 ): string[] {
@@ -89,8 +91,6 @@ export function buildTmuxArgs(
     }
     return [...flags, "-c", cwd, shellCommand];
 }
-
-export type TmuxDirection = keyof typeof TMUX_FLAGS;
 
 // ── Tmux implementation ──────────────────────────────────────────────
 

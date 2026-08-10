@@ -40,7 +40,7 @@ function makeResolvedAgent(overrides?: Partial<ResolvedAgent>): ResolvedAgent {
     return {
         name: "scout",
         tools: ["read", "bash"],
-        model: parseModelString("anthropic/claude-sonnet", 100000)!,
+        model: parseModelString("anthropic/claude-sonnet")!,
         systemPrompt: "You are a scout.",
         source: "system",
         ...overrides,
@@ -390,7 +390,7 @@ describe("hydrateResolvedAgent", () => {
             name: "worker",
             tools: ["read", "write", "bash"],
             skillPaths: ["/path/to/skill1", "/path/to/skill2"],
-            model: parseModelString("openai/gpt-4o:high", 128000)!,
+            model: parseModelString("openai/gpt-4o:high")!,
             source: "user",
             systemPrompt: "You are a worker.",
         });
@@ -406,9 +406,7 @@ describe("hydrateResolvedAgent", () => {
         expect(result!.name).toBe("worker");
         expect(result!.tools).toEqual(["read", "write", "bash"]);
         expect(result!.skillPaths).toEqual(["/path/to/skill1", "/path/to/skill2"]);
-        expect(result!.model).toEqual(
-            parseModelString("openai/gpt-4o:high", 128000),
-        );
+        expect(result!.model).toEqual(parseModelString("openai/gpt-4o:high"));
         expect(result!.source).toBe("user");
         expect(result!.systemPrompt).toBe("You are a worker.");
     });

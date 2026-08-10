@@ -23,17 +23,20 @@
   },
   "scripts": {
     "check": "biome check --fix --no-errors-on-unmatched --error-on-warnings --files-ignore-unknown=true --colors=off",
-    "test": "vitest run"
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
     "@biomejs/biome": "2.4.11",
+    "@types/node": "^26.2.0",
+    "typescript": "^7.0.2",
     "vitest": "^4.1.5"
   },
   "peerDependencies": {
-    "@earendil-works/pi-agent-core": "^0.80.2",
-    "@earendil-works/pi-ai": "^0.80.2",
-    "@earendil-works/pi-coding-agent": "^0.80.2",
-    "@earendil-works/pi-tui": "^0.80.2",
+    "@earendil-works/pi-agent-core": "^0.84.1",
+    "@earendil-works/pi-ai": "^0.84.1",
+    "@earendil-works/pi-coding-agent": "^0.84.1",
+    "@earendil-works/pi-tui": "^0.84.1",
     "typebox": "*"
   }
 }

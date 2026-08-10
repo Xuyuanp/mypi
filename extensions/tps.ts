@@ -67,8 +67,8 @@ function sumUsage(target: Usage, source: Usage): void {
     target.cost.cacheRead += source.cost.cacheRead;
     target.cost.cacheWrite += source.cost.cacheWrite;
     target.cost.total += source.cost.total;
-    target.cacheWrite1h += source.cacheWrite1h ?? 0;
-    target.reasoning += source.reasoning ?? 0;
+    target.cacheWrite1h = (target.cacheWrite1h ?? 0) + (source.cacheWrite1h ?? 0);
+    target.reasoning = (target.reasoning ?? 0) + (source.reasoning ?? 0);
 }
 
 const STATUS_KEY = "tps-timer";

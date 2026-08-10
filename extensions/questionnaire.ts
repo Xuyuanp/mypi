@@ -356,7 +356,11 @@ function createQuestionnaireUI(
         function ensureOptionIndex(opts: RenderOption[]) {
             if (optionIndex < 0) {
                 const q = currentQuestion();
-                const answer = q ? answers.get(q.id) : undefined;
+                if (!q) {
+                    optionIndex = recommendedIndex(opts);
+                    return;
+                }
+                const answer = answers.get(q.id);
                 if (answer?.selections) {
                     const toggled = new Set<number>();
                     let customText = "";
