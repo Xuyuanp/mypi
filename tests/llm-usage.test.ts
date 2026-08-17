@@ -69,29 +69,17 @@ describe("renderDeepseekBalance", () => {
 });
 
 describe("renderOpencodeUsage", () => {
-    it("shows windows >= 1% sorted by percent desc", () => {
+    it("shows windows >= 1% in rolling/weekly/monthly order", () => {
         const payload: OpencodeUsageResponse = {
             usage: {
-                rolling: {
-                    status: "ok",
-                    percent: 0,
-                    resetsAt: "2026-08-12T08:50:21Z",
-                },
-                weekly: {
-                    status: "ok",
-                    percent: 15,
-                    resetsAt: "2026-08-17T00:00:00Z",
-                },
-                monthly: {
-                    status: "ok",
-                    percent: 13,
-                    resetsAt: "2026-09-03T03:53:46Z",
-                },
+                rolling: { status: "ok", percent: 10 },
+                weekly: { status: "ok", percent: 15 },
+                monthly: { status: "ok", percent: 20 },
             },
         };
 
         expect(renderOpencodeUsage(payload.usage, theme, NOW)).toBe(
-            "<success>W15%</success> <success>M13%</success>",
+            "<success>R10%</success> <success>W15%</success> <success>M20%</success>",
         );
     });
 
@@ -105,28 +93,21 @@ describe("renderOpencodeUsage", () => {
         };
 
         expect(renderOpencodeUsage(payload.usage, theme, NOW)).toBe(
-            "<success>M16%</success> <success>W1%</success>",
+            "<success>W1%</success> <success>M16%</success>",
         );
     });
 
-    it("breaks percent ties by soonest reset", () => {
+    it("keeps RWM order even when percent ranks differ", () => {
         const payload: OpencodeUsageResponse = {
             usage: {
-                weekly: {
-                    status: "ok",
-                    percent: 50,
-                    resetsAt: "2026-08-17T00:00:00Z",
-                },
-                monthly: {
-                    status: "ok",
-                    percent: 50,
-                    resetsAt: "2026-09-03T03:53:46Z",
-                },
+                rolling: { status: "ok", percent: 95 },
+                weekly: { status: "ok", percent: 50 },
+                monthly: { status: "ok", percent: 5 },
             },
         };
 
         expect(renderOpencodeUsage(payload.usage, theme, NOW)).toBe(
-            "<success>W50%</success> <success>M50%</success>",
+            "<error>R95%</error> <success>W50%</success> <success>M5%</success>",
         );
     });
 
@@ -202,8 +183,8 @@ describe("renderOpencodeUsage", () => {
         };
 
         expect(renderOpencodeUsage(stress.usage, theme, NOW)).toBe(
-            "<error>M94%</error> <dim>~22d</dim> " +
-                "<warning>W82%</warning> <dim>~5d</dim>",
+            "<warning>W82%</warning> <dim>~5d</dim> " +
+                "<error>M94%</error> <dim>~22d</dim>",
         );
     });
 

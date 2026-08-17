@@ -147,7 +147,7 @@ function formatReset(ms: number): string {
 
 /**
  * Renders a usage payload into the colored usage string: drops windows
- * below 1%, sorts by percent desc (soonest reset breaks ties), colors
+ * below 1%, keeps the rolling/weekly/monthly (RWM) window order, colors
  * each window, and appends a dim reset countdown to stressed windows.
  * Pure — `now` is injected for deterministic tests.
  */
@@ -156,36 +156,25 @@ export function renderOpencodeUsage(
     theme: Theme,
     now: number = Date.now(),
 ): string {
-    const shown: Array<{ letter: string; window: OpencodeUsageWindow }> = [];
+    const parts: string[] = [];
     for (const def of OPENCODE_WINDOWS) {
         const window = usage?.[def.key];
-        if (window && (window.percent ?? 0) >= 1) {
-            shown.push({ letter: def.letter, window });
-        }
-    }
+        if (!window || (window.percent ?? 0) < 1) continue;
 
-    if (shown.length === 0) {
-        return theme.fg("success", "0%");
-    }
-
-    shown.sort(
-        (a, b) =>
-            (b.window.percent ?? 0) - (a.window.percent ?? 0) ||
-            resetsAtMs(a.window) - resetsAtMs(b.window),
-    );
-
-    const parts: string[] = [];
-    for (const { letter, window } of shown) {
         const level = levelForWindow(window);
         parts.push(
             theme.fg(
                 LEVEL_COLORS[level],
-                `${letter}${Math.round(window.percent ?? 0)}%`,
+                `${def.letter}${Math.round(window.percent ?? 0)}%`,
             ),
         );
         if (level !== "ok" && window.resetsAt) {
             parts.push(theme.fg("dim", formatReset(resetsAtMs(window) - now)));
         }
+    }
+
+    if (parts.length === 0) {
+        return theme.fg("success", "0%");
     }
     return parts.join(" ");
 }
