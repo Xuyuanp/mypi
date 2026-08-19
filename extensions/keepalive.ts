@@ -516,7 +516,17 @@ export default function (pi: ExtensionAPI) {
                     hasCacheActivity && promptTokens > 0
                         ? ` CH${((usage.cacheRead / promptTokens) * 100).toFixed(1)}%`
                         : "";
-                const msg = `Ghost ping ok | \u2191${formatTokens(usage.input)} \u2193${formatTokens(usage.output)} R${formatTokens(usage.cacheRead)} W${formatTokens(usage.cacheWrite)}${hitRateSegment} | $${usage.cost.total.toFixed(4)}`;
+                const tokenParts = [
+                    `\u2191${formatTokens(usage.input)}`,
+                    `\u2193${formatTokens(usage.output)}`,
+                ];
+                if (usage.cacheRead > 0) {
+                    tokenParts.push(`R${formatTokens(usage.cacheRead)}`);
+                }
+                if (usage.cacheWrite > 0) {
+                    tokenParts.push(`W${formatTokens(usage.cacheWrite)}`);
+                }
+                const msg = `Ghost ping ok | ${tokenParts.join(" ")}${hitRateSegment} | $${usage.cost.total.toFixed(4)}`;
                 ctx.ui.notify(msg, "info");
                 return;
             }

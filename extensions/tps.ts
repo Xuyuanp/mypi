@@ -143,9 +143,13 @@ export default function (pi: ExtensionAPI) {
         const tokenParts: string[] = [
             `\u2191${formatTokens(s.usage.input)}`,
             `\u2193${formatTokens(s.usage.output)}`,
-            `R${formatTokens(s.usage.cacheRead)}`,
-            `W${formatTokens(s.usage.cacheWrite)}`,
         ];
+        if (s.usage.cacheRead > 0) {
+            tokenParts.push(`R${formatTokens(s.usage.cacheRead)}`);
+        }
+        if (s.usage.cacheWrite > 0) {
+            tokenParts.push(`W${formatTokens(s.usage.cacheWrite)}`);
+        }
         if (hasCacheActivity && promptTokens > 0) {
             tokenParts.push(
                 `CH${((s.usage.cacheRead / promptTokens) * 100).toFixed(1)}%`,
