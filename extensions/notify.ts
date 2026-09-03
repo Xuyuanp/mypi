@@ -7,6 +7,9 @@
  *   - Ghostty focused but different pane/session: tmux status-bar message
  *   - Ghostty not focused: macOS system notification via `alerter`
  *
+ * Disabled entirely under herdr (HERDR_ENV) and Paseo (PASEO_AGENT_ID) -
+ * both orchestrators handle their own notifications.
+ *
  * The tmux message includes session:window.pane so you know where to go.
  * Clicking the system notification activates Ghostty and switches to the
  * correct tmux session/window/pane.
@@ -229,6 +232,9 @@ async function sendNotification(
 export default function (pi: ExtensionAPI) {
     // Disable under herdr — it has its own agent-awareness system.
     if (process.env.HERDR_ENV === "1") return;
+
+    // Disable under Paseo — the mobile/desktop app handles its own notifications.
+    if (process.env.PASEO_AGENT_ID) return;
 
     let tmuxContext: TmuxContext | undefined;
     let sessionActive = false;
