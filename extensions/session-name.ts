@@ -118,7 +118,12 @@ export async function generateTitle(
     const response = await completeSimple(
         model,
         { systemPrompt, messages, tools },
-        { apiKey: auth.apiKey, headers: auth.headers, reasoning },
+        {
+            apiKey: auth.apiKey,
+            headers: auth.headers,
+            reasoning,
+            sessionId: ctx.sessionManager.getSessionId(),
+        },
     );
 
     const raw = response.content
