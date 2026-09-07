@@ -298,6 +298,7 @@ export default function (pi: ExtensionAPI) {
                     headers: auth.headers,
                     reasoning,
                     signal: abortController.signal,
+                    sessionId: ctx.sessionManager.getSessionId(),
                     // Only relocate the marker when we appended a synthetic ping
                     // tail. Without a ping, the request is byte-identical to the
                     // main agent's last request and the default marker already

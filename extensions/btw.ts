@@ -479,6 +479,7 @@ export default function (pi: ExtensionAPI) {
                             signal: overlay.signal,
                             reasoning,
                             onPayload: moveCacheMarkerToSharedPrefix,
+                            sessionId: ctx.sessionManager.getSessionId(),
                         },
                     );
 
