@@ -13,12 +13,8 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { FauxProviderRegistration } from "@earendil-works/pi-ai";
-import {
-    fauxAssistantMessage,
-    fauxText,
-    fauxToolCall,
-    registerFauxProvider,
-} from "@earendil-works/pi-ai";
+import { fauxAssistantMessage, fauxText, fauxToolCall } from "@earendil-works/pi-ai";
+import { registerFauxProvider } from "@earendil-works/pi-ai/compat";
 import {
     createAgentSession,
     DefaultResourceLoader,

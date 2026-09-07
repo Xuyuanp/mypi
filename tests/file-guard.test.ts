@@ -17,12 +17,8 @@ import type {
     FauxResponseStep,
     SimpleStreamOptions,
 } from "@earendil-works/pi-ai";
-import {
-    fauxAssistantMessage,
-    fauxText,
-    fauxToolCall,
-    registerFauxProvider,
-} from "@earendil-works/pi-ai";
+import { fauxAssistantMessage, fauxText, fauxToolCall } from "@earendil-works/pi-ai";
+import { registerFauxProvider } from "@earendil-works/pi-ai/compat";
 import type { AgentSessionEvent } from "@earendil-works/pi-coding-agent";
 import {
     createAgentSession,

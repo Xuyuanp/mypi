@@ -11,12 +11,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import type { FauxProviderRegistration } from "@earendil-works/pi-ai";
-import {
-    fauxAssistantMessage,
-    fauxText,
-    fauxToolCall,
-    registerFauxProvider,
-} from "@earendil-works/pi-ai";
+import { fauxAssistantMessage, fauxText, fauxToolCall } from "@earendil-works/pi-ai";
+import { registerFauxProvider } from "@earendil-works/pi-ai/compat";
 import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildSessionManager, runSubagent } from "../extensions/subagent/execute.js";

@@ -11,11 +11,8 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { FauxProviderRegistration } from "@earendil-works/pi-ai";
-import {
-    fauxAssistantMessage,
-    fauxText,
-    registerFauxProvider,
-} from "@earendil-works/pi-ai";
+import { fauxAssistantMessage, fauxText } from "@earendil-works/pi-ai";
+import { registerFauxProvider } from "@earendil-works/pi-ai/compat";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import {
     createAgentSession,
