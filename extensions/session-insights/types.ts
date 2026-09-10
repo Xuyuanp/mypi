@@ -124,6 +124,8 @@ export interface SessionInsights {
     endedAt: number | null;
     wallMs: number;
     activeMs: number;
+    toolMs: number;
+    toolMsEstimated: boolean;
     models: ModelStat[];
     primaryModel: string;
     thinkingLevels: string[];

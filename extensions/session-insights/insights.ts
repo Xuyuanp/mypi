@@ -184,6 +184,8 @@ export function computeInsights(input: InsightsInput): SessionInsights {
     let startedAt: number | null = null;
     let endedAt: number | null = null;
     let generationMs = 0;
+    let toolMs = 0;
+    let toolMsEstimated = false;
     let estimatedCount = 0;
     const ttftSamples: number[] = [];
     let currentProvider = "";
@@ -339,6 +341,14 @@ export function computeInsights(input: InsightsInput): SessionInsights {
             stat.resultBytes += contentBytes(msg.content);
             const duration = live?.toolDurationMs.get(String(msg.toolCallId)) ?? 0;
             stat.durationMs += duration;
+            if (duration > 0) {
+                toolMs += duration;
+            } else if (prevTs !== null && endTs > prevTs) {
+                // No live timing: the gap since the previous entry is the tool's
+                // wall time. Results in one batch tile the gap between them.
+                toolMs += endTs - prevTs;
+                toolMsEstimated = true;
+            }
             if (msg.isError) {
                 toolErrors += 1;
                 errorItems.push({
@@ -403,6 +413,8 @@ export function computeInsights(input: InsightsInput): SessionInsights {
         endedAt,
         wallMs,
         activeMs: generationMs,
+        toolMs,
+        toolMsEstimated,
         models: sortedModels,
         primaryModel:
             sortedModels.find((m) => m.provider)?.key ||

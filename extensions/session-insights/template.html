@@ -59,9 +59,19 @@ header.top{display:flex;flex-wrap:wrap;align-items:flex-end;justify-content:spac
 .donut{filter:drop-shadow(0 10px 24px rgba(0,0,0,.4))}
 .donut circle{transition:stroke-width .2s ease}
 .donut circle:hover{stroke-width:30}
-.gauge-value{fill:var(--text);font-size:26px;font-weight:700;letter-spacing:-.03em}
-.gauge-cap{fill:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.08em}
-.gauge-sub{color:var(--muted);font-size:12px;margin-top:4px;font-variant-numeric:tabular-nums}
+.donut-value{fill:var(--text);font-size:24px;font-weight:700;letter-spacing:-.03em}
+.donut-cap{fill:var(--muted);font-size:10.5px;text-transform:uppercase;letter-spacing:.08em}
+.eff{display:flex;align-items:center;gap:26px;margin-top:20px}
+.eff-donut{flex:0 0 auto;display:flex;flex-direction:column;align-items:center}
+.eff-donut .legend{justify-content:center;gap:4px 14px;margin-top:6px;font-size:12px}
+.eff-meters{flex:1 1 auto;min-width:0}
+.meter{display:grid;grid-template-columns:1fr auto;gap:3px 10px;font-size:12.5px;color:var(--muted);margin-bottom:10px}
+.meter b{color:var(--text);font-weight:600;font-variant-numeric:tabular-nums}
+.meter-track{grid-column:1 / -1;height:7px;border-radius:5px;background:rgba(255,255,255,.07);overflow:hidden}
+.meter-track > span{display:block;height:100%;border-radius:5px}
+.eff-foot{display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-top:14px;padding-top:12px;border-top:1px solid var(--border);color:var(--muted);font-size:12px}
+.eff-foot b{color:var(--text);font-weight:600;font-variant-numeric:tabular-nums}
+@media (max-width:720px){.eff{flex-direction:column;align-items:stretch}}
 .legend{display:flex;flex-wrap:wrap;gap:8px 16px;margin-top:14px}
 .legend-item{display:flex;align-items:center;gap:7px;font-size:12.5px;color:var(--muted)}
 .legend-item b{color:var(--text);font-variant-numeric:tabular-nums;font-weight:600}
@@ -69,7 +79,6 @@ header.top{display:flex;flex-wrap:wrap;align-items:flex-end;justify-content:spac
 .stack{display:flex;height:16px;border-radius:8px;overflow:hidden;background:rgba(255,255,255,.05);border:1px solid var(--border)}
 .seg{height:100%;transition:filter .15s ease}
 .seg:hover{filter:brightness(1.25)}
-.cards-3{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:14px}
 .table{width:100%;border-collapse:collapse;font-size:13px}
 .table th{text-align:left;color:var(--faint);font-size:11px;letter-spacing:.07em;text-transform:uppercase;font-weight:600;padding:0 10px 10px}
 .table td{padding:11px 10px;border-top:1px solid var(--border);vertical-align:middle}
@@ -169,10 +178,15 @@ header.top{display:flex;flex-wrap:wrap;align-items:flex-end;justify-content:spac
     <div class="card">
       <h2>Token composition &amp; cache</h2>
       {{COMPOSITION_BAR}}
-      <div class="cards-3" style="margin-top:18px">
-        <div class="center">{{GAUGE_CACHE}}</div>
-        <div class="center">{{GAUGE_REASONING}}</div>
-        <div class="center">{{GAUGE_CONTEXT}}</div>
+      <div class="eff">
+        <div class="eff-donut">{{TIME_DONUT}}</div>
+        <div class="eff-meters">
+          {{METERS}}
+          <div class="eff-foot">
+            <span>avg <b>{{AVG_TOKENS}}</b> tokens / turn</span>
+            <span>avg <b>{{AVG_COST}}</b> / turn</span>
+          </div>
+        </div>
       </div>
     </div>
   </section>

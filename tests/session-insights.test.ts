@@ -208,6 +208,21 @@ describe("computeInsights", () => {
         expect(insights.turns[0].ttftMs).toBe(250);
         expect(insights.ttftAvgMs).toBe(250);
         expect(insights.tools.find((t) => t.name === "bash")?.durationMs).toBe(42);
+        // c1 uses the live 42ms; c2 falls back to the 1s gap before it.
+        expect(insights.toolMs).toBe(1042);
+    });
+
+    it("estimates tool wall time from stored entry gaps", () => {
+        const insights = compute();
+        // Each toolResult is 1s after the entry that precedes it.
+        expect(insights.toolMs).toBe(2000);
+        expect(insights.toolMsEstimated).toBe(true);
+    });
+
+    it("reports no tool time and no estimate for a session without tools", () => {
+        const insights = compute([MODEL_CHANGE]);
+        expect(insights.toolMs).toBe(0);
+        expect(insights.toolMsEstimated).toBe(false);
     });
 
     it("handles an empty session", () => {
@@ -248,6 +263,24 @@ describe("renderInsightsHtml", () => {
         // The embedded turn data carries the per-turn breakdown.
         expect(html).toContain('"cumulativeCost"');
         expect(html).toContain('"durationMs"');
+    });
+
+    it("renders efficiency meters and the active-time donut", () => {
+        const html = renderInsightsHtml(compute());
+        expect(html).toContain('class="meter-track"');
+        expect(html).toContain("cache hit");
+        expect(html).toContain("reasoning share");
+        expect(html).toContain("context used");
+        expect(html).toContain("tool time share");
+        expect(html).toContain("avg <b>");
+        // The donut splits generating against tools and names idle separately.
+        expect(html).toContain('class="donut-value"');
+        expect(html).toContain("generating");
+        expect(html).toContain("tools (est.)");
+        expect(html).toContain("idle");
+        // The three ring gauges are gone.
+        expect(html).not.toContain('class="gauge"');
+        expect(html).not.toContain("gauge-value");
     });
 
     it("shows cost by default in the timeline", () => {

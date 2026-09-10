@@ -37,6 +37,7 @@ export const PALETTE = {
     time: "#b07cff",
     speed: "#39d0d8",
     tools: "#ff8fb1",
+    generating: "#7c8cff",
     cum: "#ffd166",
     bad: "#ff5c7a",
 };

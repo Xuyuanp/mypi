@@ -25,19 +25,25 @@ export interface DonutSegment {
     color: string;
 }
 
+interface DonutCenter {
+    value: string;
+    caption: string;
+}
+
 export function donutSvg(
     segments: DonutSegment[],
     size = 190,
     format: (value: number) => string = formatTokens,
+    center?: DonutCenter,
 ): string {
     const thickness = 24;
     const radius = (size - thickness) / 2;
-    const center = size / 2;
+    const middle = size / 2;
     const circumference = 2 * Math.PI * radius;
     const total = segments.reduce((sum, s) => sum + Math.max(0, s.value), 0);
 
     const rings: string[] = [
-        `<circle cx="${center}" cy="${center}" r="${radius}" fill="none" stroke="rgba(255,255,255,.06)" stroke-width="${thickness}"/>`,
+        `<circle cx="${middle}" cy="${middle}" r="${radius}" fill="none" stroke="rgba(255,255,255,.06)" stroke-width="${thickness}"/>`,
     ];
     let offset = 0;
     for (const segment of segments) {
@@ -46,38 +52,18 @@ export function donutSvg(
         const length = (value / total) * circumference;
         const gap = Math.max(0, circumference - length - 2);
         rings.push(
-            `<circle cx="${center}" cy="${center}" r="${radius}" fill="none" stroke="${segment.color}" stroke-width="${thickness}" stroke-dasharray="${length.toFixed(2)} ${gap.toFixed(2)}" stroke-dashoffset="${(-offset).toFixed(2)}" transform="rotate(-90 ${center} ${center})"><title>${escapeHtml(segment.label)}: ${format(value)}</title></circle>`,
+            `<circle cx="${middle}" cy="${middle}" r="${radius}" fill="none" stroke="${segment.color}" stroke-width="${thickness}" stroke-dasharray="${length.toFixed(2)} ${gap.toFixed(2)}" stroke-dashoffset="${(-offset).toFixed(2)}" transform="rotate(-90 ${middle} ${middle})"><title>${escapeHtml(segment.label)}: ${format(value)}</title></circle>`,
         );
         offset += length + 2;
     }
+    if (center) {
+        rings.push(
+            `<text x="${middle}" y="${middle - 2}" class="donut-value" text-anchor="middle">${escapeHtml(center.value)}</text>`,
+            `<text x="${middle}" y="${middle + 18}" class="donut-cap" text-anchor="middle">${escapeHtml(center.caption)}</text>`,
+        );
+    }
 
     return `<svg class="donut" viewBox="0 0 ${size} ${size}" width="${size}" height="${size}" role="img">${rings.join("")}</svg>`;
-}
-
-export function gaugeSvg(
-    fraction: number,
-    label: string,
-    sublabel: string,
-    color: string,
-    size = 150,
-): string {
-    const thickness = 12;
-    const radius = (size - thickness) / 2;
-    const center = size / 2;
-    const circumference = 2 * Math.PI * radius;
-    const clamped = Math.max(0, Math.min(1, fraction));
-    const filled = circumference * clamped;
-    const pct = Math.round(clamped * 100);
-
-    return [
-        `<svg class="gauge" viewBox="0 0 ${size} ${size}" width="${size}" height="${size}" role="img">`,
-        `<circle cx="${center}" cy="${center}" r="${radius}" fill="none" stroke="rgba(255,255,255,.07)" stroke-width="${thickness}"/>`,
-        `<circle cx="${center}" cy="${center}" r="${radius}" fill="none" stroke="${color}" stroke-width="${thickness}" stroke-linecap="round" stroke-dasharray="${filled.toFixed(2)} ${(circumference - filled).toFixed(2)}" transform="rotate(-90 ${center} ${center})"/>`,
-        `<text x="${center}" y="${center - 2}" class="gauge-value" text-anchor="middle">${pct}%</text>`,
-        `<text x="${center}" y="${center + 20}" class="gauge-cap" text-anchor="middle">${escapeHtml(label)}</text>`,
-        `</svg>`,
-        `<div class="gauge-sub">${escapeHtml(sublabel)}</div>`,
-    ].join("");
 }
 
 function bucketTurns(turns: TurnPoint[], maxBuckets: number): TurnPoint[] {

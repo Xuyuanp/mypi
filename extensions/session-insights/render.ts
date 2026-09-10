@@ -7,7 +7,7 @@
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { type DonutSegment, donutSvg, gaugeSvg, timelineChart } from "./charts.js";
+import { type DonutSegment, donutSvg, timelineChart } from "./charts.js";
 import {
     escapeHtml,
     formatDuration,
@@ -162,24 +162,52 @@ function errorsList(insights: SessionInsights): string {
     return `<ul class="errors">${items}</ul>`;
 }
 
-function contextCard(insights: SessionInsights): string {
-    const context = insights.context;
-    if (!context || context.tokens === null) {
-        return `<p class="empty">Context usage unavailable.</p>`;
+interface Meter {
+    label: string;
+    value: string;
+    fraction: number;
+    color: string;
+}
+
+function meterRows(meters: Meter[]): string {
+    return meters
+        .map(
+            (meter) =>
+                `<div class="meter"><span>${escapeHtml(meter.label)}</span><b>${escapeHtml(meter.value)}</b><span class="meter-track"><span style="width:${(Math.max(0, Math.min(1, meter.fraction)) * 100).toFixed(1)}%;background:${meter.color}"></span></span></div>`,
+        )
+        .join("");
+}
+
+function timeDonut(insights: SessionInsights): string {
+    const generating = insights.activeMs;
+    const tools = insights.toolMs;
+    const active = generating + tools;
+    if (active <= 0) {
+        return `<p class="empty">No generation time recorded.</p>`;
     }
-    const fraction =
-        context.percent !== null
-            ? context.percent / 100
-            : context.contextWindow > 0
-              ? context.tokens / context.contextWindow
-              : 0;
-    return gaugeSvg(
-        fraction,
-        "context used",
-        `~${formatTokens(context.tokens)} / ${formatTokens(context.contextWindow)} tokens`,
-        fraction > 0.85 ? PALETTE.cacheWrite : PALETTE.input,
-        150,
-    );
+    const idle = Math.max(0, insights.wallMs - active);
+    const share = Math.round((generating / active) * 100);
+    const toolLabel = insights.toolMsEstimated ? "tools (est.)" : "tools";
+    return [
+        donutSvg(
+            [
+                {
+                    label: "generating",
+                    value: generating,
+                    color: PALETTE.generating,
+                },
+                { label: toolLabel, value: tools, color: PALETTE.tools },
+            ],
+            160,
+            formatDuration,
+            { value: `${share}%`, caption: "generating" },
+        ),
+        `<div class="legend">`,
+        `<div class="legend-item"><span class="dot" style="background:${PALETTE.generating}"></span>generating<b>${formatDuration(generating)}</b></div>`,
+        `<div class="legend-item"><span class="dot" style="background:${PALETTE.tools}"></span>${escapeHtml(toolLabel)}<b>${formatDuration(tools)}</b></div>`,
+        `<div class="legend-item"><span class="dot" style="background:rgba(255,255,255,.18)"></span>idle<b>${formatDuration(idle)}</b></div>`,
+        `</div>`,
+    ].join("");
 }
 export function renderInsightsHtml(insights: SessionInsights): string {
     const costSegments: DonutSegment[] = [
@@ -228,6 +256,53 @@ export function renderInsightsHtml(insights: SessionInsights): string {
     const thinking = insights.thinkingLevels.length
         ? insights.thinkingLevels.join(" → ")
         : "off";
+
+    const activeMs = insights.activeMs + insights.toolMs;
+    const toolShare = activeMs > 0 ? insights.toolMs / activeMs : 0;
+    const reasoningShare =
+        insights.tokens.output > 0
+            ? insights.tokens.reasoning / insights.tokens.output
+            : 0;
+    const context = insights.context;
+    const contextFraction =
+        context && context.tokens !== null
+            ? context.percent !== null
+                ? context.percent / 100
+                : context.contextWindow > 0
+                  ? context.tokens / context.contextWindow
+                  : 0
+            : 0;
+    const meters: Meter[] = [
+        {
+            label: "cache hit",
+            value: formatPercent(insights.cacheHitRate),
+            fraction: insights.cacheHitRate,
+            color: PALETTE.cacheRead,
+        },
+        {
+            label: "reasoning share",
+            value: formatPercent(reasoningShare),
+            fraction: reasoningShare,
+            color: PALETTE.reasoning,
+        },
+        {
+            label: "context used",
+            value:
+                context && context.tokens !== null
+                    ? `${formatPercent(contextFraction)} · ${formatTokens(context.tokens)}`
+                    : "n/a",
+            fraction: contextFraction,
+            color: contextFraction > 0.85 ? PALETTE.bad : PALETTE.input,
+        },
+        {
+            label: "tool time share",
+            value: formatPercent(toolShare),
+            fraction: toolShare,
+            color: PALETTE.tools,
+        },
+    ];
+    const avgTokens = insights.tokens.total / Math.max(1, insights.assistantTurns);
+    const avgCost = insights.cost.total / Math.max(1, insights.assistantTurns);
 
     const kpiCards = [
         statCard(
@@ -285,22 +360,10 @@ export function renderInsightsHtml(insights: SessionInsights): string {
         DONUT: donut,
         DONUT_LEGEND: donutLegend,
         COMPOSITION_BAR: compositionBar(insights),
-        GAUGE_CACHE: gaugeSvg(
-            insights.cacheHitRate,
-            "cache hit",
-            `${formatTokens(insights.tokens.cacheRead)} read tokens`,
-            PALETTE.cacheRead,
-        ),
-        GAUGE_REASONING: gaugeSvg(
-            Math.min(
-                1,
-                insights.tokens.reasoning / Math.max(1, insights.tokens.output),
-            ),
-            "reasoning",
-            `${formatTokens(insights.tokens.reasoning)} thinking tokens`,
-            PALETTE.reasoning,
-        ),
-        GAUGE_CONTEXT: contextCard(insights),
+        TIME_DONUT: timeDonut(insights),
+        METERS: meterRows(meters),
+        AVG_TOKENS: formatTokens(avgTokens),
+        AVG_COST: formatUsd(avgCost),
         MODELS_TABLE: modelsTable(insights),
         TOOLS_LIST: toolsList(insights),
         TIMELINE: timelineChart(insights),
