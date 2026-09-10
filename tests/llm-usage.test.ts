@@ -14,6 +14,7 @@ import type {
 import {
     renderDeepseekBalance,
     renderOpencodeUsage,
+    shouldRefreshUsage,
 } from "../extensions/llm-usage.js";
 
 // Fixed reference time so reset countdowns are deterministic.
@@ -65,6 +66,26 @@ describe("renderDeepseekBalance", () => {
         expect(() =>
             renderDeepseekBalance({ ...base, balance_infos: [] }, theme),
         ).toThrow("balance_infos is empty");
+    });
+});
+
+describe("shouldRefreshUsage", () => {
+    it("refreshes on every 10th turn", () => {
+        expect(shouldRefreshUsage(10)).toBe(true);
+        expect(shouldRefreshUsage(20)).toBe(true);
+        expect(shouldRefreshUsage(30)).toBe(true);
+    });
+
+    it("does not refresh between refreshes", () => {
+        expect(shouldRefreshUsage(1)).toBe(false);
+        expect(shouldRefreshUsage(9)).toBe(false);
+        expect(shouldRefreshUsage(11)).toBe(false);
+        expect(shouldRefreshUsage(19)).toBe(false);
+    });
+
+    it("does not refresh at or below zero", () => {
+        expect(shouldRefreshUsage(0)).toBe(false);
+        expect(shouldRefreshUsage(-10)).toBe(false);
     });
 });
 

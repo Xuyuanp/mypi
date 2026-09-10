@@ -13,6 +13,10 @@
  *   time until their reset.
  *
  * Auth for both: Authorization: Bearer ${apiKey}
+ *
+ * Refresh points: session start, model/provider change, the end of each
+ * agent run, and every 10 turns. The turn refresh keeps the footer
+ * current during a long run, before the agent run ends.
  */
 
 import type {
@@ -75,6 +79,7 @@ const USAGE_FETCHERS: Record<string, ProviderFetcher> = {
 
 const WARNING_PERCENT = 70;
 const ERROR_PERCENT = 90;
+const TURN_REFRESH_INTERVAL = 10;
 
 const LEVEL_COLORS: Record<UsageLevel, ThemeColor> = {
     ok: "success",
@@ -189,6 +194,14 @@ async function fetchOpencodeUsage(apiKey: string, theme: Theme): Promise<string>
 
 // --- Update logic ---
 
+/**
+ * True on every 10th turn, so a long run refreshes the footer between
+ * agent runs. `turn` is 1-based.
+ */
+export function shouldRefreshUsage(turn: number): boolean {
+    return turn > 0 && turn % TURN_REFRESH_INTERVAL === 0;
+}
+
 async function updateUsage(ctx: ExtensionContext): Promise<void> {
     if (!ctx.hasUI) return;
 
@@ -231,7 +244,15 @@ async function updateUsage(ctx: ExtensionContext): Promise<void> {
 // --- Extension entry point ---
 
 export default function (pi: ExtensionAPI) {
+    let turnCount = 0;
+
     pi.on("session_start", async (_event, ctx) => {
+        turnCount = 0;
+        await updateUsage(ctx);
+    });
+    pi.on("turn_end", async (_event, ctx) => {
+        turnCount++;
+        if (!shouldRefreshUsage(turnCount)) return;
         await updateUsage(ctx);
     });
     pi.on("agent_end", async (_event, ctx) => {
