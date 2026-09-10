@@ -4,6 +4,7 @@
 
 interface TimelineGeometry {
     width: number;
+    height: number;
     mainTop: number;
     mainBottom: number;
     mainHeight: number;
@@ -17,27 +18,29 @@ interface TimelineGeometry {
 /** Shared layout for the timeline SVG. timeline.js mirrors these values. */
 export const TIMELINE: TimelineGeometry = {
     width: 1000,
-    mainTop: 16,
-    mainBottom: 206,
-    mainHeight: 190,
-    toolTop: 222,
-    toolHeight: 22,
-    axisY: 276,
-    padL: 54,
-    padR: 18,
+    height: 328,
+    mainTop: 20,
+    mainBottom: 240,
+    mainHeight: 220,
+    toolTop: 256,
+    toolHeight: 20,
+    axisY: 304,
+    padL: 58,
+    padR: 20,
 };
 
+/** Data colours, keyed to the marks that use them. */
 export const PALETTE = {
-    input: "#7c8cff",
-    output: "#39d0d8",
-    cacheRead: "#3ddc97",
-    cacheWrite: "#ffb84d",
-    reasoning: "#b07cff",
-    cost: "#ffb84d",
-    time: "#b07cff",
-    speed: "#39d0d8",
-    tools: "#ff8fb1",
-    generating: "#7c8cff",
-    cum: "#ffd166",
-    bad: "#ff5c7a",
+    input: "#7b8ef7",
+    output: "#2fb8c6",
+    cacheRead: "#3fae7d",
+    cacheWrite: "#d9a441",
+    reasoning: "#a07ee0",
+    cost: "#d9a441",
+    time: "#a07ee0",
+    speed: "#2fb8c6",
+    tools: "#d1798f",
+    generating: "#7b8ef7",
+    cum: "#dce3f2",
+    bad: "#e0616f",
 };

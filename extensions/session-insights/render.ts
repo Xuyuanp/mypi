@@ -33,14 +33,18 @@ function statCard(
     label: string,
     value: string,
     unit: string,
-    sub: string,
+    parts: string[],
     accent: string,
 ): string {
+    // The parts are plain text; the separator between them is markup.
+    const detail = parts
+        .map((part) => escapeHtml(part))
+        .join(`<span class="rule"></span>`);
     return [
-        `<div class="card kpi" style="--accent:${accent}">`,
-        `<div class="kpi-label">${escapeHtml(label)}</div>`,
-        `<div class="kpi-value">${escapeHtml(value)}<span class="kpi-unit">${escapeHtml(unit)}</span></div>`,
-        `<div class="kpi-sub">${sub}</div>`,
+        `<div class="metric" style="--accent:${accent}">`,
+        `<div class="k"><i aria-hidden="true"></i>${escapeHtml(label)}</div>`,
+        `<div class="v">${escapeHtml(value)}${unit ? `<small>${escapeHtml(unit)}</small>` : ""}</div>`,
+        `<div class="s">${detail}</div>`,
         `</div>`,
     ].join("");
 }
@@ -84,31 +88,33 @@ function modelsTable(insights: SessionInsights): string {
     if (insights.models.length === 0) {
         return `<p class="empty">No model usage recorded yet.</p>`;
     }
-    const maxCost = Math.max(
+    const totalCost = Math.max(
         0.000001,
-        ...insights.models.map((model) => model.cost),
+        insights.models.reduce((sum, model) => sum + model.cost, 0),
     );
     const rows = insights.models
         .map((model) => {
-            const share = (model.cost / maxCost) * 100;
+            const share = (model.cost / totalCost) * 100;
             return [
                 `<tr>`,
-                `<td><div class="model-name">${escapeHtml(model.key)}</div></td>`,
+                `<td><span class="model-name">${escapeHtml(model.key)}</span></td>`,
                 `<td class="num">${model.turns}</td>`,
                 `<td class="num">${formatTokens(model.tokens.input)}</td>`,
                 `<td class="num">${formatTokens(model.tokens.output)}</td>`,
                 `<td class="num">${formatTokens(model.tokens.cacheRead)}</td>`,
                 `<td class="num strong">${formatUsd(model.cost)}</td>`,
-                `<td class="bar-cell"><div class="mini-bar"><span style="width:${share.toFixed(1)}%"></span></div></td>`,
+                `<td><div class="share-cell"><span class="mini-bar"><span style="width:${share.toFixed(1)}%"></span></span><span class="share-pct">${share.toFixed(0)}%</span></div></td>`,
                 `</tr>`,
             ].join("");
         })
         .join("");
     return [
+        `<div class="table-wrap">`,
         `<table class="table">`,
-        `<thead><tr><th>Model</th><th class="num">Turns</th><th class="num">In</th><th class="num">Out</th><th class="num">Cache R</th><th class="num">Cost</th><th>Share</th></tr></thead>`,
+        `<thead><tr><th>Model</th><th class="num">Turns</th><th class="num">Input</th><th class="num">Output</th><th class="num">Cache read</th><th class="num">Cost</th><th>Share of cost</th></tr></thead>`,
         `<tbody>${rows}</tbody>`,
         `</table>`,
+        `</div>`,
     ].join("");
 }
 
@@ -121,16 +127,18 @@ function toolsList(insights: SessionInsights): string {
         .map((tool) => {
             const width = (tool.calls / maxCalls) * 100;
             const errorBadge = tool.errors
-                ? `<span class="badge bad">${tool.errors} err</span>`
+                ? `<span class="badge bad">${tool.errors} failed</span>`
                 : "";
-            const duration = tool.durationMs
-                ? `<span class="muted">${formatDuration(tool.durationMs)}</span>`
-                : `<span class="muted">${formatTokens(tool.resultBytes)}B out</span>`;
+            const detail = tool.durationMs
+                ? formatDuration(tool.durationMs)
+                : `${formatTokens(tool.resultBytes)}B returned`;
             return [
                 `<div class="tool-row">`,
-                `<div class="tool-head"><span class="tool-name">${escapeHtml(tool.name)}</span><span class="tool-meta">${duration}${errorBadge}</span></div>`,
+                `<div class="tool-head">`,
+                `<span class="tool-name">${escapeHtml(tool.name)}</span>`,
+                `<span class="tool-meta"><span class="tool-count">${tool.calls} call${tool.calls === 1 ? "" : "s"}</span>${escapeHtml(detail)}${errorBadge}</span>`,
+                `</div>`,
                 `<div class="track"><span style="width:${width.toFixed(1)}%"></span></div>`,
-                `<div class="tool-count">${tool.calls} call${tool.calls === 1 ? "" : "s"}</div>`,
                 `</div>`,
             ].join("");
         })
@@ -152,7 +160,7 @@ function errorsList(insights: SessionInsights): string {
                     ? `<span class="badge bad">tool</span>`
                     : `<span class="badge warn">model</span>`;
             return [
-                `<li class="error-item">`,
+                `<li class="error-item ${item.kind}">`,
                 `<div class="error-top">${badge}<span class="error-label">${escapeHtml(item.label)}</span><span class="error-time">${escapeHtml(when)}</span></div>`,
                 `<div class="error-msg">${escapeHtml(truncate(item.message, 220))}</div>`,
                 `</li>`,
@@ -187,7 +195,7 @@ function contextMeter(context: ContextInfo | null): Meter {
               : 0;
     return {
         label: "context used",
-        value: `${formatPercent(fraction)} · ${formatTokens(context.tokens)}`,
+        value: `${formatPercent(fraction)} (${formatTokens(context.tokens)})`,
         fraction,
         color: fraction > 0.85 ? PALETTE.bad : PALETTE.input,
     };
@@ -222,7 +230,7 @@ function timeDonut(insights: SessionInsights): string {
                 },
                 { label: toolLabel, value: tools, color: PALETTE.tools },
             ],
-            160,
+            168,
             formatDuration,
             { value: `${share}%`, caption: "generating" },
         ),
@@ -251,7 +259,7 @@ export function renderInsightsHtml(insights: SessionInsights): string {
     const donutTotal = costSegments.reduce((sum, s) => sum + s.value, 0);
     const donut =
         donutTotal > 0
-            ? donutSvg(costSegments, 190, formatUsd)
+            ? donutSvg(costSegments, 184, formatUsd)
             : `<p class="empty">Cost data unavailable.</p>`;
     const donutLegend = costSegments
         .map(
@@ -261,17 +269,32 @@ export function renderInsightsHtml(insights: SessionInsights): string {
         .join("");
 
     const tpsLabel = insights.tps > 0 ? insights.tps.toFixed(1) : "0.0";
-    const tpsSub = insights.ttftAvgMs
-        ? `TTFT ${formatDuration(insights.ttftAvgMs)}`
-        : "TTFT n/a";
-    const tokensSub = `↑${formatTokens(insights.tokens.input)} in · ↓${formatTokens(insights.tokens.output)} out · R${formatTokens(insights.tokens.cacheRead)}`;
-    const costSub = `cache ${formatUsd(insights.cost.cacheRead + insights.cost.cacheWrite)} · ${formatUsd(insights.cost.total / Math.max(1, insights.assistantTurns))}/turn`;
-    const turnsSub = `${insights.userTurns} prompt${insights.userTurns === 1 ? "" : "s"} · ${insights.assistantTurns} assistant`;
-    const toolsSub =
+    const tokensParts = [
+        `↑${formatTokens(insights.tokens.input)} in`,
+        `↓${formatTokens(insights.tokens.output)} out`,
+        `${formatTokens(insights.tokens.cacheRead)} cached`,
+    ];
+    const costParts = [
+        `cache ${formatUsd(insights.cost.cacheRead + insights.cost.cacheWrite)}`,
+        `${formatUsd(insights.cost.total / Math.max(1, insights.assistantTurns))} / turn`,
+    ];
+    const turnsParts = [
+        `${insights.userTurns} prompt${insights.userTurns === 1 ? "" : "s"}`,
+        `${insights.assistantTurns} assistant`,
+    ];
+    const toolsParts =
         insights.toolErrors > 0
-            ? `${insights.toolErrors} failed · ${insights.toolResults} results`
-            : `${insights.toolResults} results · all ok`;
-    const errorSub = `${insights.errors} total · ${insights.assistantErrors} model`;
+            ? [`${insights.toolResults} results`, `${insights.toolErrors} failed`]
+            : [`${insights.toolResults} results`, "all ok"];
+    const errorParts = [
+        `${insights.errors} total`,
+        `${insights.assistantErrors} model`,
+    ];
+    const tpsParts = [
+        insights.ttftAvgMs
+            ? `TTFT ${formatDuration(insights.ttftAvgMs)}`
+            : "TTFT n/a",
+    ];
 
     const startedLabel = insights.startedAt
         ? new Date(insights.startedAt).toLocaleString()
@@ -314,39 +337,39 @@ export function renderInsightsHtml(insights: SessionInsights): string {
     const kpiCards = [
         statCard(
             "Total cost",
-            formatUsd(insights.cost.total).replace("$", ""),
-            "USD",
-            costSub,
-            PALETTE.input,
+            formatUsd(insights.cost.total),
+            "",
+            costParts,
+            PALETTE.cost,
         ),
         statCard(
             "Total tokens",
             formatTokens(insights.tokens.total),
             "",
-            tokensSub,
-            PALETTE.output,
+            tokensParts,
+            PALETTE.input,
         ),
-        statCard("Throughput", tpsLabel, "tok/s", tpsSub, PALETTE.reasoning),
+        statCard("Throughput", tpsLabel, "tok/s", tpsParts, PALETTE.time),
         statCard(
             "Turns",
             String(insights.assistantTurns),
             "",
-            turnsSub,
-            PALETTE.cacheRead,
+            turnsParts,
+            "#8a93a6",
         ),
         statCard(
             "Tool calls",
             String(insights.toolCalls),
             "",
-            toolsSub,
-            PALETTE.cacheWrite,
+            toolsParts,
+            PALETTE.tools,
         ),
         statCard(
             "Tool error rate",
             formatPercent(insights.errorRate),
             "",
-            errorSub,
-            PALETTE.bad,
+            errorParts,
+            insights.errorRate > 0 ? PALETTE.bad : PALETTE.cacheRead,
         ),
     ].join("\n    ");
 
@@ -362,7 +385,7 @@ export function renderInsightsHtml(insights: SessionInsights): string {
         STARTED_LABEL: escapeHtml(startedLabel),
         CWD: escapeHtml(insights.cwd),
         SESSION_FILE: escapeHtml(insights.sessionFile ?? "ephemeral"),
-        WALL_LABEL: `${formatDuration(insights.wallMs)} · active ${formatDuration(insights.activeMs)}`,
+        WALL_LABEL: `${formatDuration(insights.wallMs)}<span class="rule"></span>active ${formatDuration(insights.activeMs)}`,
         KPI_CARDS: kpiCards,
         DONUT: donut,
         DONUT_LEGEND: donutLegend,

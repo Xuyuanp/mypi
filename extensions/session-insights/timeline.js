@@ -14,13 +14,13 @@
   try { TURNS = JSON.parse(dataEl.textContent || '[]'); } catch (e) { TURNS = []; }
   if (!TURNS.length) return;
 
-  var MAIN_TOP = 16, MAIN_BOTTOM = 206, MAIN_H = MAIN_BOTTOM - MAIN_TOP;
-  var PAD_L = 54, PAD_R = 18, W = 1000, INNER_W = W - PAD_L - PAD_R;
+  var MAIN_TOP = 20, MAIN_BOTTOM = 240, MAIN_H = MAIN_BOTTOM - MAIN_TOP;
+  var PAD_L = 58, PAD_R = 20, W = 1000, INNER_W = W - PAD_L - PAD_R;
   var N = Math.max(1, TURNS.length), SLOT = INNER_W / N;
   var BW = Math.max(3, Math.min(34, SLOT * 0.6));
-  var COLORS = { input: '#7c8cff', output: '#39d0d8', cacheRead: '#3ddc97',
-    cacheWrite: '#ffb84d', cost: '#ffb84d', time: '#b07cff', speed: '#39d0d8',
-    cum: '#ffd166', bad: '#ff5c7a' };
+  var COLORS = { input: '#7b8ef7', output: '#2fb8c6', cacheRead: '#3fae7d',
+    cacheWrite: '#d9a441', cost: '#d9a441', time: '#a07ee0', speed: '#2fb8c6',
+    cum: '#dce3f2', bad: '#e0616f', tools: '#d1798f' };
   var DEFAULT_METRIC = 'cost';
   var HINT = 'Hover a turn for token, cost, latency and tool details.';
 
@@ -63,10 +63,10 @@
     return '<span class="lg-item"><i style="background:' + color + '"></i>' + esc(label) + '</span>';
   }
   function legendFor(metric) {
-    if (metric === 'tokens') return legendItem(COLORS.input, 'input') + legendItem(COLORS.output, 'output') + legendItem(COLORS.cacheRead, 'cache R') + legendItem(COLORS.cacheWrite, 'cache W') + legendItem('#ff8fb1', 'tool calls');
-    if (metric === 'cost') return legendItem(COLORS.cost, 'cost / turn') + legendItem(COLORS.cum, 'cumulative') + legendItem('#ff8fb1', 'tool calls');
-    if (metric === 'time') return legendItem(COLORS.time, 'generation time') + legendItem(COLORS.output, 'TTFT') + legendItem('#ff8fb1', 'tool calls');
-    return legendItem(COLORS.speed, 'output tok/s') + legendItem('#ff8fb1', 'tool calls');
+    if (metric === 'tokens') return legendItem(COLORS.input, 'input') + legendItem(COLORS.output, 'output') + legendItem(COLORS.cacheRead, 'cache read') + legendItem(COLORS.cacheWrite, 'cache write') + legendItem(COLORS.tools, 'tool calls');
+    if (metric === 'cost') return legendItem(COLORS.cost, 'cost / turn') + legendItem(COLORS.cum, 'cumulative') + legendItem(COLORS.tools, 'tool calls');
+    if (metric === 'time') return legendItem(COLORS.time, 'generation time') + legendItem(COLORS.output, 'TTFT') + legendItem(COLORS.tools, 'tool calls');
+    return legendItem(COLORS.speed, 'output tok/s') + legendItem(COLORS.tools, 'tool calls');
   }
 
   var METRICS = {
@@ -102,7 +102,7 @@
         var h = Math.max(value > 0 ? 2 : 0, (value / max) * MAIN_H);
         solo.setAttribute('y', (MAIN_BOTTOM - h).toFixed(1));
         solo.setAttribute('height', h.toFixed(1));
-        solo.setAttribute('fill', turn.stopReason === 'error' ? COLORS.bad : (metric === 'cost' ? 'url(#costGradient)' : COLORS[metric]));
+        solo.setAttribute('fill', turn.stopReason === 'error' ? COLORS.bad : COLORS[metric]);
         solo.setAttribute('visibility', 'visible');
         if (dot) {
           if (metric === 'time' && turn.ttftMs != null) {

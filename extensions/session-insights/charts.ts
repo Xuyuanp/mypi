@@ -168,9 +168,9 @@ function timelineSvg(turns: TurnPoint[]): string {
             cursor -= height;
         }
         const toolHeight =
-            turn.toolCalls > 0 ? Math.min(g.toolHeight, 4 + turn.toolCalls * 4) : 2;
+            turn.toolCalls > 0 ? Math.min(g.toolHeight, 2 + turn.toolCalls * 2) : 0;
         toolBars.push(
-            `<rect class="toolbar" data-i="${index}" x="${x.toFixed(1)}" y="${(g.toolTop + g.toolHeight - toolHeight).toFixed(1)}" width="${barW.toFixed(1)}" height="${toolHeight.toFixed(1)}" rx="2" fill="${turn.toolCalls > 0 ? PALETTE.tools : "rgba(255,255,255,.08)"}"/>`,
+            `<rect class="toolbar" data-i="${index}" x="${x.toFixed(1)}" y="${(g.toolTop + g.toolHeight - toolHeight).toFixed(1)}" width="${barW.toFixed(1)}" height="${toolHeight.toFixed(1)}" rx="1" fill="${PALETTE.tools}" opacity="0.65"/>`,
         );
         // Cost is the default view. The stacked token bars ship hidden, ready
         // for the Tokens tab to reveal.
@@ -184,7 +184,7 @@ function timelineSvg(turns: TurnPoint[]): string {
         groups.push(
             `<g class="turn" data-i="${index}">`,
             `<g class="stacked" style="display:none">${rects.join("")}</g>`,
-            `<rect class="solo" x="${x.toFixed(1)}" y="${(g.mainBottom - costHeight).toFixed(1)}" width="${barW.toFixed(1)}" height="${costHeight.toFixed(1)}" rx="2" fill="${turn.stopReason === "error" ? PALETTE.bad : "url(#costGradient)"}"/>`,
+            `<rect class="solo" x="${x.toFixed(1)}" y="${(g.mainBottom - costHeight).toFixed(1)}" width="${barW.toFixed(1)}" height="${costHeight.toFixed(1)}" rx="2" fill="${turn.stopReason === "error" ? PALETTE.bad : PALETTE.cost}"/>`,
             turn.ttftMs !== null
                 ? `<circle class="ttft" cx="${(x + barW / 2).toFixed(1)}" cy="${g.mainBottom}" r="2.6" fill="${PALETTE.output}" visibility="hidden"/>`
                 : "",
@@ -204,12 +204,11 @@ function timelineSvg(turns: TurnPoint[]): string {
     });
 
     return [
-        `<svg class="timeline" id="timeline" viewBox="0 0 ${g.width} 300" role="img">`,
-        `<defs><linearGradient id="costGradient" x1="0" y1="1" x2="0" y2="0"><stop offset="0%" stop-color="#7a5316"/><stop offset="100%" stop-color="#ffb84d"/></linearGradient></defs>`,
+        `<svg class="timeline" id="timeline" viewBox="0 0 ${g.width} ${g.height}" role="img" aria-label="Per-turn timeline">`,
         grid.join(""),
         `<g id="tl-bars">${groups.join("")}</g>`,
         `<g id="tl-tools">${toolBars.join("")}</g>`,
-        `<polyline id="tl-cum" points="${cumPoints.join(" ")}" fill="none" stroke="#ffd166" stroke-width="2" stroke-dasharray="5 4" stroke-linejoin="round"/>`,
+        `<polyline id="tl-cum" points="${cumPoints.join(" ")}" fill="none" stroke="${PALETTE.cum}" stroke-width="1.6" stroke-dasharray="4 4" stroke-linejoin="round" opacity="0.7"/>`,
         ticks.join(""),
         `<text x="${g.padL - 9}" y="${g.toolTop + g.toolHeight + 4}" class="axis" text-anchor="end">tools</text>`,
         `</svg>`,
@@ -238,7 +237,7 @@ export function timelineChart(insights: SessionInsights): string {
         `<span class="lg-item"><i style="background:${PALETTE.tools}"></i>tool calls</span>`,
         `</div>`,
         `</div>`,
-        timelineSvg(turns),
+        `<div class="plot">${timelineSvg(turns)}</div>`,
         `<div class="turn-detail" id="turn-detail"><span class="td-hint">Hover a turn for token, cost, latency and tool details.</span></div>`,
         `<script type="application/json" id="turn-data">${data}</script>`,
         `<script>${TIMELINE_SCRIPT}</script>`,
