@@ -23,7 +23,7 @@
 
 - Keep utility functions generic and pure — push context-specific logic (cwd resolution, env construction, etc.) to callers
 - Prefer passing primitive/standard types (`string`, `NodeJS.ProcessEnv`) over domain objects into low-level helpers
-- Each extension is a self-contained module: types, helpers, and default export in one file
+- Start each extension as a single self-contained module: types, helpers, and default export in one file. Split it into a directory extension once that file stops being easy to read, or when the extension ships data files
 - State lives in closures inside the default export function, not in module-level mutable variables
 - Use classes only for TUI components (implementing `Component` interface); prefer closures + plain objects elsewhere
 - Export internal helpers as named exports only when they need to be tested or reused (e.g. `buildFallbackTitle`, `postProcessTitle`)
@@ -68,6 +68,17 @@
 
 ### Extension Structure
 
+Extensions come in two shapes. pi discovers both:
+
+| Layout | Entry point | Use when |
+|--------|-------------|----------|
+| Single file | `extensions/<name>.ts` | The default. Small and focused |
+| Directory | `extensions/<name>/index.ts` | Several concerns, or data files ship with it |
+
+Only `extensions/*.ts` and `extensions/*/index.ts` load as extensions. Every other file inside a directory is an ordinary module, so helpers and data files belong there.
+
+#### Single file
+
 ```ts
 /**
  * Block comment describing the extension's purpose and usage.
@@ -89,6 +100,24 @@ export default function(pi: ExtensionAPI) {
 }
 ```
 
+#### Directory
+
+```
+extensions/<name>/
+  index.ts       entry point: default export, listeners, commands
+  <module>.ts    pure helpers, one concern per file
+  <asset>        data file, read at runtime
+```
+
+`export default` lives in `index.ts` only. Read data files relative to the module, the way `extensions/subagent/agents.ts` reads `agents/*.md`:
+
+```ts
+const ASSET_DIR = dirname(fileURLToPath(import.meta.url));
+const TEMPLATE = readFileSync(join(ASSET_DIR, "template.html"), "utf8");
+```
+
+A good split separates the computation from the presentation. See `extensions/session-insights/`, where `insights.ts` computes and `render.ts` fills `template.html`.
+
 ## Agent skills
 
 ### Issue tracker
@@ -106,7 +135,7 @@ Single-context layout (one CONTEXT.md + docs/adr/ at repo root). See `docs/agent
 ### Testing
 
 - Framework: [vitest](https://vitest.dev/). Run `npm test` (or `npx vitest run`).
-- Test files live in `tests/` (NOT in `extensions/` -- pi auto-loads every `.ts` in `extensions/` as an extension).
+- Test files live in `tests/`, never in `extensions/` -- pi auto-loads `extensions/*.ts` and `extensions/*/index.ts` as extensions. Import the module under test by path, e.g. `../extensions/session-insights/insights.js`.
 - Naming convention: `tests/<extension-name>.test.ts`.
 - Extension integration tests use the **faux mock provider** from `@earendil-works/pi-ai` plus the pi SDK (`createAgentSession`) to drive scripted tool-call sequences end-to-end. See [docs/extension-testing.md](./docs/extension-testing.md) for boilerplate and `tests/file-guard.test.ts` for a complete reference.
 - After a successful edit/write, always assert the resulting file content on disk.

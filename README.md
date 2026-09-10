@@ -29,7 +29,7 @@ This package follows the [pi package conventions](https://shittycodingagent.ai/d
 
 ### Adding Resources
 
-- **Extensions**: Add `.ts` or `.js` files to `extensions/`
+- **Extensions**: Add `.ts` or `.js` files to `extensions/`, or a subdirectory with an `index.ts` for a multi-file extension
 - **Themes**: Add `.json` files to `themes/`
 - **Prompts**: Add `.md` files to `prompts/`
 - **Skills**: Add `SKILL.md` files to `skills/` subdirectories
