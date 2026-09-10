@@ -30,8 +30,10 @@ export function formatDuration(ms: number): string {
     if (!Number.isFinite(ms) || ms <= 0) return "0s";
     const seconds = ms / 1000;
     if (seconds < 60) return `${seconds.toFixed(seconds < 10 ? 1 : 0)}s`;
-    const minutes = Math.floor(seconds / 60);
-    const remSeconds = Math.round(seconds % 60);
+    // Round to whole seconds before splitting, so 479.7s reads 8m 0s, not 7m 60s.
+    const total = Math.round(seconds);
+    const minutes = Math.floor(total / 60);
+    const remSeconds = total % 60;
     if (minutes < 60) return `${minutes}m ${remSeconds}s`;
     const hours = Math.floor(minutes / 60);
     return `${hours}h ${minutes % 60}m`;

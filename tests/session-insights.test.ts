@@ -334,5 +334,8 @@ describe("formatters", () => {
         expect(formatDuration(4500)).toBe("4.5s");
         expect(formatDuration(65_000)).toBe("1m 5s");
         expect(formatDuration(3_900_000)).toBe("1h 5m");
+        // Rounding must never produce "7m 60s".
+        expect(formatDuration(479_700)).toBe("8m 0s");
+        expect(formatDuration(3_599_000)).toBe("59m 59s");
     });
 });
