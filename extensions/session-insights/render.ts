@@ -17,7 +17,7 @@ import {
     truncate,
 } from "./format.js";
 import { PALETTE } from "./theme.js";
-import type { SessionInsights } from "./types.js";
+import type { ContextInfo, SessionInsights } from "./types.js";
 
 const ASSET_DIR = dirname(fileURLToPath(import.meta.url));
 const TEMPLATE = readFileSync(join(ASSET_DIR, "template.html"), "utf8");
@@ -169,6 +169,30 @@ interface Meter {
     color: string;
 }
 
+/** Context window usage as a meter, or n/a when the figure is unavailable. */
+function contextMeter(context: ContextInfo | null): Meter {
+    if (!context || context.tokens === null) {
+        return {
+            label: "context used",
+            value: "n/a",
+            fraction: 0,
+            color: PALETTE.input,
+        };
+    }
+    const fraction =
+        context.percent !== null
+            ? context.percent / 100
+            : context.contextWindow > 0
+              ? context.tokens / context.contextWindow
+              : 0;
+    return {
+        label: "context used",
+        value: `${formatPercent(fraction)} · ${formatTokens(context.tokens)}`,
+        fraction,
+        color: fraction > 0.85 ? PALETTE.bad : PALETTE.input,
+    };
+}
+
 function meterRows(meters: Meter[]): string {
     return meters
         .map(
@@ -263,15 +287,6 @@ export function renderInsightsHtml(insights: SessionInsights): string {
         insights.tokens.output > 0
             ? insights.tokens.reasoning / insights.tokens.output
             : 0;
-    const context = insights.context;
-    const contextFraction =
-        context && context.tokens !== null
-            ? context.percent !== null
-                ? context.percent / 100
-                : context.contextWindow > 0
-                  ? context.tokens / context.contextWindow
-                  : 0
-            : 0;
     const meters: Meter[] = [
         {
             label: "cache hit",
@@ -285,15 +300,7 @@ export function renderInsightsHtml(insights: SessionInsights): string {
             fraction: reasoningShare,
             color: PALETTE.reasoning,
         },
-        {
-            label: "context used",
-            value:
-                context && context.tokens !== null
-                    ? `${formatPercent(contextFraction)} · ${formatTokens(context.tokens)}`
-                    : "n/a",
-            fraction: contextFraction,
-            color: contextFraction > 0.85 ? PALETTE.bad : PALETTE.input,
-        },
+        contextMeter(insights.context),
         {
             label: "tool time share",
             value: formatPercent(toolShare),
