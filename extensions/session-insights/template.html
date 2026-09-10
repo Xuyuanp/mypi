@@ -59,6 +59,7 @@ header.top{display:flex;flex-wrap:wrap;align-items:flex-end;justify-content:spac
 .donut{filter:drop-shadow(0 10px 24px rgba(0,0,0,.4))}
 .donut circle{transition:stroke-width .2s ease}
 .donut circle:hover{stroke-width:30}
+/* 30px must match DONUT_HOVER_THICKNESS in charts.ts, which reserves the room. */
 .donut-value{fill:var(--text);font-size:24px;font-weight:700;letter-spacing:-.03em}
 .donut-cap{fill:var(--muted);font-size:10.5px;text-transform:uppercase;letter-spacing:.08em}
 .eff{display:flex;align-items:center;gap:26px;margin-top:20px}

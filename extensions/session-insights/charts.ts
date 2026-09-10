@@ -30,31 +30,40 @@ interface DonutCenter {
     caption: string;
 }
 
+/** Ring width, the wider ring drawn on hover, and the gap between slices. */
+const DONUT_THICKNESS = 24;
+const DONUT_HOVER_THICKNESS = 30;
+const DONUT_GAP = 2;
+
 export function donutSvg(
     segments: DonutSegment[],
     size = 190,
     format: (value: number) => string = formatTokens,
     center?: DonutCenter,
 ): string {
-    const thickness = 24;
-    const radius = (size - thickness) / 2;
+    // A stroke straddles its path, so a slice grows outward on hover. Reserve
+    // the hover width up front, or the viewport clips it flat.
+    const radius = (size - DONUT_HOVER_THICKNESS) / 2 - 1;
     const middle = size / 2;
     const circumference = 2 * Math.PI * radius;
-    const total = segments.reduce((sum, s) => sum + Math.max(0, s.value), 0);
+    const visible = segments.filter((segment) => segment.value > 0);
+    const total = visible.reduce((sum, segment) => sum + segment.value, 0);
+    // Scale the slices down so that a gap fits after every one of them,
+    // including the last, which keeps the ring from wrapping onto the first.
+    const available = circumference - DONUT_GAP * visible.length;
 
     const rings: string[] = [
-        `<circle cx="${middle}" cy="${middle}" r="${radius}" fill="none" stroke="rgba(255,255,255,.06)" stroke-width="${thickness}"/>`,
+        `<circle cx="${middle}" cy="${middle}" r="${radius}" fill="none" stroke="rgba(255,255,255,.06)" stroke-width="${DONUT_THICKNESS}"/>`,
     ];
     let offset = 0;
-    for (const segment of segments) {
-        const value = Math.max(0, segment.value);
-        if (value <= 0 || total <= 0) continue;
-        const length = (value / total) * circumference;
-        const gap = Math.max(0, circumference - length - 2);
+    for (const segment of visible) {
+        const length = (segment.value / total) * available;
+        // A gap wider than the circle keeps the pattern from painting a second
+        // arc where it repeats.
         rings.push(
-            `<circle cx="${middle}" cy="${middle}" r="${radius}" fill="none" stroke="${segment.color}" stroke-width="${thickness}" stroke-dasharray="${length.toFixed(2)} ${gap.toFixed(2)}" stroke-dashoffset="${(-offset).toFixed(2)}" transform="rotate(-90 ${middle} ${middle})"><title>${escapeHtml(segment.label)}: ${format(value)}</title></circle>`,
+            `<circle cx="${middle}" cy="${middle}" r="${radius}" fill="none" stroke="${segment.color}" stroke-width="${DONUT_THICKNESS}" stroke-dasharray="${length.toFixed(2)} ${(circumference * 2).toFixed(2)}" stroke-dashoffset="${(-offset).toFixed(2)}" transform="rotate(-90 ${middle} ${middle})"><title>${escapeHtml(segment.label)}: ${format(segment.value)}</title></circle>`,
         );
-        offset += length + 2;
+        offset += length + DONUT_GAP;
     }
     if (center) {
         rings.push(

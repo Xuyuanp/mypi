@@ -4,6 +4,7 @@
  */
 
 import { describe, expect, it } from "vitest";
+import { donutSvg } from "../extensions/session-insights/charts.js";
 import {
     formatDuration,
     formatTokens,
@@ -370,5 +371,65 @@ describe("formatters", () => {
         // Rounding must never produce "7m 60s".
         expect(formatDuration(479_700)).toBe("8m 0s");
         expect(formatDuration(3_599_000)).toBe("59m 59s");
+    });
+});
+
+describe("donutSvg", () => {
+    const slicesOf = (svg: string) =>
+        [
+            ...svg.matchAll(
+                /stroke-dasharray="([\d.]+) ([\d.]+)" stroke-dashoffset="(-?[\d.]+)"/g,
+            ),
+        ].map((m) => ({
+            length: Number(m[1]),
+            patternGap: Number(m[2]),
+            offset: -Number(m[3]),
+        }));
+
+    it("keeps the ring inside its viewBox, hover width included", () => {
+        // The hover rule in template.html grows the stroke to 30px, and a stroke
+        // straddles its path, so the ring needs half of that as clearance.
+        const hoverThickness = 30;
+        for (const size of [190, 160]) {
+            const svg = donutSvg([{ label: "a", value: 1, color: "#fff" }], size);
+            const radius = Number(svg.match(/r="([\d.]+)"/)?.[1]);
+            expect(radius + hoverThickness / 2).toBeLessThanOrEqual(size / 2);
+        }
+    });
+
+    it("never lets a slice run past the end of the circle", () => {
+        // The offset used to accumulate by length + gap, so the last slice of a
+        // 97/3 split ended past the circumference and painted over the first.
+        const svg = donutSvg(
+            [
+                { label: "big", value: 97, color: "#111111" },
+                { label: "small", value: 3, color: "#222222" },
+            ],
+            190,
+        );
+        const radius = Number(svg.match(/r="([\d.]+)"/)?.[1]);
+        const circumference = 2 * Math.PI * radius;
+        const slices = slicesOf(svg);
+        expect(slices.length).toBe(2);
+        for (const slice of slices) {
+            expect(slice.offset + slice.length).toBeLessThan(circumference);
+        }
+        const last = slices[slices.length - 1];
+        // The last slice leaves one gap before the first one starts at zero.
+        expect(circumference - (last.offset + last.length)).toBeCloseTo(2, 1);
+    });
+
+    it("uses a dash gap wider than the circle so no second arc is painted", () => {
+        const svg = donutSvg(
+            [
+                { label: "big", value: 70, color: "#111111" },
+                { label: "small", value: 30, color: "#222222" },
+            ],
+            190,
+        );
+        const radius = Number(svg.match(/r="([\d.]+)"/)?.[1]);
+        for (const slice of slicesOf(svg)) {
+            expect(slice.patternGap).toBeGreaterThan(2 * Math.PI * radius);
+        }
     });
 });
