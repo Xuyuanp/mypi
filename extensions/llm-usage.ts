@@ -5,6 +5,9 @@
  * footer status bar. Each provider renders its own usage string; the
  * extension shows a dim provider label followed by that string.
  *
+ * All updates are TUI-only. Other modes (rpc, json, print) have no status
+ * bar, so the extension does nothing there.
+ *
  * Providers:
  * - deepseek: money balance. GET https://api.deepseek.com/user/balance
  * - opencode-go: quota percent across rolling/weekly/monthly windows.
@@ -203,7 +206,8 @@ export function shouldRefreshUsage(turn: number): boolean {
 }
 
 async function updateUsage(ctx: ExtensionContext): Promise<void> {
-    if (!ctx.hasUI) return;
+    // The footer status bar exists only in the TUI.
+    if (ctx.mode !== "tui") return;
 
     const model = ctx.model;
     if (!model) return;
