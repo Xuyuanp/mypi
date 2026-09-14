@@ -66,6 +66,10 @@
 - Do NOT use broad try/catch to guard against stale `pi`/`ctx` access. Instead, subscribe to `session_shutdown` and use a `sessionActive` flag to cooperatively bail out. Check the flag at await boundaries (after async operations return) before calling mutation methods (`pi.setSessionName`, `pi.appendEntry`, `ctx.ui.notify`, `pi.exec`, etc.). The framework guarantees `session_shutdown` fires and is awaited before runtime invalidation.
 - When an async event handler accesses shared resources across await boundaries, look for the resource's lifecycle event first (e.g. `session_shutdown`), not error-based detection. Flags communicate intent; try/catch hides bugs.
 
+### Extension API
+
+- Gate TUI-only work on `ctx.mode === "tui"`, not `ctx.hasUI`. `hasUI` is true in modes that have no footer, so a status-bar extension that checks `hasUI` will fetch and render where the output is never seen.
+
 ### Extension Structure
 
 Extensions come in two shapes. pi discovers both:
@@ -117,6 +121,11 @@ const TEMPLATE = readFileSync(join(ASSET_DIR, "template.html"), "utf8");
 ```
 
 A good split separates the computation from the presentation. See `extensions/session-insights/`, where `insights.ts` computes and `render.ts` fills `template.html`.
+
+## Agent Tooling
+
+- Re-`read` a file before you `edit` it when anything else changed it on disk. `npm run check` (Biome `--fix`) rewrites files, and so do external apps. A stale read makes the edit fail with `has been modified since it was last read (mtime mismatch)`. Reading the file another way (e.g. `cat`) does not refresh the cache; use the `read` tool.
+- Treat an `edit` call as atomic. One unmatched `oldText`, or two overlapping `oldText` ranges, rejects the whole call and applies nothing. Target one file per call, keep the edits disjoint, and after a rejected call confirm that the change landed.
 
 ## Agent skills
 
