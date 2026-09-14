@@ -14,31 +14,34 @@ import { computeInsights } from "../extensions/session-insights/insights.js";
 import { renderInsightsHtml } from "../extensions/session-insights/render.js";
 import type { EntryLike } from "../extensions/session-insights/types.js";
 
+/** Epoch ms of the session's first ISO timestamp, used to build message times. */
+const BASE = Date.parse("2026-01-01T00:00:00.000Z");
+
+/** ISO timestamp `offsetMs` after the session start. */
+const at = (offsetMs: number) => new Date(BASE + offsetMs).toISOString();
+
 const MODEL_CHANGE: EntryLike = {
     type: "model_change",
-    timestamp: "2026-01-01T00:00:00.000Z",
+    timestamp: at(0),
     provider: "openai",
     modelId: "gpt-x",
 };
-
-/** Epoch ms of the session's first ISO timestamp, used to build message times. */
-const BASE = Date.parse("2026-01-01T00:00:00.000Z");
 
 /** A full run: one tool call, one tool error, one assistant error. */
 const ENTRIES: EntryLike[] = [
     {
         type: "session",
-        timestamp: "2026-01-01T00:00:00.000Z",
+        timestamp: at(0),
     },
     MODEL_CHANGE,
     {
         type: "message",
-        timestamp: "2026-01-01T00:00:00.000Z",
+        timestamp: at(0),
         message: { role: "user", timestamp: BASE },
     },
     {
         type: "message",
-        timestamp: "2026-01-01T00:00:10.000Z",
+        timestamp: at(10_000),
         message: {
             role: "assistant",
             provider: "openai",
@@ -65,7 +68,7 @@ const ENTRIES: EntryLike[] = [
     },
     {
         type: "message",
-        timestamp: "2026-01-01T00:00:11.000Z",
+        timestamp: at(11_000),
         message: {
             role: "toolResult",
             toolCallId: "c1",
@@ -76,7 +79,7 @@ const ENTRIES: EntryLike[] = [
     },
     {
         type: "message",
-        timestamp: "2026-01-01T00:00:20.000Z",
+        timestamp: at(20_000),
         message: {
             role: "assistant",
             provider: "openai",
@@ -95,7 +98,7 @@ const ENTRIES: EntryLike[] = [
     },
     {
         type: "message",
-        timestamp: "2026-01-01T00:00:21.000Z",
+        timestamp: at(21_000),
         message: {
             role: "toolResult",
             toolCallId: "c2",
@@ -316,12 +319,12 @@ describe("renderInsightsHtml", () => {
             MODEL_CHANGE,
             {
                 type: "message",
-                timestamp: "2026-01-01T00:00:00.000Z",
+                timestamp: at(0),
                 message: { role: "user", timestamp: BASE },
             },
             {
                 type: "message",
-                timestamp: "2026-01-01T00:00:05.000Z",
+                timestamp: at(5_000),
                 message: {
                     role: "assistant",
                     provider: "openai",

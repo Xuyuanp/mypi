@@ -17,8 +17,14 @@ import {
     shouldRefreshUsage,
 } from "../extensions/llm-usage.js";
 
-// Fixed reference time so reset countdowns are deterministic.
-const NOW = new Date("2026-08-12T12:00:00Z").getTime();
+// Reset times are offsets from the current time, so the tests hold at
+// any run time. `now` is injected, so each delta stays exact.
+const NOW = Date.now();
+const MINUTE_MS = 60_000;
+const HOUR_MS = 60 * MINUTE_MS;
+const DAY_MS = 24 * HOUR_MS;
+
+const resetIn = (ms: number) => new Date(NOW + ms).toISOString();
 
 const theme: Theme = {
     fg: (color: ThemeColor, text: string) => `<${color}>${text}</${color}>`,
@@ -234,17 +240,17 @@ describe("renderOpencodeUsage", () => {
                 rolling: {
                     status: "ok",
                     percent: 0,
-                    resetsAt: "2026-08-12T08:50:21Z",
+                    resetsAt: resetIn(-HOUR_MS),
                 },
                 weekly: {
                     status: "warning",
                     percent: 82,
-                    resetsAt: "2026-08-17T00:00:00Z",
+                    resetsAt: resetIn(5 * DAY_MS),
                 },
                 monthly: {
                     status: "ok",
                     percent: 94,
-                    resetsAt: "2026-09-03T03:53:46Z",
+                    resetsAt: resetIn(22 * DAY_MS),
                 },
             },
         };
@@ -263,10 +269,10 @@ describe("renderOpencodeUsage", () => {
                 NOW,
             );
 
-        expect(at("2026-08-12T15:00:00Z")).toBe(
+        expect(at(resetIn(3 * HOUR_MS))).toBe(
             "<warning>W80%</warning> <dim>~3h</dim>",
         );
-        expect(at("2026-08-12T12:45:00Z")).toBe(
+        expect(at(resetIn(45 * MINUTE_MS))).toBe(
             "<warning>W80%</warning> <dim>~45m</dim>",
         );
     });
@@ -278,7 +284,7 @@ describe("renderOpencodeUsage", () => {
                     weekly: {
                         status: "ok",
                         percent: 80,
-                        resetsAt: "2026-08-12T11:00:00Z",
+                        resetsAt: resetIn(-HOUR_MS),
                     },
                 },
                 theme,
@@ -320,7 +326,7 @@ describe("renderOpencodeUsage", () => {
                     weekly: {
                         status: "ok",
                         percent: 15,
-                        resetsAt: "2026-08-17T00:00:00Z",
+                        resetsAt: resetIn(5 * DAY_MS),
                     },
                 },
                 theme,
@@ -331,42 +337,46 @@ describe("renderOpencodeUsage", () => {
 });
 
 describe("renderOpencodeUsage time pressure", () => {
-    const ok = (resetsAt: string) => ({ status: "ok", percent: 10, resetsAt });
+    const ok = (ms: number) => ({
+        status: "ok",
+        percent: 10,
+        resetsAt: resetIn(ms),
+    });
 
     it("shows a countdown under 40% of a 5h rolling window", () => {
-        expect(
-            renderOpencodeUsage({ rolling: ok("2026-08-12T13:00:00Z") }, theme, NOW),
-        ).toBe("<success>R10%</success> <dim>~1h</dim>");
+        expect(renderOpencodeUsage({ rolling: ok(HOUR_MS) }, theme, NOW)).toBe(
+            "<success>R10%</success> <dim>~1h</dim>",
+        );
     });
 
     it("hides the countdown above 40% of the rolling window", () => {
-        expect(
-            renderOpencodeUsage({ rolling: ok("2026-08-12T15:00:00Z") }, theme, NOW),
-        ).toBe("<success>R10%</success>");
+        expect(renderOpencodeUsage({ rolling: ok(3 * HOUR_MS) }, theme, NOW)).toBe(
+            "<success>R10%</success>",
+        );
     });
 
     it("hides the countdown at exactly 40% of the rolling window", () => {
-        expect(
-            renderOpencodeUsage({ rolling: ok("2026-08-12T14:00:00Z") }, theme, NOW),
-        ).toBe("<success>R10%</success>");
+        expect(renderOpencodeUsage({ rolling: ok(2 * HOUR_MS) }, theme, NOW)).toBe(
+            "<success>R10%</success>",
+        );
     });
 
     it("uses a 7d window for weekly", () => {
-        expect(
-            renderOpencodeUsage({ weekly: ok("2026-08-14T12:00:00Z") }, theme, NOW),
-        ).toBe("<success>W10%</success> <dim>~2d</dim>");
-        expect(
-            renderOpencodeUsage({ weekly: ok("2026-08-15T12:00:00Z") }, theme, NOW),
-        ).toBe("<success>W10%</success>");
+        expect(renderOpencodeUsage({ weekly: ok(2 * DAY_MS) }, theme, NOW)).toBe(
+            "<success>W10%</success> <dim>~2d</dim>",
+        );
+        expect(renderOpencodeUsage({ weekly: ok(3 * DAY_MS) }, theme, NOW)).toBe(
+            "<success>W10%</success>",
+        );
     });
 
     it("uses a 30d window for monthly", () => {
-        expect(
-            renderOpencodeUsage({ monthly: ok("2026-08-22T12:00:00Z") }, theme, NOW),
-        ).toBe("<success>M10%</success> <dim>~10d</dim>");
-        expect(
-            renderOpencodeUsage({ monthly: ok("2026-08-25T12:00:00Z") }, theme, NOW),
-        ).toBe("<success>M10%</success>");
+        expect(renderOpencodeUsage({ monthly: ok(10 * DAY_MS) }, theme, NOW)).toBe(
+            "<success>M10%</success> <dim>~10d</dim>",
+        );
+        expect(renderOpencodeUsage({ monthly: ok(13 * DAY_MS) }, theme, NOW)).toBe(
+            "<success>M10%</success>",
+        );
     });
 
     it("still shows a countdown for a stressed window far from its reset", () => {
@@ -376,7 +386,7 @@ describe("renderOpencodeUsage time pressure", () => {
                     weekly: {
                         status: "warning",
                         percent: 82,
-                        resetsAt: "2026-08-17T12:00:00Z",
+                        resetsAt: resetIn(5 * DAY_MS),
                     },
                 },
                 theme,
