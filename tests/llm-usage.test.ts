@@ -145,6 +145,52 @@ describe("renderOpencodeUsage", () => {
         ).toBe("<success>0%</success>");
     });
 
+    it("keeps a stressed window with percent below 1", () => {
+        expect(
+            renderOpencodeUsage(
+                { weekly: { status: "exceeded", percent: 0 } },
+                theme,
+                NOW,
+            ),
+        ).toBe("<error>W0%</error>");
+    });
+
+    it("keeps a stressed window with no percent", () => {
+        expect(
+            renderOpencodeUsage({ weekly: { status: "exceeded" } }, theme, NOW),
+        ).toBe("<error>W0%</error>");
+    });
+
+    it("shows a stressed window next to a healthy empty one", () => {
+        expect(
+            renderOpencodeUsage(
+                {
+                    rolling: { status: "ok", percent: 0.4 },
+                    weekly: { status: "exceeded", percent: 0 },
+                },
+                theme,
+                NOW,
+            ),
+        ).toBe("<error>W0%</error>");
+    });
+
+    it("treats a NaN percent as zero", () => {
+        expect(
+            renderOpencodeUsage(
+                { weekly: { status: "ok", percent: Number.NaN } },
+                theme,
+                NOW,
+            ),
+        ).toBe("<success>0%</success>");
+        expect(
+            renderOpencodeUsage(
+                { weekly: { status: "error", percent: Number.NaN } },
+                theme,
+                NOW,
+            ),
+        ).toBe("<error>W0%</error>");
+    });
+
     it("grades by percent threshold (69/70/89/90)", () => {
         const at = (percent: number) =>
             renderOpencodeUsage({ weekly: { status: "ok", percent } }, theme, NOW);
@@ -249,6 +295,22 @@ describe("renderOpencodeUsage", () => {
                 NOW,
             ),
         ).toBe("<error>M95%</error>");
+    });
+
+    it("omits the countdown when resetsAt is invalid", () => {
+        expect(
+            renderOpencodeUsage(
+                {
+                    weekly: {
+                        status: "warning",
+                        percent: 80,
+                        resetsAt: "not-a-date",
+                    },
+                },
+                theme,
+                NOW,
+            ),
+        ).toBe("<warning>W80%</warning>");
     });
 
     it("does not add a countdown to healthy windows", () => {

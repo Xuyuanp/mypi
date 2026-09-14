@@ -146,6 +146,7 @@ function resetsAtMs(window: OpencodeUsageWindow): number {
 }
 
 function formatReset(ms: number): string {
+    if (!Number.isFinite(ms)) return "";
     const minutes = Math.max(0, Math.round(ms / 60000));
     if (minutes < 60) return `~${minutes}m`;
     const hours = Math.round(ms / 3600000);
@@ -154,10 +155,12 @@ function formatReset(ms: number): string {
 }
 
 /**
- * Renders a usage payload into the colored usage string: drops windows
- * below 1%, keeps the rolling/weekly/monthly (RWM) window order, colors
- * each window, and appends a dim reset countdown to stressed windows.
- * Pure — `now` is injected for deterministic tests.
+ * Renders a usage payload into the colored usage string: drops healthy
+ * windows below 1%, keeps the rolling/weekly/monthly (RWM) window order,
+ * colors each window, and appends a dim reset countdown to stressed
+ * windows. A stressed window always renders, so an exhausted quota
+ * cannot hide behind the `0%` fallback. Pure — `now` is injected for
+ * deterministic tests.
  */
 export function renderOpencodeUsage(
     usage: OpencodeUsageResponse["usage"],
@@ -167,17 +170,19 @@ export function renderOpencodeUsage(
     const parts: string[] = [];
     for (const def of OPENCODE_WINDOWS) {
         const window = usage?.[def.key];
-        if (!window || (window.percent ?? 0) < 1) continue;
+        if (!window) continue;
 
         const level = levelForWindow(window);
+        const raw = window.percent;
+        const percent = typeof raw === "number" && Number.isFinite(raw) ? raw : 0;
+        if (level === "ok" && !(percent >= 1)) continue;
+
         parts.push(
-            theme.fg(
-                LEVEL_COLORS[level],
-                `${def.letter}${Math.round(window.percent ?? 0)}%`,
-            ),
+            theme.fg(LEVEL_COLORS[level], `${def.letter}${Math.round(percent)}%`),
         );
         if (level !== "ok" && window.resetsAt) {
-            parts.push(theme.fg("dim", formatReset(resetsAtMs(window) - now)));
+            const reset = formatReset(resetsAtMs(window) - now);
+            if (reset) parts.push(theme.fg("dim", reset));
         }
     }
 
