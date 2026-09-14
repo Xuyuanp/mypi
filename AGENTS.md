@@ -137,5 +137,7 @@ Single-context layout (one CONTEXT.md + docs/adr/ at repo root). See `docs/agent
 - Framework: [vitest](https://vitest.dev/). Run `npm test` (or `npx vitest run`).
 - Test files live in `tests/`, never in `extensions/` -- pi auto-loads `extensions/*.ts` and `extensions/*/index.ts` as extensions. Import the module under test by path, e.g. `../extensions/session-insights/insights.js`.
 - Naming convention: `tests/<extension-name>.test.ts`.
+- No fixed datetimes in test files. Derive every timestamp from one named anchor plus an offset, e.g. `const at = (ms: number) => new Date(BASE + ms).toISOString()`. One named anchor is allowed; repeated `"2026-01-01T00:00:00.000Z"`-style literals are not.
+- When the code under test reads the wall clock, inject `now` and build the inputs relative to it (see `renderOpencodeUsage`). The test then stays deterministic and timezone-independent.
 - Extension integration tests use the **faux mock provider** from `@earendil-works/pi-ai` plus the pi SDK (`createAgentSession`) to drive scripted tool-call sequences end-to-end. See [docs/extension-testing.md](./docs/extension-testing.md) for boilerplate and `tests/file-guard.test.ts` for a complete reference.
 - After a successful edit/write, always assert the resulting file content on disk.
