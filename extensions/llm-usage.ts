@@ -12,8 +12,9 @@
  * - deepseek: money balance. GET https://api.deepseek.com/user/balance
  * - opencode-go: quota percent across rolling/weekly/monthly windows.
  *   GET https://opencode.ai/zen/go/v1/usage
- *   Windows under pressure (>= 70% or non-ok status) also show the
- *   time until their reset.
+ *   A window shows the time until its reset when it is under pressure
+ *   (>= 70% or non-ok status) or when less than 40% of its length
+ *   remains (rolling 5h, weekly 7d, monthly 30d).
  *
  * Auth for both: Authorization: Bearer ${apiKey}
  *
@@ -69,10 +70,15 @@ interface ProviderFetcher {
 
 const STATUS_KEY = "provider-usage";
 
+const MINUTE_MS = 60_000;
+const HOUR_MS = 60 * MINUTE_MS;
+const DAY_MS = 24 * HOUR_MS;
+
+// Window lengths from the OpenCode Go docs: 5-hour, weekly, monthly.
 const OPENCODE_WINDOWS = [
-    { key: "rolling", letter: "R" },
-    { key: "weekly", letter: "W" },
-    { key: "monthly", letter: "M" },
+    { key: "rolling", letter: "R", windowMs: 5 * HOUR_MS },
+    { key: "weekly", letter: "W", windowMs: 7 * DAY_MS },
+    { key: "monthly", letter: "M", windowMs: 30 * DAY_MS },
 ] as const;
 
 const USAGE_FETCHERS: Record<string, ProviderFetcher> = {
@@ -82,6 +88,7 @@ const USAGE_FETCHERS: Record<string, ProviderFetcher> = {
 
 const WARNING_PERCENT = 70;
 const ERROR_PERCENT = 90;
+const TIME_PRESSURE_FRACTION = 0.4;
 const TURN_REFRESH_INTERVAL = 10;
 
 const LEVEL_COLORS: Record<UsageLevel, ThemeColor> = {
@@ -155,12 +162,27 @@ function formatReset(ms: number): string {
 }
 
 /**
+ * True when the reset countdown is useful: a stressed window always
+ * shows it, and a healthy window shows it once under 40% of its
+ * length remains.
+ */
+function shouldShowReset(
+    level: UsageLevel,
+    remainingMs: number,
+    windowMs: number,
+): boolean {
+    if (level !== "ok") return true;
+    return remainingMs < windowMs * TIME_PRESSURE_FRACTION;
+}
+
+/**
  * Renders a usage payload into the colored usage string: drops healthy
  * windows below 1%, keeps the rolling/weekly/monthly (RWM) window order,
- * colors each window, and appends a dim reset countdown to stressed
- * windows. A stressed window always renders, so an exhausted quota
- * cannot hide behind the `0%` fallback. Pure — `now` is injected for
- * deterministic tests.
+ * colors each window, and appends a dim reset countdown. The countdown
+ * shows for stressed windows and for healthy windows once under 40% of
+ * their length remains. A stressed window always renders, so an
+ * exhausted quota cannot hide behind the `0%` fallback. Pure — `now` is
+ * injected for deterministic tests.
  */
 export function renderOpencodeUsage(
     usage: OpencodeUsageResponse["usage"],
@@ -180,9 +202,12 @@ export function renderOpencodeUsage(
         parts.push(
             theme.fg(LEVEL_COLORS[level], `${def.letter}${Math.round(percent)}%`),
         );
-        if (level !== "ok" && window.resetsAt) {
-            const reset = formatReset(resetsAtMs(window) - now);
-            if (reset) parts.push(theme.fg("dim", reset));
+        if (window.resetsAt) {
+            const remaining = resetsAtMs(window) - now;
+            if (shouldShowReset(level, remaining, def.windowMs)) {
+                const reset = formatReset(remaining);
+                if (reset) parts.push(theme.fg("dim", reset));
+            }
         }
     }
 

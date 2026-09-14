@@ -329,3 +329,59 @@ describe("renderOpencodeUsage", () => {
         ).toBe("<success>W15%</success>");
     });
 });
+
+describe("renderOpencodeUsage time pressure", () => {
+    const ok = (resetsAt: string) => ({ status: "ok", percent: 10, resetsAt });
+
+    it("shows a countdown under 40% of a 5h rolling window", () => {
+        expect(
+            renderOpencodeUsage({ rolling: ok("2026-08-12T13:00:00Z") }, theme, NOW),
+        ).toBe("<success>R10%</success> <dim>~1h</dim>");
+    });
+
+    it("hides the countdown above 40% of the rolling window", () => {
+        expect(
+            renderOpencodeUsage({ rolling: ok("2026-08-12T15:00:00Z") }, theme, NOW),
+        ).toBe("<success>R10%</success>");
+    });
+
+    it("hides the countdown at exactly 40% of the rolling window", () => {
+        expect(
+            renderOpencodeUsage({ rolling: ok("2026-08-12T14:00:00Z") }, theme, NOW),
+        ).toBe("<success>R10%</success>");
+    });
+
+    it("uses a 7d window for weekly", () => {
+        expect(
+            renderOpencodeUsage({ weekly: ok("2026-08-14T12:00:00Z") }, theme, NOW),
+        ).toBe("<success>W10%</success> <dim>~2d</dim>");
+        expect(
+            renderOpencodeUsage({ weekly: ok("2026-08-15T12:00:00Z") }, theme, NOW),
+        ).toBe("<success>W10%</success>");
+    });
+
+    it("uses a 30d window for monthly", () => {
+        expect(
+            renderOpencodeUsage({ monthly: ok("2026-08-22T12:00:00Z") }, theme, NOW),
+        ).toBe("<success>M10%</success> <dim>~10d</dim>");
+        expect(
+            renderOpencodeUsage({ monthly: ok("2026-08-25T12:00:00Z") }, theme, NOW),
+        ).toBe("<success>M10%</success>");
+    });
+
+    it("still shows a countdown for a stressed window far from its reset", () => {
+        expect(
+            renderOpencodeUsage(
+                {
+                    weekly: {
+                        status: "warning",
+                        percent: 82,
+                        resetsAt: "2026-08-17T12:00:00Z",
+                    },
+                },
+                theme,
+                NOW,
+            ),
+        ).toBe("<warning>W82%</warning> <dim>~5d</dim>");
+    });
+});
