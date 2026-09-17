@@ -186,6 +186,30 @@ function errorResult(
     };
 }
 
+const HERDR_BLOCKED_CHANNEL = "herdr:blocked";
+
+/**
+ * Tell host integrations (herdr) that the agent waits for user input for as
+ * long as the questionnaire UI is open. The signal is a balanced pair, so the
+ * release always fires, including when the UI throws.
+ */
+export async function withHerdrBlocked<T>(
+    pi: ExtensionAPI,
+    label: string,
+    run: () => Promise<T>,
+): Promise<T> {
+    pi.events.emit(HERDR_BLOCKED_CHANNEL, { active: true, label });
+    try {
+        return await run();
+    } finally {
+        pi.events.emit(HERDR_BLOCKED_CHANNEL, { active: false });
+    }
+}
+
+function blockedLabel(questions: Question[]): string {
+    return questions.map((q) => q.label || q.id).join(", ");
+}
+
 function createQuestionnaireUI(
     questions: Question[],
 ): (
@@ -891,7 +915,9 @@ export default function questionnaire(pi: ExtensionAPI) {
                 multiSelect: q.multiSelect === true,
             }));
 
-            const result = await showQuestionnaireUI(ctx.ui, questions);
+            const result = await withHerdrBlocked(pi, blockedLabel(questions), () =>
+                showQuestionnaireUI(ctx.ui, questions),
+            );
 
             if (result.cancelled) {
                 return {
@@ -1073,7 +1099,9 @@ export default function questionnaire(pi: ExtensionAPI) {
                 return;
             }
 
-            const result = await showQuestionnaireUI(ctx.ui, questions);
+            const result = await withHerdrBlocked(pi, blockedLabel(questions), () =>
+                showQuestionnaireUI(ctx.ui, questions),
+            );
 
             if (result.cancelled) {
                 ctx.ui.notify("Cancelled", "warning");
