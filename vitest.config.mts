@@ -2,18 +2,17 @@ import { resolve } from "node:path";
 import { defineConfig } from "vitest/config";
 
 /**
- * Resolve @earendil-works peer-dependency packages to the copies nested
- * inside pi-coding-agent so that tests and the runtime share the same
- * module-level singletons (e.g. the faux API provider registry).
+ * Resolve @earendil-works peer-dependency packages to the single hoisted
+ * copy in the repo's node_modules so that tests and the runtime share the
+ * same module-level singletons (e.g. the faux API provider registry).
  *
- * Without this, npm may hoist duplicate copies and the faux provider
- * registered in tests is invisible to the agent session at runtime.
+ * pi 1.0 dedupes these packages to one hoisted copy. The previous alias
+ * pointed at a pi-ai copy nested inside pi-coding-agent, which no longer
+ * exists.
  */
-const piCodingAgentModules = resolve(
-    "node_modules/@earendil-works/pi-coding-agent/node_modules",
-);
+const peerModules = resolve("node_modules/@earendil-works");
 
-const piAiDir = resolve(piCodingAgentModules, "@earendil-works/pi-ai");
+const piAiDir = resolve(peerModules, "pi-ai");
 
 export default defineConfig({
     resolve: {
@@ -23,8 +22,8 @@ export default defineConfig({
             "@earendil-works/pi-ai/compat": resolve(piAiDir, "dist/compat.js"),
             "@earendil-works/pi-ai": resolve(piAiDir, "dist/compat.js"),
             "@earendil-works/pi-agent-core": resolve(
-                piCodingAgentModules,
-                "@earendil-works/pi-agent-core/dist/index.js",
+                peerModules,
+                "pi-agent-core/dist/index.js",
             ),
         },
     },
