@@ -1,20 +1,24 @@
 /**
  * File Guard Extension
  *
- * Prevents the LLM from editing files it hasn't read, or files that have
- * been modified since the last read. Acts as a safety net against blind
- * edits and stale-context overwrites.
+ * Prevents the LLM from overwriting an existing file that it has not read,
+ * or that changed on disk since the last read. A blind `write` discards
+ * content the agent never saw, so only `write` is gated.
+ *
+ * `edit` is deliberately not gated. The edit tool matches `oldText` exactly
+ * and requires a unique match, so a stale edit already fails on its own.
+ * Gating `edit` adds an extra round trip without preventing damage.
  *
  * Mechanism:
  *   - On `tool_call` for `read`: stat() the file and store its mtime
  *     before the read executes.
  *   - On `tool_result` for `read` with isError: roll back the tracked
  *     entry so a failed read does not count as "read".
- *   - On `tool_call` for `edit`/`write`: check whether the file has been
- *     read and whether its mtime still matches. Block if not.
- *   - On `tool_result` for `edit`/`write`: update the stored mtime so
- *     subsequent edits to the same file are not blocked by the agent's
- *     own prior mutation.
+ *   - On `tool_call` for `write`: check whether the file has been read
+ *     and whether its mtime still matches. Block if not.
+ *   - On `tool_result` for `edit`/`write`: update the stored mtime. An
+ *     edit changes the file too, so a later write to the same file must
+ *     not be blocked by the agent's own prior mutation.
  *
  * State is in-memory only and cleared on session_start.
  */
@@ -66,7 +70,7 @@ class FileTracker {
     }
 
     /**
-     * Check whether an edit/write to this file should be allowed.
+     * Check whether a write to this file should be allowed.
      * Returns { allowed: true } for new files (stat fails with ENOENT).
      * Fails closed on other stat errors (EACCES, EPERM, IO errors).
      */
@@ -126,11 +130,7 @@ export default function (pi: ExtensionAPI) {
     });
 
     pi.on("tool_call", async (event, ctx) => {
-        if (
-            event.toolName !== "read" &&
-            event.toolName !== "edit" &&
-            event.toolName !== "write"
-        ) {
+        if (event.toolName !== "read" && event.toolName !== "write") {
             return;
         }
 
@@ -144,17 +144,17 @@ export default function (pi: ExtensionAPI) {
             return;
         }
 
-        // edit / write — gate against stored mtime
+        // write — gate against stored mtime
         const result = await tracker.check(absolutePath);
         if (result.allowed) return undefined;
 
         const message =
             result.reason === "not_tracked"
                 ? `File "${rawPath}" has not been read in this session. ` +
-                  "Read the file first before editing."
+                  "Read the file before overwriting it."
                 : `File "${rawPath}" has been modified since it was ` +
                   "last read (mtime mismatch). Read the file again " +
-                  "before editing.";
+                  "before overwriting it.";
 
         return { block: true, reason: message };
     });
@@ -177,7 +177,9 @@ export default function (pi: ExtensionAPI) {
             return;
         }
 
-        // Successful edit/write: update stored mtime
+        // Successful edit/write: update stored mtime. An edit is not
+        // gated, but it does change the file, so a later write to the
+        // same file must see the fresh mtime.
         if (
             (event.toolName === "edit" || event.toolName === "write") &&
             !event.isError

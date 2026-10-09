@@ -129,9 +129,9 @@ describe("file-guard extension", () => {
         await rm(tmpDir, { recursive: true, force: true });
     });
 
-    // ── Edit / Write without prior read ────────────────────────────
+    // ── Edit is not gated ─────────────────────────────────────────
 
-    it("blocks edit when file has not been read", async () => {
+    it("allows edit without a prior read (edit is not gated)", async () => {
         const filePath = join(tmpDir, "existing.txt");
         await writeFile(filePath, "original content");
 
@@ -153,9 +153,11 @@ describe("file-guard extension", () => {
 
         expect(events).toHaveLength(1);
         expect(events[0].toolName).toBe("edit");
-        expect(events[0].isError).toBe(true);
-        expect(resultText(events[0])).toContain("has not been read");
+        expect(events[0].isError).toBe(false);
+        expect(await readFile(filePath, "utf-8")).toBe("modified content");
     });
+
+    // ── Write without prior read → blocked ────────────────────────
 
     it("blocks write when existing file has not been read", async () => {
         const filePath = join(tmpDir, "existing.txt");
@@ -200,46 +202,9 @@ describe("file-guard extension", () => {
         expect(await readFile(filePath, "utf-8")).toBe("hello world");
     });
 
-    // ── Read then edit → allowed ───────────────────────────────────
+    // ── Read, external modification, then write → blocked ─────────
 
-    it("allows edit after reading the file", async () => {
-        const filePath = join(tmpDir, "hello.txt");
-        await writeFile(filePath, "hello world");
-
-        const events = await runAgent(tmpDir, faux, [
-            // Turn 1: read the file
-            fauxAssistantMessage(fauxToolCall("read", { path: filePath }), {
-                stopReason: "toolUse",
-            }),
-            // Turn 2: edit the file
-            fauxAssistantMessage(
-                fauxToolCall("edit", {
-                    path: filePath,
-                    edits: [
-                        {
-                            oldText: "hello world",
-                            newText: "hello earth",
-                        },
-                    ],
-                }),
-                { stopReason: "toolUse" },
-            ),
-            // Turn 3: done
-            fauxAssistantMessage(fauxText("done")),
-        ]);
-
-        const readEv = events.find((e) => e.toolName === "read");
-        const editEv = events.find((e) => e.toolName === "edit");
-        expect(readEv).toBeDefined();
-        expect(readEv!.isError).toBe(false);
-        expect(editEv).toBeDefined();
-        expect(editEv!.isError).toBe(false);
-        expect(await readFile(filePath, "utf-8")).toBe("hello earth");
-    });
-
-    // ── Read, external modification, then edit → blocked ───────────
-
-    it("blocks edit when file was modified after read (mtime mismatch)", async () => {
+    it("blocks write when file was modified after read (mtime mismatch)", async () => {
         const filePath = join(tmpDir, "volatile.txt");
         await writeFile(filePath, "initial");
 
@@ -248,21 +213,56 @@ describe("file-guard extension", () => {
             fauxAssistantMessage(fauxToolCall("read", { path: filePath }), {
                 stopReason: "toolUse",
             }),
-            // Turn 2: edit — but a factory callback mutates the file first
+            // Turn 2: write — but a factory callback mutates the file first
             ((
                 _context: Context,
                 _options: SimpleStreamOptions | undefined,
                 _state: FauxProviderState,
             ) => {
                 // Use a factory response to modify the file right
-                // before the LLM "responds" with the edit request.
+                // before the LLM "responds" with the write request.
+                writeFileSync(filePath, "externally modified");
+                return fauxAssistantMessage(
+                    fauxToolCall("write", {
+                        path: filePath,
+                        content: "agent modified",
+                    }),
+                    { stopReason: "toolUse" },
+                );
+            }) as any,
+            fauxAssistantMessage(fauxText("ok")),
+        ]);
+
+        const writeEv = events.find((e) => e.toolName === "write");
+        expect(writeEv).toBeDefined();
+        expect(writeEv!.isError).toBe(true);
+        expect(resultText(writeEv!)).toContain("mtime mismatch");
+        expect(await readFile(filePath, "utf-8")).toBe("externally modified");
+    });
+
+    it("allows edit after an external modification (edit is not gated)", async () => {
+        const filePath = join(tmpDir, "volatile-edit.txt");
+        await writeFile(filePath, "initial");
+
+        const events = await runAgent(tmpDir, faux, [
+            // Turn 1: read the file
+            fauxAssistantMessage(fauxToolCall("read", { path: filePath }), {
+                stopReason: "toolUse",
+            }),
+            // Turn 2: edit — the factory callback mutates the file
+            // first, so the stored mtime is stale
+            ((
+                _context: Context,
+                _options: SimpleStreamOptions | undefined,
+                _state: FauxProviderState,
+            ) => {
                 writeFileSync(filePath, "externally modified");
                 return fauxAssistantMessage(
                     fauxToolCall("edit", {
                         path: filePath,
                         edits: [
                             {
-                                oldText: "initial",
+                                oldText: "externally modified",
                                 newText: "agent modified",
                             },
                         ],
@@ -275,49 +275,47 @@ describe("file-guard extension", () => {
 
         const editEv = events.find((e) => e.toolName === "edit");
         expect(editEv).toBeDefined();
-        expect(editEv!.isError).toBe(true);
-        expect(resultText(editEv!)).toContain("mtime mismatch");
+        expect(editEv!.isError).toBe(false);
+        expect(await readFile(filePath, "utf-8")).toBe("agent modified");
     });
 
     // ── Failed read does not count as "read" ───────────────────────
 
-    it("blocks edit after a failed read (non-existent file)", async () => {
-        const missingPath = join(tmpDir, "does-not-exist.txt");
-        const existingPath = join(tmpDir, "real.txt");
-        await writeFile(existingPath, "content");
+    it("blocks write after a failed read (tracked entry rolls back)", async () => {
+        const filePath = join(tmpDir, "real.txt");
+        await writeFile(filePath, "content");
 
         const events = await runAgent(tmpDir, faux, [
-            // Turn 1: read a non-existent file → error
-            fauxAssistantMessage(fauxToolCall("read", { path: missingPath }), {
-                stopReason: "toolUse",
-            }),
-            // Turn 2: try to edit that non-existent path
-            // (it doesn't exist on disk → ENOENT → allowed as new file)
-            // So instead we test with the existing file that was never read:
+            // Turn 1: read past EOF → the stat() before the read
+            // tracked the file, and the failed read must roll it back
             fauxAssistantMessage(
-                fauxToolCall("edit", {
-                    path: existingPath,
-                    edits: [
-                        {
-                            oldText: "content",
-                            newText: "hacked",
-                        },
-                    ],
+                fauxToolCall("read", { path: filePath, offset: 100 }),
+                { stopReason: "toolUse" },
+            ),
+            // Turn 2: write the same file → blocked, the read failed
+            fauxAssistantMessage(
+                fauxToolCall("write", {
+                    path: filePath,
+                    content: "hacked",
                 }),
                 { stopReason: "toolUse" },
             ),
             fauxAssistantMessage(fauxText("ok")),
         ]);
 
-        const editEv = events.find((e) => e.toolName === "edit");
-        expect(editEv).toBeDefined();
-        expect(editEv!.isError).toBe(true);
-        expect(resultText(editEv!)).toContain("has not been read");
+        const readEv = events.find((e) => e.toolName === "read");
+        const writeEv = events.find((e) => e.toolName === "write");
+        expect(readEv).toBeDefined();
+        expect(readEv!.isError).toBe(true);
+        expect(writeEv).toBeDefined();
+        expect(writeEv!.isError).toBe(true);
+        expect(resultText(writeEv!)).toContain("has not been read");
+        expect(await readFile(filePath, "utf-8")).toBe("content");
     });
 
-    // ── Consecutive edits after read → second edit allowed ─────────
+    // ── An edit refreshes the mtime for a later write ──────────────
 
-    it("allows consecutive edits (mtime updated after first edit)", async () => {
+    it("allows write after the agent's own edit (mtime refreshed)", async () => {
         const filePath = join(tmpDir, "multi.txt");
         await writeFile(filePath, "aaa bbb");
 
@@ -326,7 +324,7 @@ describe("file-guard extension", () => {
             fauxAssistantMessage(fauxToolCall("read", { path: filePath }), {
                 stopReason: "toolUse",
             }),
-            // Turn 2: first edit
+            // Turn 2: edit — not gated, but it does change the file
             fauxAssistantMessage(
                 fauxToolCall("edit", {
                     path: filePath,
@@ -334,22 +332,24 @@ describe("file-guard extension", () => {
                 }),
                 { stopReason: "toolUse" },
             ),
-            // Turn 3: second edit
+            // Turn 3: write — allowed, the edit refreshed the mtime
             fauxAssistantMessage(
-                fauxToolCall("edit", {
+                fauxToolCall("write", {
                     path: filePath,
-                    edits: [{ oldText: "bbb", newText: "BBB" }],
+                    content: "AAA BBB\n",
                 }),
                 { stopReason: "toolUse" },
             ),
             fauxAssistantMessage(fauxText("done")),
         ]);
 
-        const edits = events.filter((e) => e.toolName === "edit");
-        expect(edits).toHaveLength(2);
-        expect(edits[0].isError).toBe(false);
-        expect(edits[1].isError).toBe(false);
-        expect(await readFile(filePath, "utf-8")).toBe("AAA BBB");
+        const editEv = events.find((e) => e.toolName === "edit");
+        const writeEv = events.find((e) => e.toolName === "write");
+        expect(editEv).toBeDefined();
+        expect(editEv!.isError).toBe(false);
+        expect(writeEv).toBeDefined();
+        expect(writeEv!.isError).toBe(false);
+        expect(await readFile(filePath, "utf-8")).toBe("AAA BBB\n");
     });
 
     // ── Relative paths resolved against cwd ────────────────────────
@@ -363,25 +363,20 @@ describe("file-guard extension", () => {
             fauxAssistantMessage(fauxToolCall("read", { path: "rel.txt" }), {
                 stopReason: "toolUse",
             }),
-            // Use absolute path for edit (same file)
+            // Use absolute path for write (same file)
             fauxAssistantMessage(
-                fauxToolCall("edit", {
+                fauxToolCall("write", {
                     path: filePath,
-                    edits: [
-                        {
-                            oldText: "relative test",
-                            newText: "relative done",
-                        },
-                    ],
+                    content: "relative done",
                 }),
                 { stopReason: "toolUse" },
             ),
             fauxAssistantMessage(fauxText("done")),
         ]);
 
-        const editEv = events.find((e) => e.toolName === "edit");
-        expect(editEv).toBeDefined();
-        expect(editEv!.isError).toBe(false);
+        const writeEv = events.find((e) => e.toolName === "write");
+        expect(writeEv).toBeDefined();
+        expect(writeEv!.isError).toBe(false);
         expect(await readFile(filePath, "utf-8")).toBe("relative done");
     });
 
